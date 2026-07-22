@@ -1,11 +1,15 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
-import { ChangeEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useState } from "react";
+import { readSheet } from "read-excel-file/browser";
+import { parseAddressWorkbookRows } from "./lib/address-import";
 import { buildImportPackage } from "./lib/openimmo";
+import { ADDRESS_OWNERS, normalizeProjectOwners, projectOwner } from "./lib/project-owners";
 import { totalPrice } from "./lib/text-generator";
 import { loadStudioSnapshot, saveStudioState, STORAGE_ID } from "./lib/storage";
 import type {
+  AddressOwner,
   GeneratedListing,
   HouseImage,
   HouseTemplate,
@@ -20,6 +24,7 @@ type AiModel = "gpt-5.6-luna" | "gpt-5.6-terra" | "gpt-5.6-sol";
 
 const MIN_HOUSE_IMAGES = 4;
 const MAX_HOUSE_IMAGES = 14;
+const MAX_HOUSE_TEMPLATES = 18;
 
 function looksLikeOpenAiApiKey(value: string): boolean {
   return /^sk-[a-zA-Z0-9_-]{20,}$/.test(value.trim());
@@ -50,8 +55,9 @@ const newHouse = (index = 1): HouseTemplate => ({
   images: [],
 });
 
-const newProject = (): ProjectInput => ({
+const newProject = (owner: AddressOwner): ProjectInput => ({
   id: uid(),
+  owner,
   name: `Neues Adressprojekt ${new Date().toLocaleDateString("de-DE")}`,
   street: "",
   houseNumber: "",
@@ -83,9 +89,19 @@ const defaultProvider: ProviderSettings = {
 const initialState = (): StudioState => ({
   version: 1,
   houses: [newHouse(1)],
-  projects: [newProject()],
+  projects: [newProject("fabian")],
   provider: defaultProvider,
+  promotionImage: null,
+  promotionImageEnabled: false,
 });
+
+function effectiveHouseImages(state: StudioState, house: HouseTemplate): HouseImage[] {
+  if (!state.promotionImageEnabled || !state.promotionImage) return house.images;
+  return [
+    state.promotionImage,
+    ...house.images.filter((image) => image.id !== state.promotionImage?.id),
+  ].slice(0, MAX_HOUSE_IMAGES);
+}
 
 function euro(value: number): string {
   return new Intl.NumberFormat("de-DE", {
@@ -93,6 +109,13 @@ function euro(value: number): string {
     currency: "EUR",
     maximumFractionDigits: 0,
   }).format(value || 0);
+}
+
+function projectSelectionLabel(project: ProjectInput): string {
+  const street = [project.street, project.houseNumber].filter(Boolean).join(" ");
+  const place = [project.zip, project.city].filter(Boolean).join(" ");
+  const address = [street, place].filter(Boolean).join(", ");
+  return address ? `${project.name} · ${address}` : project.name;
 }
 
 function localImageCaption(filename: string, isFloorplan: boolean, index: number): string {
@@ -251,6 +274,9 @@ async function runWithConcurrency<T>(
 function catalogWithoutImageData(state: StudioState): StudioState {
   return {
     ...state,
+    promotionImage: state.promotionImage
+      ? { ...state.promotionImage, dataUrl: "" }
+      : null,
     houses: state.houses.map((house) => ({
       ...house,
       images: house.images.map((image) => ({ ...image, dataUrl: "" })),
@@ -260,7 +286,10 @@ function catalogWithoutImageData(state: StudioState): StudioState {
 
 async function saveWindowsCatalogSnapshot(state: StudioState, savedAt: string): Promise<void> {
   const sessionId = uid();
-  const allImages = state.houses.flatMap((house) => house.images);
+  const allImages = [
+    ...state.houses.flatMap((house) => house.images),
+    ...(state.promotionImage ? [state.promotionImage] : []),
+  ];
   const imageById = new Map(allImages.map((image) => [image.id, image]));
   const startResponse = await fetch("http://127.0.0.1:43182/catalog-v2/start", {
     method: "POST",
@@ -329,7 +358,10 @@ async function loadWindowsCatalogSnapshot(): Promise<{
       state?: StudioState;
     };
     if (manifestResponse.ok && manifestData.ok && manifestData.stored && manifestData.state && manifestData.savedAt) {
-      const imageIds = manifestData.state.houses.flatMap((house) => house.images.map((image) => image.id));
+      const imageIds = [
+        ...manifestData.state.houses.flatMap((house) => house.images.map((image) => image.id)),
+        ...(manifestData.state.promotionImage ? [manifestData.state.promotionImage.id] : []),
+      ];
       const dataUrlById = new Map<string, string>();
       await runWithConcurrency(imageIds, async (imageId) => {
         const imageResponse = await fetch(`http://127.0.0.1:43182/catalog-v2/image?imageId=${encodeURIComponent(imageId)}`);
@@ -338,6 +370,12 @@ async function loadWindowsCatalogSnapshot(): Promise<{
       });
       const state: StudioState = {
         ...manifestData.state,
+        promotionImage: manifestData.state.promotionImage
+          ? {
+              ...manifestData.state.promotionImage,
+              dataUrl: dataUrlById.get(manifestData.state.promotionImage.id) ?? "",
+            }
+          : null,
         houses: manifestData.state.houses.map((house) => ({
           ...house,
           images: house.images.map((image) => ({
@@ -375,6 +413,7 @@ export default function InseratStudio() {
   const [saveLabel, setSaveLabel] = useState("Lokaler Speicher wird vorbereitet …");
   const [activeHouseId, setActiveHouseId] = useState("");
   const [activeProjectId, setActiveProjectId] = useState("");
+  const [activeOwner, setActiveOwner] = useState<AddressOwner>("fabian");
   const [notice, setNotice] = useState<string | null>(null);
   const [ftpHost, setFtpHost] = useState("fabianraebel.livinghaus.info");
   const [ftpUser, setFtpUser] = useState("");
@@ -389,7 +428,10 @@ export default function InseratStudio() {
   const [credentialsReady, setCredentialsReady] = useState(false);
   const [credentialSaveLabel, setCredentialSaveLabel] = useState("Verschlüsselter Zugangstresor wird vorbereitet …");
   const [savingHouses, setSavingHouses] = useState(false);
+  const [savingAddress, setSavingAddress] = useState(false);
   const [savingCredentials, setSavingCredentials] = useState(false);
+  const [importingAddresses, setImportingAddresses] = useState(false);
+  const [addressImportReport, setAddressImportReport] = useState<string[]>([]);
   const [captioningImageIds, setCaptioningImageIds] = useState<string[]>([]);
   const [replacingAllImageCaptions, setReplacingAllImageCaptions] = useState(false);
   const [openAiKeyVerified, setOpenAiKeyVerified] = useState(false);
@@ -453,10 +495,14 @@ export default function InseratStudio() {
         }
         candidates.sort((left, right) => snapshotTime(right.savedAt) - snapshotTime(left.savedAt));
         const selected = candidates[0];
-        const next = selected?.state ?? initialState();
+        const loaded = normalizeProjectOwners(selected?.state ?? initialState());
+        const next = loaded.projects.length
+          ? loaded
+          : { ...loaded, projects: [newProject("fabian")] };
         setState(next);
         setActiveHouseId(next.houses[0]?.id ?? "");
         setActiveProjectId(next.projects[0]?.id ?? "");
+        setActiveOwner(projectOwner(next.projects[0]));
         setSaveLabel(selected?.source === "windows" ? "Aus lokaler Windows-Sicherung geladen" : "Doppelt lokal gespeichert");
       })
       .catch(() => setSaveLabel("Lokaler Speicher nicht verfügbar"))
@@ -570,21 +616,21 @@ export default function InseratStudio() {
 
   const activeHouse =
     state.houses.find((house) => house.id === activeHouseId) ?? state.houses[0];
+  const ownerProjects = state.projects.filter(
+    (project) => projectOwner(project) === activeOwner,
+  );
   const activeProject =
-    state.projects.find((project) => project.id === activeProjectId) ??
-    state.projects[0];
+    ownerProjects.find((project) => project.id === activeProjectId) ??
+    ownerProjects[0];
 
-  const selectedHouses = useMemo(
-    () =>
-      state.houses.filter((house) =>
-        activeProject?.selectedHouseIds.includes(house.id),
-      ),
-    [activeProject, state.houses],
+  const selectedHouses = state.houses.filter((house) =>
+    activeProject?.selectedHouseIds.includes(house.id),
   );
 
   const saveHousesNow = async () => {
     const savedAt = new Date().toISOString();
-    const imageCount = state.houses.reduce((sum, house) => sum + house.images.length, 0);
+    const imageCount = state.houses.reduce((sum, house) => sum + house.images.length, 0)
+      + (state.promotionImage ? 1 : 0);
     setSavingHouses(true);
     try {
       await saveStudioState(state, savedAt);
@@ -601,6 +647,28 @@ export default function InseratStudio() {
       setNotice(error instanceof Error ? error.message : "Haustypen und Bilder konnten nicht gespeichert werden.");
     } finally {
       setSavingHouses(false);
+    }
+  };
+
+  const saveAddressNow = async () => {
+    if (!activeProject) return;
+    const savedAt = new Date().toISOString();
+    setSavingAddress(true);
+    try {
+      await saveStudioState(state, savedAt);
+      if (helperOnline) {
+        await queueWindowsCatalogSnapshot(state, savedAt);
+        setSaveLabel("Browser + Windows-Sicherung aktuell");
+      } else {
+        setSaveLabel("Lokal im Browser gespeichert");
+      }
+      const ownerLabel = activeOwner === "pascal" ? "Pascal" : "Fabian";
+      setNotice(`Die Grundstücksadresse „${activeProject.name}“ wurde für ${ownerLabel} gespeichert und kann wieder ausgewählt werden.`);
+    } catch (error) {
+      setSaveLabel("Speichern fehlgeschlagen");
+      setNotice(error instanceof Error ? error.message : "Die Grundstücksadresse konnte nicht gespeichert werden.");
+    } finally {
+      setSavingAddress(false);
     }
   };
 
@@ -625,8 +693,8 @@ export default function InseratStudio() {
   };
 
   const addHouse = () => {
-    if (state.houses.length >= 12) {
-      setNotice("Es sind bereits zwölf Haustypen angelegt.");
+    if (state.houses.length >= MAX_HOUSE_TEMPLATES) {
+      setNotice(`Es sind bereits ${MAX_HOUSE_TEMPLATES} Haustypen angelegt.`);
       return;
     }
     const house = newHouse(state.houses.length + 1);
@@ -759,6 +827,40 @@ export default function InseratStudio() {
     }
   };
 
+  const addPromotionImage = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const promotionImage: HouseImage = {
+        id: uid(),
+        name: file.name,
+        mimeType: file.type || "image/jpeg",
+        dataUrl: String(reader.result),
+        caption: "Aktuelles Angebot für dein neues Zuhause",
+        isFloorplan: false,
+      };
+      setState((current) => ({
+        ...current,
+        promotionImage,
+        promotionImageEnabled: true,
+      }));
+      setNotice("Das Aktionsbild wurde eingefügt und als Anzeigebild für alle Haustypen aktiviert.");
+    };
+    reader.onerror = () => setNotice("Das Aktionsbild konnte nicht gelesen werden.");
+    reader.readAsDataURL(file);
+    event.target.value = "";
+  };
+
+  const removePromotionImage = () => {
+    setState((current) => ({
+      ...current,
+      promotionImage: null,
+      promotionImageEnabled: false,
+    }));
+    setNotice("Das Aktionsbild wurde entfernt. Jeder Haustyp verwendet wieder sein eigenes Titelbild.");
+  };
+
   const addImages = async (event: ChangeEvent<HTMLInputElement>) => {
     if (!activeHouse) return;
     const remaining = MAX_HOUSE_IMAGES - activeHouse.images.length;
@@ -813,13 +915,73 @@ export default function InseratStudio() {
     updateHouse({ images });
   };
 
-  const addProject = () => {
-    const project = newProject();
+  const selectOwner = (owner: AddressOwner) => {
+    const existingProject = state.projects.find(
+      (project) => projectOwner(project) === owner,
+    );
+    setActiveOwner(owner);
+    if (existingProject) {
+      setActiveProjectId(existingProject.id);
+      return;
+    }
+    const project = newProject(owner);
     setState((current) => ({
       ...current,
       projects: [project, ...current.projects],
     }));
     setActiveProjectId(project.id);
+    setNotice(`Der Adressbereich für ${owner === "pascal" ? "Pascal" : "Fabian"} wurde angelegt.`);
+  };
+
+  const addProject = () => {
+    const project = newProject(activeOwner);
+    setState((current) => ({
+      ...current,
+      projects: [project, ...current.projects],
+    }));
+    setActiveProjectId(project.id);
+  };
+
+  const importAddressesFromExcel = async (event: ChangeEvent<HTMLInputElement>) => {
+    const input = event.target;
+    const file = input.files?.[0];
+    if (!file) return;
+    setImportingAddresses(true);
+    setAddressImportReport([]);
+    try {
+      const rows = await readSheet(file);
+      const result = parseAddressWorkbookRows(rows, state.projects, uid);
+      setAddressImportReport(result.errors.slice(0, 8));
+      if (!result.projects.length) {
+        const details = [
+          result.duplicateCount ? `${result.duplicateCount} bereits gespeichert` : "",
+          result.errors.length ? `${result.errors.length} fehlerhaft` : "",
+        ].filter(Boolean).join(", ");
+        setNotice(details
+          ? `Keine neue Adresse importiert: ${details}.`
+          : "Die Excel-Datei enthält keine importierbaren Adressen.");
+        return;
+      }
+      setState((current) => ({
+        ...current,
+        projects: [...result.projects, ...current.projects],
+      }));
+      const firstProject = result.projects[0];
+      setActiveOwner(firstProject.owner);
+      setActiveProjectId(firstProject.id);
+      const details = [
+        result.duplicateCount ? `${result.duplicateCount} Dubletten übersprungen` : "",
+        result.errors.length ? `${result.errors.length} fehlerhafte Zeilen übersprungen` : "",
+      ].filter(Boolean).join(" · ");
+      setNotice(`${result.projects.length} Adressen aus Excel importiert und lokal gespeichert${details ? ` · ${details}` : ""}.`);
+    } catch (error) {
+      setNotice(error instanceof Error
+        ? `Excel-Import fehlgeschlagen: ${error.message}`
+        : "Die Excel-Datei konnte nicht gelesen werden.");
+    } finally {
+      input.value = "";
+      setImportingAddresses(false);
+    }
   };
 
   const toggleHouse = (houseId: string) => {
@@ -999,10 +1161,10 @@ export default function InseratStudio() {
       .filter(
         (house) =>
           !house
-          || house.images.length < MIN_HOUSE_IMAGES
-          || house.images.length > MAX_HOUSE_IMAGES,
+          || effectiveHouseImages(state, house).length < MIN_HOUSE_IMAGES
+          || effectiveHouseImages(state, house).length > MAX_HOUSE_IMAGES,
       )
-      .map((house) => house ? `${house.name} (${house.images.length} Bilder)` : "Unbekannter Haustyp");
+      .map((house) => house ? `${house.name} (${effectiveHouseImages(state, house).length} Bilder)` : "Unbekannter Haustyp");
     if (invalidImageCounts.length) {
       throw new Error(
         `Für den Import werden pro Haustyp mindestens ${MIN_HOUSE_IMAGES} und maximal ${MAX_HOUSE_IMAGES} Bilder benötigt: ${invalidImageCounts.join(", ")}.`,
@@ -1016,6 +1178,8 @@ export default function InseratStudio() {
       listings: activeProject.listings,
       houses: state.houses,
       provider: state.provider,
+      promotionImage: state.promotionImage,
+      promotionImageEnabled: state.promotionImageEnabled,
     };
   };
 
@@ -1206,9 +1370,14 @@ export default function InseratStudio() {
         if (imported.version !== 1 || !Array.isArray(imported.houses)) {
           throw new Error("Unbekanntes Sicherungsformat.");
         }
-        setState(imported);
-        setActiveHouseId(imported.houses[0]?.id ?? "");
-        setActiveProjectId(imported.projects[0]?.id ?? "");
+        const normalized = normalizeProjectOwners(imported);
+        const next = normalized.projects.length
+          ? normalized
+          : { ...normalized, projects: [newProject("fabian")] };
+        setState(next);
+        setActiveHouseId(next.houses[0]?.id ?? "");
+        setActiveProjectId(next.projects[0]?.id ?? "");
+        setActiveOwner(projectOwner(next.projects[0]));
         setNotice("Fabian&Pascal-Sicherung wurde lokal eingelesen.");
       } catch {
         setNotice("Die ausgewählte Datei ist keine gültige Fabian&Pascal-Sicherung.");
@@ -1262,7 +1431,7 @@ export default function InseratStudio() {
           </p>
         </div>
         <div className="workflow-summary">
-          <div><b>{state.houses.length}</b><span>von 12 Haustypen</span></div>
+          <div><b>{state.houses.length}</b><span>von {MAX_HOUSE_TEMPLATES} Haustypen</span></div>
           <div><b>{activeProject.selectedHouseIds.length}</b><span>ausgewählt</span></div>
           <div><b>{activeProject.listings.length}</b><span>Entwürfe</span></div>
         </div>
@@ -1289,10 +1458,60 @@ export default function InseratStudio() {
       ) : null}
 
       {tab === "houses" ? (
+        <>
+        <section className="workspace promotion-card">
+          <div className="promotion-copy">
+            <span className="eyebrow">Zentrales Anzeigebild</span>
+            <h2>Aktionsbild für alle Haustypen</h2>
+            <p>Einmal hochladen und bei Bedarf als erstes Bild in allen Inseraten verwenden. Die eigenen Bilder der Haustypen bleiben unverändert gespeichert.</p>
+          </div>
+          {state.promotionImage ? (
+            <div className="promotion-editor">
+              <img src={state.promotionImage.dataUrl} alt={state.promotionImage.caption} />
+              <div>
+                <label className="image-caption">
+                  <span>Bildtext im Inserat</span>
+                  <input
+                    value={state.promotionImage.caption}
+                    onChange={(event) => setState((current) => ({
+                      ...current,
+                      promotionImage: current.promotionImage
+                        ? { ...current.promotionImage, caption: event.target.value }
+                        : null,
+                    }))}
+                  />
+                </label>
+                <label className="promotion-toggle">
+                  <input
+                    type="checkbox"
+                    checked={state.promotionImageEnabled}
+                    onChange={(event) => setState((current) => ({
+                      ...current,
+                      promotionImageEnabled: event.target.checked,
+                    }))}
+                  />
+                  <span><b>Für alle Haustypen verwenden</b><small>Aktiviert wird dieses Bild im Export automatisch Bild 1. Bei 14 Hausbildern entfällt nur das letzte Bild im Export.</small></span>
+                </label>
+                <div className="button-row">
+                  <label className="secondary file-label">Aktionsbild ersetzen<input type="file" accept="image/*" onChange={addPromotionImage} /></label>
+                  <button className="primary" disabled={savingHouses} onClick={saveHousesNow}>{savingHouses ? "Wird gespeichert …" : "Aktionsbild speichern"}</button>
+                  <button className="text-danger" onClick={removePromotionImage}>Aktionsbild entfernen</button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <label className="promotion-upload">
+              <span>+</span>
+              <b>Aktionsbild einfügen</b>
+              <small>JPG, PNG oder WebP auswählen</small>
+              <input type="file" accept="image/*" onChange={addPromotionImage} />
+            </label>
+          )}
+        </section>
         <section className="workspace two-column">
           <aside className="rail-card">
             <div className="section-heading compact">
-              <div><span className="eyebrow">Hausbibliothek</span><h2>Deine 12 Haustypen</h2></div>
+              <div><span className="eyebrow">Hausbibliothek</span><h2>Deine {MAX_HOUSE_TEMPLATES} Haustypen</h2></div>
               <button className="icon-button" onClick={addHouse} aria-label="Haustyp hinzufügen">+</button>
             </div>
             <div className="house-list">
@@ -1402,18 +1621,65 @@ export default function InseratStudio() {
             </div>
           </div>
         </section>
+        </>
       ) : null}
 
       {tab === "project" ? (
         <section className="workspace">
           <div className="content-card">
-            <div className="section-heading">
-              <div><span className="eyebrow">Adressprojekt</span><h2>Grundstück einmal erfassen</h2></div>
+            <div className="address-owner-panel">
+              <div>
+                <span className="eyebrow">Getrennte Adressbücher</span>
+                <h2>Wer bearbeitet diese Grundstücksadresse?</h2>
+                <p>Fabian und Pascal sehen jeweils ihre eigenen gespeicherten Adressen und können sie jederzeit wieder auswählen.</p>
+              </div>
+              <div className="owner-switch" role="group" aria-label="Benutzer für Grundstücksadressen wählen">
+                {ADDRESS_OWNERS.map((owner) => (
+                  <button
+                    key={owner.id}
+                    className={activeOwner === owner.id ? "active" : ""}
+                    onClick={() => selectOwner(owner.id)}
+                    aria-pressed={activeOwner === owner.id}
+                  >
+                    <span>{owner.label.slice(0, 1)}</span>
+                    <b>{owner.label}</b>
+                    <small>{state.projects.filter((project) => projectOwner(project) === owner.id).length} gespeichert</small>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="address-import-bar">
+              <div>
+                <b>Mehrere Adressen aus Excel übernehmen</b>
+                <span>Eine Zeile pro Grundstück. Die Spalte Benutzer ordnet jede Adresse automatisch Fabian oder Pascal zu.</span>
+              </div>
               <div className="button-row">
-                <select value={activeProject.id} onChange={(event) => setActiveProjectId(event.target.value)} aria-label="Adressprojekt wählen">
-                  {state.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+                <a className="secondary" href="/Fabian-Pascal-Adressimport-Vorlage.xlsx" download>Excel-Vorlage herunterladen</a>
+                <label className={`primary file-label${importingAddresses ? " disabled" : ""}`}>
+                  {importingAddresses ? "Excel wird eingelesen …" : "Excel-Adressen importieren"}
+                  <input
+                    type="file"
+                    accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    disabled={importingAddresses}
+                    onChange={importAddressesFromExcel}
+                  />
+                </label>
+              </div>
+            </div>
+            {addressImportReport.length ? (
+              <div className="address-import-report" role="status">
+                <b>Nicht übernommene Zeilen</b>
+                {addressImportReport.map((message) => <span key={message}>{message}</span>)}
+              </div>
+            ) : null}
+            <div className="section-heading">
+              <div><span className="eyebrow">Adressbuch {activeOwner === "pascal" ? "Pascal" : "Fabian"}</span><h2>Grundstück speichern &amp; wiederverwenden</h2></div>
+              <div className="button-row">
+                <select value={activeProject.id} onChange={(event) => setActiveProjectId(event.target.value)} aria-label="Gespeicherte Grundstücksadresse wählen">
+                  {ownerProjects.map((project) => <option key={project.id} value={project.id}>{projectSelectionLabel(project)}</option>)}
                 </select>
                 <button className="secondary" onClick={addProject}>Neue Adresse</button>
+                <button className="primary" disabled={savingAddress} onClick={saveAddressNow}>{savingAddress ? "Wird gespeichert …" : "Adresse speichern"}</button>
               </div>
             </div>
             <div className="form-grid three">
@@ -1441,10 +1707,11 @@ export default function InseratStudio() {
               <div className="selection-grid">
                 {state.houses.map((house) => {
                   const selected = activeProject.selectedHouseIds.includes(house.id);
+                  const displayImage = effectiveHouseImages(state, house)[0];
                   return (
                     <button key={house.id} className={selected ? "select-card selected" : "select-card"} onClick={() => toggleHouse(house.id)}>
                       <span className="selection-check">{selected ? "✓" : "+"}</span>
-                      {house.images[0] ? <img src={house.images[0].dataUrl} alt="" /> : <div className="image-placeholder">F&amp;P</div>}
+                      {displayImage ? <img src={displayImage.dataUrl} alt={displayImage.caption} /> : <div className="image-placeholder">F&amp;P</div>}
                       <div><strong>{house.name}</strong><small>{house.livingArea} m² · {house.rooms} Zimmer</small><b>{euro(totalPrice(house, activeProject))}</b></div>
                     </button>
                   );
@@ -1452,7 +1719,7 @@ export default function InseratStudio() {
               </div>
             </div>
             <div className="action-bar">
-              <div><b>Bereit für neue KI-Texte?</b><span>Die KI erzeugt die Überschrift und vier eigenständige Textblöcke. Als Ortsbezug sind nur Ort und Ortsteil erlaubt.</span></div>
+              <div><b>Bereit für neue KI-Texte?</b><span>Die KI erzeugt eine kurze, klare Überschrift ohne Hausbezeichnung sowie vier eigenständige Textblöcke. Als Ortsbezug sind nur Ort und Ortsteil erlaubt.</span></div>
               <div className="button-row action-buttons">
                 <button className="primary" disabled={generatingAi} onClick={generateAiListings}>{generatingAi ? "KI schreibt und prüft …" : "KI-Überschrift & Texte erzeugen"}</button>
               </div>
@@ -1474,11 +1741,13 @@ export default function InseratStudio() {
               <div className="listing-stack">
                 {activeProject.listings.map((listing) => {
                   const house = state.houses.find((item) => item.id === listing.templateId);
+                  const displayImages = house ? effectiveHouseImages(state, house) : [];
+                  const displayImage = displayImages[0];
                   return (
                     <article className="listing-card" key={listing.id}>
                       <header>
                         <div className="listing-thumb">
-                          {house?.images[0] ? <img src={house.images[0].dataUrl} alt="" /> : <span>F&amp;P</span>}
+                          {displayImage ? <img src={displayImage.dataUrl} alt={displayImage.caption} /> : <span>F&amp;P</span>}
                         </div>
                         <div><span className="eyebrow">KI-Überschrift · Version {listing.version}</span><h3>{listing.texts.title}</h3><p>{listing.templateName} · {house?.livingArea} m² · {house?.rooms} Zimmer · {activeProject.city}</p></div>
                         <div className="price-tag"><span>Angebotspreis</span><b>{euro(listing.price)}</b></div>
@@ -1490,7 +1759,7 @@ export default function InseratStudio() {
                         <TextField label="3 · Lage" rows={7} value={listing.texts.location} onChange={(value) => updateListingText(listing.id, "location", value)} />
                         <TextField label="4 · Sonstiges" rows={7} value={listing.texts.other} onChange={(value) => updateListingText(listing.id, "other", value)} />
                       </div>
-                      <footer><span>{house?.images.length ?? 0} Bilder automatisch zugeordnet</span><span>Weitergabe an Portale: <b>deaktiviert</b></span></footer>
+                      <footer><span>{displayImages.length} Bilder automatisch zugeordnet{state.promotionImageEnabled && state.promotionImage ? " · Aktionsbild an Position 1" : ""}</span><span>Weitergabe an Portale: <b>deaktiviert</b></span></footer>
                     </article>
                   );
                 })}
@@ -1550,7 +1819,7 @@ export default function InseratStudio() {
                 </select>
               </label>
             </div>
-            <p className="security-note">Der Schlüssel wird vor dem Speichern direkt bei OpenAI geprüft und anschließend für dein Windows-Benutzerkonto verschlüsselt. Die KI erzeugt Überschrift und vier Textblöcke gemeinsam. An die Text-KI werden weder Straße, Hausnummer noch PLZ übergeben; in den Inserattexten sind nur Ort und Ortsteil als konkrete Ortsangaben erlaubt.</p>
+            <p className="security-note">Der Schlüssel wird vor dem Speichern direkt bei OpenAI geprüft und anschließend für dein Windows-Benutzerkonto verschlüsselt. Die KI erzeugt eine kurze Überschrift ohne Haus- oder Modellbezeichnung und vier Textblöcke gemeinsam. An die Text-KI werden weder Straße, Hausnummer noch PLZ übergeben; in den Inserattexten sind nur Ort und Ortsteil als konkrete Ortsangaben erlaubt.</p>
 
             <div className="divider" />
             <div className="section-heading"><div><span className="eyebrow">Verschlüsselt auf diesem Gerät</span><h2>Immoprofessional-Zugang</h2></div><span className={helperOnline ? "status online" : "status offline"}>{helperOnline ? "Upload bereit" : "Upload-Helfer offline"}</span></div>

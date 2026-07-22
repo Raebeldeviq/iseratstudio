@@ -20,7 +20,7 @@ const longText = (sentence, minimum) => {
 };
 
 const validTexts = {
-  title: "Ein Zuhause mit Weitblick: durchdacht bauen in Schulzendorf",
+  title: "Ein Zuhause mit Weitblick in Schulzendorf",
   description: longText("Der projektierte Entwurf verbindet klare Architektur mit flexibel nutzbaren Räumen und einer sorgfältig abgestimmten Planung für den Familienalltag.", 1250),
   equipment: longText("Die geplante Ausstattung kombiniert eine moderne Wärmepumpe, komfortable Flächen und individuell zu vereinbarende Materialien gemäß Bau- und Leistungsbeschreibung.", 1550),
   location: longText("Das Grundstück liegt in Schulzendorf und bietet einen stimmigen Rahmen für das geplante Zuhause; alle weiteren Details werden anhand bestätigter Standortdaten beurteilt.", 550),
@@ -48,6 +48,8 @@ test("uses the Responses API quality settings and a strict text schema", () => {
   assert.equal(request.text.verbosity, "high");
   assert.equal(request.text.format.type, "json_schema");
   assert.deepEqual(request.text.format.schema.required, ["title", "description", "equipment", "location", "other"]);
+  assert.match(request.text.format.schema.properties.title.description, /3 bis 8 Wörtern/);
+  assert.match(request.input[0].content[0].text, /niemals die gelieferte Haus- oder Modellbezeichnung/);
 });
 
 test("uses GPT-5.6 Luna as the economical default", () => {
@@ -83,6 +85,22 @@ test("accepts complete texts and rejects short or Markdown-formatted output", ()
   const errors = validateListingTexts({ ...validTexts, description: "## Zu kurz" });
   assert.ok(errors.some((value) => value.includes("zu kurz")));
   assert.ok(errors.some((value) => value.includes("Markdown")));
+});
+
+test("requires short headlines without the configured house designation", () => {
+  assert.deepEqual(
+    validateListingTexts({ ...validTexts, title: "Mehr Raum für euer Familienleben" }, { name: "Sunshine 125" }),
+    [],
+  );
+  const designationErrors = validateListingTexts(
+    { ...validTexts, title: "Sunshine 125 für die ganze Familie" },
+    { name: "Sunshine 125" },
+  );
+  assert.ok(designationErrors.some((value) => value.includes("Hausbezeichnung")));
+  const punctuationErrors = validateListingTexts(
+    { ...validTexts, title: "Familienglück: Raum für neue Pläne" },
+  );
+  assert.ok(punctuationErrors.some((value) => value.includes("Doppelpunkt")));
 });
 
 test("extracts structured text from a Responses API output block", () => {

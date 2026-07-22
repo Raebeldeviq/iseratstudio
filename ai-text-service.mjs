@@ -6,7 +6,7 @@ const TEXT_FIELDS = ["title", "description", "equipment", "location", "other"];
 const MAX_IMAGE_CAPTIONS = 14;
 
 const FIELD_RULES = {
-  title: { min: 30, max: 100, label: "Überschrift" },
+  title: { min: 18, max: 60, label: "Überschrift" },
   description: { min: 1200, max: 6000, label: "Objektbeschreibung" },
   equipment: { min: 1500, max: 7000, label: "Ausstattung" },
   location: { min: 500, max: 3500, label: "Lage" },
@@ -29,7 +29,9 @@ Verbindliche Qualitätsregeln:
 9. Keine Emojis, URLs, Markdown-Zeichen, Tabellen, Sternchenüberschriften oder Platzhalter. Kurze Klartext-Zwischenüberschriften sind erlaubt. Keine komplett in Großbuchstaben geschriebenen Passagen.
 10. Weiche deutlich von eventuell gelieferten bisherigen Texten ab: neuer Einstieg, andere Satzstruktur, andere Reihenfolge und frische Formulierungen. Zahlen, Eigennamen und verbindliche Fachbegriffe bleiben unverändert.
 11. Formuliere rechtlich vorsichtig: projektiert/geplant, soweit technisch, planerisch und baurechtlich möglich; endgültige Energiekennwerte gemäß konkreter Planung und Energieausweis; maßgeblich sind individuelle Vereinbarungen und die Bau- und Leistungsbeschreibung.
-12. Prüfe vor der Ausgabe intern Grammatik, Rechtschreibung, Zahlenkonsistenz, Dopplungen und unbelegte Behauptungen. Gib ausschließlich das verlangte JSON aus.`;
+12. Prüfe vor der Ausgabe intern Grammatik, Rechtschreibung, Zahlenkonsistenz, Dopplungen und unbelegte Behauptungen.
+13. Die Überschrift ist kurz, klar und ansprechend: 3 bis 8 Wörter und 18 bis 60 Zeichen. Verwende darin niemals die gelieferte Haus- oder Modellbezeichnung, Produktfamilien oder Modellnummern. Formuliere stattdessen einen verständlichen Wohnvorteil oder ein prägnantes Lebensgefühl. Keine Doppelpunkte, Ausrufezeichen oder werblichen Floskeln.
+Gib ausschließlich das verlangte JSON aus.`;
 
 function cleanString(value, maxLength = 12000) {
   return String(value ?? "").trim().slice(0, maxLength);
@@ -184,7 +186,7 @@ export function createOpenAiRequest(input, retryFeedback = []) {
           additionalProperties: false,
           required: TEXT_FIELDS,
           properties: {
-            title: { type: "string", description: "Eigenständige Überschrift mit 30 bis 100 Zeichen." },
+            title: { type: "string", description: "Klare, ansprechende Überschrift mit 3 bis 8 Wörtern und 18 bis 60 Zeichen; ohne Hausname, Modellbezeichnung oder Modellnummer." },
             description: { type: "string", description: "Hochwertige Objektbeschreibung mit 1.200 bis 6.000 Zeichen." },
             equipment: { type: "string", description: "Substanzielle Ausstattung mit 1.500 bis 7.000 Zeichen." },
             location: { type: "string", description: "Faktengebundene Lagebeschreibung mit 500 bis 3.500 Zeichen." },
@@ -285,7 +287,17 @@ function normalizedParagraph(value) {
   return value.toLocaleLowerCase("de-DE").replace(/[^a-zäöüß0-9]+/g, " ").trim();
 }
 
-export function validateListingTexts(texts) {
+function titleContainsHouseDesignation(title, house = {}) {
+  const normalizedTitle = normalizedParagraph(String(title ?? ""));
+  const designationTokens = normalizedParagraph(cleanString(house.name, 180))
+    .split(/\s+/)
+    .filter((token) => token.length >= 3 || /\d/u.test(token));
+  return designationTokens.some((token) => (
+    new RegExp(`(?:^|\\s)${escapeRegExp(token)}(?:$|\\s)`, "u").test(normalizedTitle)
+  ));
+}
+
+export function validateListingTexts(texts, house = {}) {
   const errors = [];
   if (!texts || typeof texts !== "object") return ["Die Textausgabe ist unvollständig."];
 
@@ -303,6 +315,18 @@ export function validateListingTexts(texts) {
       errors.push(`${rule.label} enthält einen Platzhalter.`);
     }
     if (/(.)\1{7,}/u.test(value)) errors.push(`${rule.label} enthält eine auffällige Zeichenwiederholung.`);
+  }
+
+  const title = typeof texts.title === "string" ? texts.title.trim() : "";
+  const titleWordCount = title.split(/\s+/).filter(Boolean).length;
+  if (title && (titleWordCount < 3 || titleWordCount > 8)) {
+    errors.push(`Die Überschrift muss aus 3 bis 8 Wörtern bestehen (${titleWordCount}/8 Wörter).`);
+  }
+  if (title && /[:!]/u.test(title)) {
+    errors.push("Die Überschrift soll klar ohne Doppelpunkt oder Ausrufezeichen formuliert sein.");
+  }
+  if (title && titleContainsHouseDesignation(title, house)) {
+    errors.push("Die Überschrift enthält die Hausbezeichnung oder Modellnummer.");
   }
 
   const seenParagraphs = new Map();
@@ -449,7 +473,7 @@ export async function generateAiListing(input = {}) {
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const texts = await requestOnce(apiKey, input, feedback);
     feedback = [
-      ...validateListingTexts(texts),
+      ...validateListingTexts(texts, input.house),
       ...validateNovelty(texts, input.previousTexts),
       ...validateLocationPrivacy(texts, input.project),
     ];

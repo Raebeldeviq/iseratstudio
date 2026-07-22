@@ -70,12 +70,16 @@ export function generateListingTexts(
 
   const title = pick(
     [
-      `Bauen statt Mieten: ${house.name} in ${place}`,
-      `Eigenheim statt Miete – ${house.name} in ${place}`,
-      `${place}: modern bauen mit ${formatNumber(house.livingArea)} m² Wohnfläche`,
-      `Dein Living Haus in ${place} – ${rooms} individuell geplant`,
-      `${house.name} in ${place}: Raum für dein neues Zuhause`,
-      `Zukunft bauen in ${place}: ${house.name} auf ${formatNumber(project.plotArea)} m²`,
+      "Mehr Raum für euer Familienleben",
+      `Dein neues Zuhause in ${place}`,
+      "Großzügig wohnen und entspannt ankommen",
+      "Zukunft beginnt im eigenen Zuhause",
+      "Platz für Familie, Arbeit und Leben",
+      "Wohnen mit Weitblick und Freiraum",
+      house.floors <= 1
+        ? "Ebenerdig ins neue Zuhause"
+        : "Zwei Ebenen für neue Lebenspläne",
+      `${formatNumber(house.livingArea)} m² für neue Lebenspläne`,
     ],
     seed,
     1,

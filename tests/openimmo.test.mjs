@@ -58,7 +58,14 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
       architecture: "",
       equipmentHighlights: "",
       useStandardPackage: true,
-      images: [],
+      images: [{
+        id: "house-image-1",
+        name: "haus.jpg",
+        mimeType: "image/jpeg",
+        dataUrl: "data:image/jpeg;base64,aGF1cw==",
+        caption: "Eigenes Hausbild",
+        isFloorplan: false,
+      }],
     }],
     provider: {
       providerNumber: "30435",
@@ -68,11 +75,21 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
       email: "test@example.com",
       phone: "0000",
     },
+    promotionImage: {
+      id: "promotion-image-1",
+      name: "aktion.jpg",
+      mimeType: "image/jpeg",
+      dataUrl: "data:image/jpeg;base64,YWt0aW9u",
+      caption: "Aktuelles Angebot für dein neues Zuhause",
+      isFloorplan: false,
+    },
+    promotionImageEnabled: true,
   };
   const xml = buildOpenImmoXml(input);
 
   assert.match(xml, /<openimmo_obid>FPI-TEST-1<\/openimmo_obid>/);
   assert.match(xml, /<aktion aktionart="CHANGE" timestamp="[^"]+" \/>/);
+  assert.ok(xml.indexOf("Aktuelles Angebot für dein neues Zuhause") < xml.indexOf("Eigenes Hausbild"));
   const packageResult = await buildImportPackage(input);
   assert.match(packageResult.filename, /testprojekt-testhaus-fpi-test-1-\d{4}-\d{2}-\d{2}\.zip/);
 });

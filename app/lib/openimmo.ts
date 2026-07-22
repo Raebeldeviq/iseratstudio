@@ -12,7 +12,11 @@ type PackageInput = {
   listings: GeneratedListing[];
   houses: HouseTemplate[];
   provider: ProviderSettings;
+  promotionImage?: HouseImage | null;
+  promotionImageEnabled?: boolean;
 };
+
+const MAX_EXPORTED_IMAGES = 14;
 
 function xml(value: string | number | undefined | null): string {
   return String(value ?? "")
@@ -81,10 +85,19 @@ function imageXml(
     .join("");
 }
 
+function listingImages(input: PackageInput, house: HouseTemplate): HouseImage[] {
+  if (!input.promotionImageEnabled || !input.promotionImage) return house.images;
+  return [
+    input.promotionImage,
+    ...house.images.filter((image) => image.id !== input.promotionImage?.id),
+  ].slice(0, MAX_EXPORTED_IMAGES);
+}
+
 function listingXml(
   project: ProjectInput,
   listing: GeneratedListing,
   house: HouseTemplate,
+  images: HouseImage[],
   provider: ProviderSettings,
   timestamp: string,
 ): string {
@@ -154,7 +167,7 @@ function listingXml(
           <objektbeschreibung>${cdata(listing.texts.description)}</objektbeschreibung>
           <sonstige_angaben>${cdata(listing.texts.other)}</sonstige_angaben>
         </freitexte>
-        <anhaenge>${imageXml(listing, house.images)}</anhaenge>
+        <anhaenge>${imageXml(listing, images)}</anhaenge>
         <verwaltung_objekt>
           <objektadresse_freigeben>false</objektadresse_freigeben>
         </verwaltung_objekt>
@@ -169,24 +182,20 @@ function listingXml(
       </immobilie>`;
 }
 
-export function buildOpenImmoXml({
-  project,
-  listings,
-  houses,
-  provider,
-}: PackageInput): string {
+export function buildOpenImmoXml(input: PackageInput): string {
+  const { project, listings, houses, provider } = input;
   const timestamp = new Date().toISOString();
   const objects = listings
     .map((listing) => {
       const house = houses.find((item) => item.id === listing.templateId);
       if (!house) throw new Error(`Haustyp ${listing.templateName} fehlt.`);
-      return listingXml(project, listing, house, provider, timestamp);
+      return listingXml(project, listing, house, listingImages(input, house), provider, timestamp);
     })
     .join("");
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <openimmo xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
-  <uebertragung art="OFFLINE" umfang="VOLL" version="1.2.7" sendersoftware="Fabian&amp;Pascal Inseratestudio" senderversion="0.3.13" techn_email="${xml(provider.email)}" regi_id="${xml(provider.providerNumber)}" timestamp="${xml(timestamp)}" />
+  <uebertragung art="OFFLINE" umfang="VOLL" version="1.2.7" sendersoftware="Fabian&amp;Pascal Inseratestudio" senderversion="0.3.18" techn_email="${xml(provider.email)}" regi_id="${xml(provider.providerNumber)}" timestamp="${xml(timestamp)}" />
   <anbieter>
     <anbieternr>${xml(provider.providerNumber)}</anbieternr>
     <firma>${xml(provider.company)}</firma>${objects}
@@ -221,7 +230,8 @@ export async function buildImportPackage(input: PackageInput): Promise<{
 
   input.listings.forEach((listing) => {
     const house = input.houses.find((item) => item.id === listing.templateId);
-    house?.images.forEach((image, index) => {
+    if (!house) return;
+    listingImages(input, house).forEach((image, index) => {
       zip.file(imageFilename(listing, image, index), imageBytes(image.dataUrl));
     });
   });

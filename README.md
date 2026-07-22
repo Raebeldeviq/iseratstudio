@@ -1,6 +1,6 @@
 # Fabian&Pascal Inseratestudio
 
-Lokale Anwendung für die Konfiguration von bis zu zwölf Haustypen und die
+Lokale Anwendung für die Konfiguration von bis zu 18 Haustypen und die
 Erstellung von bis zu vier Inseratentwürfen je Adresse.
 
 ## Start
@@ -14,7 +14,7 @@ einzelne Bilddateien gesichert; Textänderungen übertragen die Fotos nicht erne
 
 ## Arbeitsablauf
 
-1. Unter **Haustypen** Hausdaten und mindestens sechs bis maximal 14 Bilder
+1. Unter **Haustypen** Hausdaten und mindestens vier bis maximal 14 Bilder
    hinterlegen. Über **Position** kann die Reihenfolge jederzeit geändert werden;
    Bild 1 ist das Titelbild. Beim Hochladen wird unter jedem Bild automatisch ein
    kurzer emotionaler Bildtext erzeugt und bleibt von Hand bearbeitbar. Grundrisse
@@ -28,10 +28,42 @@ einzelne Bilddateien gesichert; Textänderungen übertragen die Fotos nicht erne
    der mit `sk-` beginnt, und **Zugangsdaten prüfen & speichern** drücken. Danach
    unter **Adresse & Auswahl** die hochwertige KI-Überschrift und alle vier
    Textblöcke gemeinsam erzeugen.
+   Die Überschrift besteht aus 3 bis 8 Wörtern und enthält keine Haus- oder
+   Modellbezeichnung. Sie wird stattdessen kurz, klar und am konkreten
+   Wohnvorteil ausgerichtet.
 4. Unter **Texte & Vorschau** Überschrift und die vier neu formulierten
    Textblöcke prüfen und bei Bedarf bearbeiten.
 5. Unter **Export & Upload** das OpenImmo-Paket herunterladen oder nach einer
    ausdrücklichen Bestätigung an den Immoprofessional-FTP-Zugang übertragen.
+
+## Getrennte Grundstücksadressen für Fabian und Pascal
+
+Unter **Adresse & Auswahl** zuerst Fabian oder Pascal wählen. Jeder Benutzer
+hat ein eigenes lokales Adressbuch. Mit **Adresse speichern** wird das aktuelle
+Grundstück ausdrücklich in der Browser- und Windows-Sicherung abgelegt. Bereits
+gespeicherte Adressen können anschließend über das Auswahlmenü erneut geöffnet
+und für weitere Haustypen oder neue Inserattexte wiederverwendet werden. Ältere
+Adressprojekte werden bei der ersten Verwendung automatisch Fabian zugeordnet.
+
+### Adressen aus Excel importieren
+
+Unter **Adresse & Auswahl** zuerst **Excel-Vorlage herunterladen** wählen. In der
+Vorlage steht jede Grundstücksadresse in einer eigenen Zeile; in der Spalte
+**Benutzer** muss Fabian oder Pascal gewählt sein. Anschließend die ausgefüllte
+`.xlsx`-Datei über **Excel-Adressen importieren** einlesen. Die Adressen werden
+automatisch dem getrennten Adressbuch des angegebenen Benutzers zugeordnet und
+lokal gespeichert. Bereits vorhandene Adressen werden als Dubletten übersprungen;
+unvollständige Zeilen zeigt das Studio direkt unter dem Importbereich an.
+
+## Zentrales Aktionsbild
+
+Unter **Haustypen** kann ein Aktionsbild einmal zentral hochgeladen und mit
+**Für alle Haustypen verwenden** aktiviert werden. Es erscheint dann in der
+Auswahl, Vorschau und im OpenImmo-Export als Bild 1 jedes Inserats. Die normalen
+Hausbilder bleiben unverändert; bei bereits 14 Hausbildern wird nur das letzte
+Bild im Export weggelassen. Nach dem Ausschalten verwendet jeder Haustyp wieder
+sein eigenes Titelbild. Das Aktionsbild wird separat und ohne Bildduplikate in
+der lokalen Browser- und Windows-Sicherung gespeichert.
 
 Das Inseratestudio darf nur in einem Browser-Tab gleichzeitig geöffnet sein.
 Ein zweiter Tab wird automatisch gesperrt, damit ältere Datenstände keine

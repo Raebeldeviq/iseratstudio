@@ -47,6 +47,9 @@ function safeId(value, label) {
 function withoutImageData(state) {
   return {
     ...state,
+    promotionImage: state.promotionImage
+      ? { ...state.promotionImage, dataUrl: "" }
+      : null,
     houses: state.houses.map((house) => ({
       ...house,
       images: Array.isArray(house.images)
@@ -57,10 +60,17 @@ function withoutImageData(state) {
 }
 
 function imageEntries(state) {
-  return state.houses.flatMap((house) => house.images.map((image) => ({
-    id: safeId(image.id, "Bild-ID"),
-    mimeType: String(image.mimeType || "application/octet-stream").slice(0, 120),
-  })));
+  const images = [
+    ...state.houses.flatMap((house) => house.images),
+    ...(state.promotionImage ? [state.promotionImage] : []),
+  ];
+  return [...new Map(images.map((image) => {
+    const entry = {
+      id: safeId(image.id, "Bild-ID"),
+      mimeType: String(image.mimeType || "application/octet-stream").slice(0, 120),
+    };
+    return [entry.id, entry];
+  })).values()];
 }
 
 function pendingManifestPath(catalogDirectory, sessionId) {

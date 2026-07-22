@@ -28,8 +28,11 @@ export type HouseTemplate = {
   images: HouseImage[];
 };
 
+export type AddressOwner = "fabian" | "pascal";
+
 export type ProjectInput = {
   id: string;
+  owner: AddressOwner;
   name: string;
   street: string;
   houseNumber: string;
@@ -81,4 +84,6 @@ export type StudioState = {
   houses: HouseTemplate[];
   projects: ProjectInput[];
   provider: ProviderSettings;
+  promotionImage: HouseImage | null;
+  promotionImageEnabled: boolean;
 };
