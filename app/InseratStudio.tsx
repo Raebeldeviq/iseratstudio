@@ -1,8 +1,9 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
-import { ChangeEvent, useEffect, useState } from "react";
+import { ChangeEvent, useEffect, useRef, useState } from "react";
 import { readSheet } from "read-excel-file/browser";
+import appPackage from "../package.json";
 import { parseAddressWorkbookRows } from "./lib/address-import";
 import {
   headlinesAreTooSimilar,
@@ -11,6 +12,15 @@ import {
 import { buildImportPackage } from "./lib/openimmo";
 import { ADDRESS_OWNERS, normalizeProjectOwners, projectOwner } from "./lib/project-owners";
 import { totalPrice } from "./lib/text-generator";
+import {
+  createTotalSyncRun,
+  projectIsReadyForTotalSync,
+  projectsInTotalSyncScope,
+  TOTAL_SYNC_LISTINGS_PER_ADDRESS,
+  totalSyncCanResume,
+  totalSyncExternalId,
+  totalSyncProgress,
+} from "./lib/total-sync";
 import { loadStudioSnapshot, saveStudioState, STORAGE_ID } from "./lib/storage";
 import type {
   AddressOwner,
@@ -21,6 +31,9 @@ import type {
   ProjectInput,
   ProviderSettings,
   StudioState,
+  TotalSyncProjectTask,
+  TotalSyncRun,
+  TotalSyncScope,
 } from "./types";
 
 type Tab = "houses" | "project" | "preview" | "settings";
@@ -426,6 +439,7 @@ export default function InseratStudio() {
   const [uploading, setUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState("");
   const [helperOnline, setHelperOnline] = useState(false);
+  const [helperNeedsRestart, setHelperNeedsRestart] = useState(false);
   const [openAiKey, setOpenAiKey] = useState("");
   const [aiModel, setAiModel] = useState<AiModel>("gpt-5.6-luna");
   const [generatingAi, setGeneratingAi] = useState(false);
@@ -440,6 +454,11 @@ export default function InseratStudio() {
   const [replacingAllImageCaptions, setReplacingAllImageCaptions] = useState(false);
   const [openAiKeyVerified, setOpenAiKeyVerified] = useState(false);
   const [isPrimaryTab, setIsPrimaryTab] = useState<boolean | null>(null);
+  const [totalSyncScope, setTotalSyncScope] = useState<TotalSyncScope>("fabian");
+  const [totalSyncBusy, setTotalSyncBusy] = useState(false);
+  const [totalSyncStopping, setTotalSyncStopping] = useState(false);
+  const [totalSyncStatus, setTotalSyncStatus] = useState("");
+  const totalSyncStopRequested = useRef(false);
 
   useEffect(() => {
     let releaseLock: (() => void) | undefined;
@@ -507,6 +526,11 @@ export default function InseratStudio() {
         setActiveHouseId(next.houses[0]?.id ?? "");
         setActiveProjectId(next.projects[0]?.id ?? "");
         setActiveOwner(projectOwner(next.projects[0]));
+        setTotalSyncScope(
+          totalSyncCanResume(next.totalSyncRun) && next.totalSyncRun
+            ? next.totalSyncRun.scope
+            : projectOwner(next.projects[0]),
+        );
         setSaveLabel(selected?.source === "windows" ? "Aus lokaler Windows-Sicherung geladen" : "Doppelt lokal gespeichert");
       })
       .catch(() => setSaveLabel("Lokaler Speicher nicht verfügbar"))
@@ -514,8 +538,19 @@ export default function InseratStudio() {
 
     const checkHelper = () => {
       fetch("http://127.0.0.1:43182/health")
-        .then((response) => setHelperOnline(response.ok))
-        .catch(() => setHelperOnline(false));
+        .then(async (response) => {
+          const data = response.ok
+            ? await response.json().catch(() => ({})) as { service?: string; version?: string }
+            : {};
+          const correctService = data.service === "fabian-pascal-helper";
+          const correctVersion = data.version === appPackage.version;
+          setHelperOnline(response.ok && correctService && correctVersion);
+          setHelperNeedsRestart(response.ok && correctService && !correctVersion);
+        })
+        .catch(() => {
+          setHelperOnline(false);
+          setHelperNeedsRestart(false);
+        });
     };
     checkHelper();
     const healthTimer = window.setInterval(checkHelper, 5000);
@@ -630,6 +665,18 @@ export default function InseratStudio() {
   const selectedHouses = state.houses.filter((house) =>
     activeProject?.selectedHouseIds.includes(house.id),
   );
+  const resumableTotalSync = totalSyncCanResume(state.totalSyncRun);
+  const totalSyncEffectiveScope = resumableTotalSync && state.totalSyncRun
+    ? state.totalSyncRun.scope
+    : totalSyncScope;
+  const totalSyncScopedProjects = projectsInTotalSyncScope(state.projects, totalSyncEffectiveScope);
+  const totalSyncReadyProjects = totalSyncScopedProjects.filter(projectIsReadyForTotalSync);
+  const totalSyncSkippedProjects = totalSyncScopedProjects.length - totalSyncReadyProjects.length;
+  const totalSyncEligibleHouses = state.houses.filter((house) => {
+    const imageCount = effectiveHouseImages(state, house).length;
+    return imageCount >= MIN_HOUSE_IMAGES && imageCount <= MAX_HOUSE_IMAGES;
+  });
+  const totalSyncRunProgress = totalSyncProgress(state.totalSyncRun);
 
   const saveHousesNow = async () => {
     const savedAt = new Date().toISOString();
@@ -924,6 +971,7 @@ export default function InseratStudio() {
       (project) => projectOwner(project) === owner,
     );
     setActiveOwner(owner);
+    if (!resumableTotalSync && !totalSyncBusy) setTotalSyncScope(owner);
     if (existingProject) {
       setActiveProjectId(existingProject.id);
       return;
@@ -973,6 +1021,7 @@ export default function InseratStudio() {
       const firstProject = result.projects[0];
       setActiveOwner(firstProject.owner);
       setActiveProjectId(firstProject.id);
+      if (!resumableTotalSync) setTotalSyncScope(firstProject.owner);
       const details = [
         result.duplicateCount ? `${result.duplicateCount} Dubletten übersprungen` : "",
         result.errors.length ? `${result.errors.length} fehlerhafte Zeilen übersprungen` : "",
@@ -1005,6 +1054,106 @@ export default function InseratStudio() {
     });
   };
 
+  const requestListingTexts = async (input: {
+    project: ProjectInput;
+    house: HouseTemplate;
+    index: number;
+    listingCount: number;
+    selectedHouseNames: string[];
+    previous: GeneratedListing | undefined;
+    titlesToAvoid: string[];
+    headlineCycleId: string;
+    maxAttempts?: number;
+  }): Promise<{ texts: ListingTexts; writingProfile: string }> => {
+    const maxAttempts = Math.max(1, input.maxAttempts ?? 1);
+    let lastError: Error | null = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        const response = await fetch("http://127.0.0.1:43182/generate-texts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            apiKey: openAiKey.trim(),
+            model: aiModel,
+            house: {
+              name: input.house.name,
+              houseType: input.house.houseType,
+              livingArea: input.house.livingArea,
+              rooms: input.house.rooms,
+              bedrooms: input.house.bedrooms,
+              bathrooms: input.house.bathrooms,
+              floors: input.house.floors,
+              housePrice: input.house.housePrice,
+              constructionYear: input.house.constructionYear,
+              energyDemand: input.house.energyDemand,
+              energyClass: input.house.energyClass,
+              heatingType: input.house.heatingType,
+              energySource: input.house.energySource,
+              architecture: input.house.architecture,
+              equipmentHighlights: input.house.equipmentHighlights,
+              useStandardPackage: input.house.useStandardPackage,
+            },
+            project: {
+              name: input.project.name,
+              street: input.project.street,
+              houseNumber: input.project.houseNumber,
+              zip: input.project.zip,
+              city: input.project.city,
+              district: input.project.district,
+              plotArea: input.project.plotArea,
+              plotPrice: input.project.plotPrice,
+              additionalCosts: input.project.additionalCosts,
+              locationFacts: input.project.locationFacts,
+              transportFacts: input.project.transportFacts,
+              familyFacts: input.project.familyFacts,
+              natureFacts: input.project.natureFacts,
+              notes: input.project.notes,
+            },
+            provider: {
+              company: state.provider.company,
+              firstName: state.provider.firstName,
+              lastName: state.provider.lastName,
+              phone: state.provider.phone,
+            },
+            previousTexts: input.previous?.texts,
+            previousWritingProfile: input.previous?.writingProfile,
+            titlesToAvoid: input.titlesToAvoid,
+            headlineCycleId: input.headlineCycleId,
+            listingPosition: input.index + 1,
+            listingCount: input.listingCount,
+            selectedHouseNames: input.selectedHouseNames,
+            variationId: crypto.randomUUID(),
+          }),
+        });
+        const data = (await response.json()) as {
+          ok?: boolean;
+          message?: string;
+          texts?: ListingTexts;
+          writingProfile?: string;
+          qualityChecked?: boolean;
+        };
+        if (!response.ok || !data.ok || !data.texts || !data.qualityChecked) {
+          const error = new Error(
+            data.message || `Der KI-Text für „${input.house.name}“ konnte nicht erzeugt werden.`,
+          ) as Error & { status?: number };
+          error.status = response.status;
+          throw error;
+        }
+        return {
+          texts: data.texts,
+          writingProfile: data.writingProfile ?? "",
+        };
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error("Die KI-Texte konnten nicht erzeugt werden.");
+        const status = (lastError as Error & { status?: number }).status;
+        const retryable = status === undefined || status === 422 || status === 429 || status >= 500;
+        if (attempt >= maxAttempts || !retryable) throw lastError;
+        await new Promise((resolve) => window.setTimeout(resolve, 2500 * attempt));
+      }
+    }
+    throw lastError ?? new Error("Die KI-Texte konnten nicht erzeugt werden.");
+  };
+
   const generationInputIsValid = () => {
     if (!activeProject || selectedHouses.length === 0) {
       setNotice("Bitte zuerst mindestens einen Haustyp auswählen.");
@@ -1025,7 +1174,9 @@ export default function InseratStudio() {
       return;
     }
     if (!helperOnline) {
-      setNotice("Der lokale Helfer ist nicht erreichbar. Bitte die Anwendung über den Startknopf öffnen.");
+      setNotice(helperNeedsRestart
+        ? "Der lokale Textgenerator verwendet noch eine ältere Programmfassung. Bitte das Inseratestudio schließen und erneut über den Startknopf öffnen."
+        : "Der lokale Helfer ist nicht erreichbar. Bitte die Anwendung über den Startknopf öffnen.");
       return;
     }
 
@@ -1045,90 +1196,21 @@ export default function InseratStudio() {
     setNotice(`Qualitätsmodus arbeitet: ${houseSnapshots.length} Inserat${houseSnapshots.length === 1 ? "" : "e"} erhalten neue Überschriften und lebendige, unterschiedlich aufgebaute Anzeigentexte …`);
 
     try {
-      const requestListingTexts = async (
-        house: HouseTemplate,
-        index: number,
-        previous: GeneratedListing | undefined,
-        titlesToAvoid: string[],
-      ): Promise<{ texts: ListingTexts; writingProfile: string }> => {
-        const response = await fetch("http://127.0.0.1:43182/generate-texts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            apiKey: openAiKey.trim(),
-            model: aiModel,
-            house: {
-              name: house.name,
-              houseType: house.houseType,
-              livingArea: house.livingArea,
-              rooms: house.rooms,
-              bedrooms: house.bedrooms,
-              bathrooms: house.bathrooms,
-              floors: house.floors,
-              housePrice: house.housePrice,
-              constructionYear: house.constructionYear,
-              energyDemand: house.energyDemand,
-              energyClass: house.energyClass,
-              heatingType: house.heatingType,
-              energySource: house.energySource,
-              architecture: house.architecture,
-              equipmentHighlights: house.equipmentHighlights,
-              useStandardPackage: house.useStandardPackage,
-            },
-            project: {
-              name: projectSnapshot.name,
-              street: projectSnapshot.street,
-              houseNumber: projectSnapshot.houseNumber,
-              zip: projectSnapshot.zip,
-              city: projectSnapshot.city,
-              district: projectSnapshot.district,
-              plotArea: projectSnapshot.plotArea,
-              plotPrice: projectSnapshot.plotPrice,
-              additionalCosts: projectSnapshot.additionalCosts,
-              locationFacts: projectSnapshot.locationFacts,
-              transportFacts: projectSnapshot.transportFacts,
-              familyFacts: projectSnapshot.familyFacts,
-              natureFacts: projectSnapshot.natureFacts,
-              notes: projectSnapshot.notes,
-            },
-            provider: {
-              company: state.provider.company,
-              firstName: state.provider.firstName,
-              lastName: state.provider.lastName,
-              phone: state.provider.phone,
-            },
-            previousTexts: previous?.texts,
-            previousWritingProfile: previous?.writingProfile,
-            titlesToAvoid,
-            headlineCycleId,
-            listingPosition: index + 1,
-            listingCount: houseSnapshots.length,
-            selectedHouseNames,
-            variationId: crypto.randomUUID(),
-          }),
-        });
-        const data = (await response.json()) as {
-          ok?: boolean;
-          message?: string;
-          texts?: ListingTexts;
-          writingProfile?: string;
-          qualityChecked?: boolean;
-        };
-        if (!response.ok || !data.ok || !data.texts || !data.qualityChecked) {
-          throw new Error(data.message || `Der KI-Text für „${house.name}“ konnte nicht erzeugt werden.`);
-        }
-        return {
-          texts: data.texts,
-          writingProfile: data.writingProfile ?? "",
-        };
-      };
-
       const generated = await Promise.all(
         houseSnapshots.map(async (house, index) => {
           const previous = projectSnapshot.listings.find(
             (listing) => listing.templateId === house.id,
           );
-          const result = await requestListingTexts(house, index, previous, historicalTitles);
+          const result = await requestListingTexts({
+            project: projectSnapshot,
+            house,
+            index,
+            listingCount: houseSnapshots.length,
+            selectedHouseNames,
+            previous,
+            titlesToAvoid: historicalTitles,
+            headlineCycleId,
+          });
           return {
             house,
             index,
@@ -1144,12 +1226,16 @@ export default function InseratStudio() {
         if (acceptedTitles.some((title) => (
           headlinesAreTooSimilar(generatedListing.texts.title, title)
         ))) {
-          const replacement = await requestListingTexts(
-            generatedListing.house,
-            generatedListing.index,
-            generatedListing.previous,
-            acceptedTitles,
-          );
+          const replacement = await requestListingTexts({
+            project: projectSnapshot,
+            house: generatedListing.house,
+            index: generatedListing.index,
+            listingCount: houseSnapshots.length,
+            selectedHouseNames,
+            previous: generatedListing.previous,
+            titlesToAvoid: acceptedTitles,
+            headlineCycleId,
+          });
           generatedListing.texts = replacement.texts;
           generatedListing.writingProfile = replacement.writingProfile;
         }
@@ -1216,11 +1302,14 @@ export default function InseratStudio() {
     });
   };
 
-  const packageInput = () => {
-    if (!activeProject || activeProject.listings.length === 0) {
+  const packageInputFor = (
+    project: ProjectInput,
+    listings: GeneratedListing[] = project.listings,
+  ) => {
+    if (listings.length === 0) {
       throw new Error("Es wurden noch keine Inserate erzeugt.");
     }
-    const invalidImageCounts = activeProject.listings
+    const invalidImageCounts = listings
       .map((listing) => state.houses.find((house) => house.id === listing.templateId))
       .filter(
         (house) =>
@@ -1238,13 +1327,87 @@ export default function InseratStudio() {
       throw new Error("Bitte Anbieternummer, Firma und E-Mail unter Export & Upload ergänzen.");
     }
     return {
-      project: activeProject,
-      listings: activeProject.listings,
+      project,
+      listings,
       houses: state.houses,
       provider: state.provider,
       promotionImage: state.promotionImage,
       promotionImageEnabled: state.promotionImageEnabled,
     };
+  };
+
+  const packageInput = () => {
+    if (!activeProject) throw new Error("Es wurde keine Grundstücksadresse ausgewählt.");
+    return packageInputFor(activeProject);
+  };
+
+  const uploadBinaryPackage = async (
+    blob: Blob,
+    filename: string,
+    position: string,
+    onStatus: (status: string) => void,
+  ): Promise<void> => {
+    await new Promise<{ ok?: boolean; message?: string }>((resolve, reject) => {
+      const request = new XMLHttpRequest();
+      request.open("POST", "http://127.0.0.1:43182/upload-binary");
+      request.setRequestHeader("Content-Type", "application/zip");
+      request.setRequestHeader("X-FPI-Filename", encodeURIComponent(filename));
+      request.setRequestHeader("X-FPI-Ftp-Host", encodeURIComponent(ftpHost));
+      request.setRequestHeader("X-FPI-Ftp-User", encodeURIComponent(ftpUser));
+      request.setRequestHeader("X-FPI-Ftp-Password", encodeURIComponent(ftpPassword));
+      request.setRequestHeader("X-FPI-Ftp-Path", encodeURIComponent(ftpPath));
+      request.upload.onprogress = (event) => {
+        if (event.lengthComputable && event.total > 0) {
+          const percentage = Math.min(100, Math.round((event.loaded / event.total) * 100));
+          onStatus(percentage < 100
+            ? `${position} · ZIP lokal: ${percentage} %`
+            : `${position} · FTP-Transfer läuft …`);
+        }
+      };
+      request.onerror = () => reject(new Error(`Paket ${position}: Der lokale Upload-Helfer hat die Verbindung unterbrochen.`));
+      request.onload = () => {
+        let responseData: { ok?: boolean; message?: string } = {};
+        try {
+          responseData = JSON.parse(request.responseText) as { ok?: boolean; message?: string };
+        } catch {
+          reject(new Error(`Paket ${position}: Der Upload-Helfer hat keine lesbare Antwort gesendet.`));
+          return;
+        }
+        if (request.status < 200 || request.status >= 300 || !responseData.ok) {
+          reject(new Error(`Paket ${position}: ${responseData.message || `Upload fehlgeschlagen (HTTP ${request.status}).`}`));
+          return;
+        }
+        resolve(responseData);
+      };
+      request.send(blob);
+    });
+  };
+
+  const uploadSingleListingPackage = async (input: {
+    project: ProjectInput;
+    listing: GeneratedListing;
+    position: string;
+    onStatus: (status: string) => void;
+    maxAttempts?: number;
+  }): Promise<void> => {
+    const result = await buildImportPackage(
+      packageInputFor(input.project, [input.listing]),
+    );
+    const maxAttempts = Math.max(1, input.maxAttempts ?? 1);
+    let lastError: Error | null = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        input.onStatus(`${input.position} · ${input.listing.templateName} wird einzeln übertragen …`);
+        await uploadBinaryPackage(result.blob, result.filename, input.position, input.onStatus);
+        return;
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error("Upload fehlgeschlagen.");
+        if (attempt >= maxAttempts) throw lastError;
+        input.onStatus(`${input.position} · neuer Uploadversuch ${attempt + 1}/${maxAttempts} …`);
+        await new Promise((resolve) => window.setTimeout(resolve, 3000 * attempt));
+      }
+    }
+    throw lastError ?? new Error("Upload fehlgeschlagen.");
   };
 
   const downloadPackage = async () => {
@@ -1293,42 +1456,11 @@ export default function InseratStudio() {
       for (let index = 0; index < input.listings.length; index += 1) {
         const listing = input.listings[index];
         const position = `${index + 1}/${input.listings.length}`;
-        setUploadStatus(`${position} · ${listing.templateName} wird gepackt …`);
-        const result = await buildImportPackage({ ...input, listings: [listing] });
-        setUploadStatus(`${position} · ZIP wird lokal übergeben …`);
-        await new Promise<{ ok?: boolean; message?: string }>((resolve, reject) => {
-          const request = new XMLHttpRequest();
-          request.open("POST", "http://127.0.0.1:43182/upload-binary");
-          request.setRequestHeader("Content-Type", "application/zip");
-          request.setRequestHeader("X-FPI-Filename", encodeURIComponent(result.filename));
-          request.setRequestHeader("X-FPI-Ftp-Host", encodeURIComponent(ftpHost));
-          request.setRequestHeader("X-FPI-Ftp-User", encodeURIComponent(ftpUser));
-          request.setRequestHeader("X-FPI-Ftp-Password", encodeURIComponent(ftpPassword));
-          request.setRequestHeader("X-FPI-Ftp-Path", encodeURIComponent(ftpPath));
-          request.upload.onprogress = (event) => {
-            if (event.lengthComputable && event.total > 0) {
-              const percentage = Math.min(100, Math.round((event.loaded / event.total) * 100));
-              setUploadStatus(percentage < 100
-                ? `${position} · ZIP lokal: ${percentage} %`
-                : `${position} · FTP-Transfer läuft …`);
-            }
-          };
-          request.onerror = () => reject(new Error(`Paket ${position}: Der lokale Upload-Helfer hat die Verbindung unterbrochen.`));
-          request.onload = () => {
-            let responseData: { ok?: boolean; message?: string } = {};
-            try {
-              responseData = JSON.parse(request.responseText) as { ok?: boolean; message?: string };
-            } catch {
-              reject(new Error(`Paket ${position}: Der Upload-Helfer hat keine lesbare Antwort gesendet.`));
-              return;
-            }
-            if (request.status < 200 || request.status >= 300 || !responseData.ok) {
-              reject(new Error(`Paket ${position}: ${responseData.message || `Upload fehlgeschlagen (HTTP ${request.status}).`}`));
-              return;
-            }
-            resolve(responseData);
-          };
-          request.send(result.blob);
+        await uploadSingleListingPackage({
+          project: input.project,
+          listing,
+          position,
+          onStatus: setUploadStatus,
         });
       }
       setNotice(`${input.listings.length} getrennte Inseratpakete wurden an Immoprofessional übertragen. Bitte den Importbericht und den Entwurfsstatus prüfen.`);
@@ -1338,6 +1470,319 @@ export default function InseratStudio() {
       setUploading(false);
       setUploadStatus("");
     }
+  };
+
+  const replaceTotalSyncTask = (
+    run: TotalSyncRun,
+    projectId: string,
+    patch: Partial<TotalSyncProjectTask>,
+  ): TotalSyncRun => ({
+    ...run,
+    tasks: run.tasks.map((task) => (
+      task.projectId === projectId ? { ...task, ...patch } : task
+    )),
+  });
+
+  const saveTotalSyncCheckpoint = async (
+    checkpoint: StudioState,
+    includeWindowsBackup = false,
+  ): Promise<void> => {
+    const savedAt = new Date().toISOString();
+    setState(checkpoint);
+    await saveStudioState(checkpoint, savedAt);
+    if (includeWindowsBackup && helperOnline) {
+      try {
+        await queueWindowsCatalogSnapshot(checkpoint, savedAt);
+        setSaveLabel("Browser + Windows-Sicherung aktuell");
+      } catch {
+        setSaveLabel("Fortschritt im Browser gespeichert");
+      }
+    }
+  };
+
+  const executeTotalSync = async (
+    initialState: StudioState,
+    runId: string,
+  ): Promise<void> => {
+    let workingState = initialState;
+    let run = workingState.totalSyncRun;
+    if (!run || run.id !== runId) {
+      setNotice("Der vorbereitete Totalabgleich wurde nicht gefunden.");
+      return;
+    }
+
+    totalSyncStopRequested.current = false;
+    setTotalSyncStopping(false);
+    setTotalSyncBusy(true);
+    run = { ...run, status: "running" };
+    workingState = { ...workingState, totalSyncRun: run };
+
+    const acceptedTitles = Array.from(new Set(
+      workingState.projects.flatMap((project) => (
+        project.listings.flatMap((listing) => [
+          ...(listing.titleHistory ?? []),
+          listing.texts.title,
+        ]).map((title) => removePrivateAddressFromHeadline(title, project))
+      )).filter(Boolean),
+    ));
+    let currentProjectId = "";
+
+    const pauseAtCheckpoint = async (message: string): Promise<boolean> => {
+      if (!totalSyncStopRequested.current) return false;
+      run = { ...run!, status: "paused" };
+      workingState = { ...workingState, totalSyncRun: run };
+      await saveTotalSyncCheckpoint(workingState, true);
+      setTotalSyncStatus("Sicher angehalten");
+      setNotice(message);
+      return true;
+    };
+
+    try {
+      await saveTotalSyncCheckpoint(workingState);
+      for (let taskIndex = 0; taskIndex < run.tasks.length; taskIndex += 1) {
+        let task = run.tasks[taskIndex];
+        if (task.uploadedExternalIds.length >= task.houseIds.length) continue;
+        currentProjectId = task.projectId;
+        let project = workingState.projects.find((item) => item.id === task.projectId);
+        if (!project) throw new Error("Eine Adresse des Totalabgleichs wurde nicht mehr gefunden.");
+        const houses = task.houseIds.map((houseId) => (
+          workingState.houses.find((house) => house.id === houseId)
+        ));
+        if (houses.some((house) => !house)) {
+          throw new Error(`Bei „${project.name}“ fehlt ein zufällig ausgewählter Haustyp.`);
+        }
+        const selectedTaskHouses = houses as HouseTemplate[];
+        const selectedHouseNames = selectedTaskHouses.map((house) => house.name);
+        let runListings = project.listings.filter(
+          (listing) => listing.totalSyncRunId === run!.id,
+        );
+
+        if (!task.generated || runListings.length !== task.houseIds.length) {
+          if (await pauseAtCheckpoint("Der Totalabgleich wurde vor der nächsten Adresse sicher angehalten.")) return;
+          const previousListings = [...project.listings];
+          const generatedListings: GeneratedListing[] = [];
+          const headlineCycleId = `${run.id}-${project.id}`;
+
+          for (let houseIndex = 0; houseIndex < selectedTaskHouses.length; houseIndex += 1) {
+            if (await pauseAtCheckpoint("Der Totalabgleich wurde vor dem nächsten KI-Text sicher angehalten.")) return;
+            const house = selectedTaskHouses[houseIndex];
+            const previous = previousListings.find((listing) => listing.templateId === house.id);
+            const overallPosition = taskIndex * TOTAL_SYNC_LISTINGS_PER_ADDRESS + houseIndex + 1;
+            setTotalSyncStatus(
+              `${overallPosition}/${run.tasks.length * TOTAL_SYNC_LISTINGS_PER_ADDRESS} · ${project.city} · KI-Texte für ${house.name}`,
+            );
+
+            let result: { texts: ListingTexts; writingProfile: string } | null = null;
+            for (let diversityAttempt = 1; diversityAttempt <= 3; diversityAttempt += 1) {
+              result = await requestListingTexts({
+                project,
+                house,
+                index: houseIndex,
+                listingCount: selectedTaskHouses.length,
+                selectedHouseNames,
+                previous,
+                titlesToAvoid: acceptedTitles.slice(-60),
+                headlineCycleId,
+                maxAttempts: 4,
+              });
+              const similarTitle = acceptedTitles.find((title) => (
+                headlinesAreTooSimilar(result!.texts.title, title)
+              ));
+              if (!similarTitle) break;
+              if (diversityAttempt === 3) {
+                throw new Error(`Die KI konnte für „${project.name}“ keine ausreichend neue Überschrift erzeugen.`);
+              }
+              acceptedTitles.push(similarTitle);
+            }
+            if (!result) throw new Error(`Der KI-Text für „${house.name}“ fehlt.`);
+            acceptedTitles.push(result.texts.title);
+            generatedListings.push({
+              id: uid(),
+              externalId: totalSyncExternalId(run.id, project.id, houseIndex + 1),
+              templateId: house.id,
+              templateName: house.name,
+              price: totalPrice(house, project),
+              texts: result.texts,
+              writingProfile: result.writingProfile || previous?.writingProfile,
+              titleHistory: Array.from(new Set([
+                ...(previous?.titleHistory ?? []),
+                ...(previous?.texts.title ? [previous.texts.title] : []),
+              ])).slice(-40),
+              totalSyncRunId: run.id,
+              version: (previous?.version ?? 0) + 1,
+            });
+          }
+
+          runListings = generatedListings;
+          project = {
+            ...project,
+            selectedHouseIds: [...task.houseIds],
+            listings: generatedListings,
+          };
+          task = { ...task, generated: true, lastError: undefined };
+          run = replaceTotalSyncTask(run, task.projectId, task);
+          workingState = {
+            ...workingState,
+            projects: workingState.projects.map((item) => (
+              item.id === project!.id ? project! : item
+            )),
+            totalSyncRun: run,
+          };
+          await saveTotalSyncCheckpoint(workingState);
+        }
+
+        for (let listingIndex = 0; listingIndex < runListings.length; listingIndex += 1) {
+          const listing = runListings[listingIndex];
+          if (task.uploadedExternalIds.includes(listing.externalId)) continue;
+          if (await pauseAtCheckpoint("Der Totalabgleich wurde vor dem nächsten Einzelupload sicher angehalten.")) return;
+          const overallPosition = taskIndex * TOTAL_SYNC_LISTINGS_PER_ADDRESS + listingIndex + 1;
+          const position = `${overallPosition}/${run.tasks.length * TOTAL_SYNC_LISTINGS_PER_ADDRESS}`;
+          setTotalSyncStatus(`${position} · ${project.city} · ${listing.templateName}`);
+          await uploadSingleListingPackage({
+            project,
+            listing,
+            position,
+            onStatus: setTotalSyncStatus,
+            maxAttempts: 3,
+          });
+
+          const uploadedAt = new Date().toISOString();
+          task = {
+            ...task,
+            uploadedExternalIds: [...task.uploadedExternalIds, listing.externalId],
+            lastError: undefined,
+          };
+          run = replaceTotalSyncTask(run, task.projectId, task);
+          project = {
+            ...project,
+            listings: project.listings.map((item) => (
+              item.externalId === listing.externalId ? { ...item, uploadedAt } : item
+            )),
+          };
+          workingState = {
+            ...workingState,
+            projects: workingState.projects.map((item) => (
+              item.id === project!.id ? project! : item
+            )),
+            totalSyncRun: run,
+          };
+          await saveTotalSyncCheckpoint(workingState);
+        }
+
+        project = { ...project, lastTotalSyncAt: new Date().toISOString() };
+        run = replaceTotalSyncTask(run, task.projectId, { ...task, lastError: undefined });
+        workingState = {
+          ...workingState,
+          projects: workingState.projects.map((item) => (
+            item.id === project!.id ? project! : item
+          )),
+          totalSyncRun: run,
+        };
+        await saveTotalSyncCheckpoint(workingState, true);
+      }
+
+      run = {
+        ...run,
+        status: "completed",
+        completedAt: new Date().toISOString(),
+      };
+      workingState = { ...workingState, totalSyncRun: run };
+      await saveTotalSyncCheckpoint(workingState, true);
+      const progress = totalSyncProgress(run);
+      setTotalSyncStatus(`${progress.uploaded}/${progress.total} einzeln übertragen`);
+      setNotice(
+        `Totalabgleich abgeschlossen: ${progress.uploaded} neue Inserate wurden einzeln an Immoprofessional übertragen.${run.skippedProjectCount ? ` ${run.skippedProjectCount} unvollständige Adressentwürfe wurden nicht verwendet.` : ""}`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Der Totalabgleich wurde unterbrochen.";
+      if (currentProjectId) {
+        run = replaceTotalSyncTask(run, currentProjectId, { lastError: message });
+      }
+      run = { ...run, status: "paused" };
+      workingState = { ...workingState, totalSyncRun: run };
+      await saveTotalSyncCheckpoint(workingState, true).catch(() => undefined);
+      setTotalSyncStatus("Unterbrochen · kann fortgesetzt werden");
+      setNotice(`Der Totalabgleich wurde sicher angehalten: ${message} Bereits übertragene Inserate werden beim Fortsetzen übersprungen.`);
+    } finally {
+      setTotalSyncBusy(false);
+      setTotalSyncStopping(false);
+      totalSyncStopRequested.current = false;
+    }
+  };
+
+  const startOrResumeTotalSync = async () => {
+    if (totalSyncBusy) return;
+    if (!looksLikeOpenAiApiKey(openAiKey)) {
+      setNotice("Bitte zuerst einen gültigen OpenAI API-Schlüssel speichern.");
+      return;
+    }
+    if (!ftpUser || !ftpPassword) {
+      setNotice("Bitte zuerst die Immoprofessional-Zugangsdaten speichern.");
+      return;
+    }
+    if (!helperOnline) {
+      setNotice(helperNeedsRestart
+        ? "Der lokale Helfer muss vor dem Totalabgleich neu gestartet werden."
+        : "Der lokale Helfer ist nicht erreichbar.");
+      return;
+    }
+    if (!state.provider.providerNumber || !state.provider.company || !state.provider.email) {
+      setNotice("Bitte Anbieternummer, Firma und E-Mail unter Export & Upload ergänzen.");
+      return;
+    }
+
+    if (resumableTotalSync && state.totalSyncRun) {
+      await executeTotalSync(state, state.totalSyncRun.id);
+      return;
+    }
+    if (totalSyncEligibleHouses.length < TOTAL_SYNC_LISTINGS_PER_ADDRESS) {
+      setNotice(
+        `Für den Totalabgleich werden mindestens ${TOTAL_SYNC_LISTINGS_PER_ADDRESS} Haustypen mit jeweils ${MIN_HOUSE_IMAGES} bis ${MAX_HOUSE_IMAGES} Bildern benötigt. Aktuell sind ${totalSyncEligibleHouses.length} geeignet.`,
+      );
+      return;
+    }
+    if (!totalSyncReadyProjects.length) {
+      setNotice("Für den gewählten Benutzer wurde keine vollständige Grundstücksadresse gefunden.");
+      return;
+    }
+
+    const totalListings = totalSyncReadyProjects.length * TOTAL_SYNC_LISTINGS_PER_ADDRESS;
+    const scopeLabel = totalSyncScope === "all"
+      ? "Fabian und Pascal"
+      : totalSyncScope === "pascal" ? "Pascal" : "Fabian";
+    const confirmed = window.confirm(
+      `Totalabgleich für ${scopeLabel} starten?\n\n`
+      + `${totalSyncReadyProjects.length} vollständige Adressen × ${TOTAL_SYNC_LISTINGS_PER_ADDRESS} zufällige Haustypen = ${totalListings} neue Inserate.\n\n`
+      + "Für jedes Inserat werden neue KI-Texte und eine neue Überschrift erzeugt. Anschließend wird jedes Inserat als eigenes Paket nacheinander an Immoprofessional übertragen – niemals als Sammelpaket.\n\n"
+      + `${totalSyncSkippedProjects ? `${totalSyncSkippedProjects} unvollständige Adressentwürfe werden übersprungen.\n\n` : ""}`
+      + "Bitte erst bestätigen, wenn die bisherigen Anzeigen in Immoprofessional gelöscht wurden. Der Vorgang verwendet OpenAI-Guthaben und kann bei vielen Inseraten mehrere Stunden dauern.",
+    );
+    if (!confirmed) return;
+
+    const run = createTotalSyncRun({
+      projects: state.projects,
+      eligibleHouseIds: totalSyncEligibleHouses.map((house) => house.id),
+      scope: totalSyncScope,
+      runId: uid(),
+      createdAt: new Date().toISOString(),
+    });
+    const nextState = { ...state, totalSyncRun: run };
+    await executeTotalSync(nextState, run.id);
+  };
+
+  const stopTotalSync = () => {
+    totalSyncStopRequested.current = true;
+    setTotalSyncStopping(true);
+    setTotalSyncStatus("Wird nach dem aktuellen Schritt sicher angehalten …");
+  };
+
+  const discardTotalSyncRun = async () => {
+    if (!state.totalSyncRun || totalSyncBusy) return;
+    if (!window.confirm("Gespeicherten Totalabgleich verwerfen? Bereits zu Immoprofessional übertragene Inserate werden dadurch nicht gelöscht.")) return;
+    const nextState = { ...state, totalSyncRun: undefined };
+    await saveTotalSyncCheckpoint(nextState, true);
+    setTotalSyncStatus("");
+    setNotice("Der gespeicherte Totalabgleich wurde verworfen. Bereits übertragene Inserate bleiben in Immoprofessional erhalten.");
   };
 
   const clearSavedCredentials = async () => {
@@ -1442,6 +1887,11 @@ export default function InseratStudio() {
         setActiveHouseId(next.houses[0]?.id ?? "");
         setActiveProjectId(next.projects[0]?.id ?? "");
         setActiveOwner(projectOwner(next.projects[0]));
+        setTotalSyncScope(
+          totalSyncCanResume(next.totalSyncRun) && next.totalSyncRun
+            ? next.totalSyncRun.scope
+            : projectOwner(next.projects[0]),
+        );
         setNotice("Fabian&Pascal-Sicherung wurde lokal eingelesen.");
       } catch {
         setNotice("Die ausgewählte Datei ist keine gültige Fabian&Pascal-Sicherung.");
@@ -1785,7 +2235,7 @@ export default function InseratStudio() {
             <div className="action-bar">
               <div><b>Bereit für neue KI-Texte?</b><span>Die KI erzeugt jedes Mal eine andere, moderne Überschrift und vier lebendige Textblöcke mit interessanten Einstiegen, klarer Struktur und einer eigenen Erzählrichtung je Inserat. Als Ortsbezug sind nur Ort und Ortsteil erlaubt.</span></div>
               <div className="button-row action-buttons">
-                <button className="primary" disabled={generatingAi} onClick={generateAiListings}>{generatingAi ? "KI schreibt und prüft …" : "KI-Überschrift & Texte erzeugen"}</button>
+                <button className="primary" disabled={generatingAi || totalSyncBusy} onClick={generateAiListings}>{generatingAi ? "KI schreibt und prüft …" : "KI-Überschrift & Texte erzeugen"}</button>
               </div>
             </div>
           </div>
@@ -1798,7 +2248,7 @@ export default function InseratStudio() {
               <div className="section-heading">
                 <div><span className="eyebrow">Prüfen und bearbeiten</span><h2>{activeProject.listings.length || "Keine"} Inseratentwürfe</h2></div>
                 <div className="button-row">
-                  <button className="primary" disabled={generatingAi} onClick={generateAiListings}>{generatingAi ? "KI schreibt und prüft …" : "KI-Überschrift & Texte neu schreiben"}</button>
+                  <button className="primary" disabled={generatingAi || totalSyncBusy} onClick={generateAiListings}>{generatingAi ? "KI schreibt und prüft …" : "KI-Überschrift & Texte neu schreiben"}</button>
               </div>
             </div>
             {activeProject.listings.length ? (
@@ -1849,7 +2299,7 @@ export default function InseratStudio() {
             </div>
 
             <div className="divider" />
-            <div className="section-heading"><div><span className="eyebrow">Qualitätsmodus · verschlüsselt gespeichert</span><h2>KI-Textgenerator</h2></div><span className={helperOnline ? "status online" : "status offline"}>{helperOnline ? "Generator bereit" : "Lokaler Helfer offline"}</span></div>
+            <div className="section-heading"><div><span className="eyebrow">Qualitätsmodus · verschlüsselt gespeichert</span><h2>KI-Textgenerator</h2></div><span className={helperOnline ? "status online" : "status offline"}>{helperOnline ? "Generator bereit" : helperNeedsRestart ? "Generator neu starten" : "Lokaler Helfer offline"}</span></div>
             <div className="form-grid two">
               <label className="field">
                 <span>OpenAI API-Schlüssel</span>
@@ -1898,9 +2348,81 @@ export default function InseratStudio() {
             <div className="credential-vault-card">
               <div><span className="eyebrow">Lokaler Zugangstresor</span><b>{credentialSaveLabel}</b><small>Geschützt für das aktuell angemeldete Windows-Benutzerkonto.</small></div>
               <div className="button-row">
-                <button className="primary" disabled={savingCredentials} onClick={saveCredentialsNow}>{savingCredentials ? "Schlüssel wird geprüft …" : "Zugangsdaten prüfen & speichern"}</button>
-                <button className="secondary" disabled={savingCredentials} onClick={clearSavedCredentials}>Zugangsdaten löschen</button>
+                <button className="primary" disabled={savingCredentials || totalSyncBusy} onClick={saveCredentialsNow}>{savingCredentials ? "Schlüssel wird geprüft …" : "Zugangsdaten prüfen & speichern"}</button>
+                <button className="secondary" disabled={savingCredentials || totalSyncBusy} onClick={clearSavedCredentials}>Zugangsdaten löschen</button>
               </div>
+            </div>
+
+            <div className="total-sync-card">
+              <div className="section-heading compact">
+                <div>
+                  <span className="eyebrow">Totalabgleich · einzeln und fortsetzbar</span>
+                  <h2>Alle Adressen neu bestücken</h2>
+                  <p>Vier zufällige Haustypen pro vollständiger Adresse, jedes Mal neue KI-Texte und neue Überschriften. Jedes Inserat wird einzeln und streng nacheinander an Immoprofessional übertragen.</p>
+                </div>
+                <span className={totalSyncBusy ? "status online" : resumableTotalSync ? "status offline" : "status"}>
+                  {totalSyncBusy ? "Läuft" : resumableTotalSync ? "Fortsetzung bereit" : state.totalSyncRun?.status === "completed" ? "Letzter Lauf fertig" : "Bereit"}
+                </span>
+              </div>
+
+              <div className="total-sync-controls">
+                <label className="field">
+                  <span>Welche Adressbücher?</span>
+                  <select
+                    value={resumableTotalSync && state.totalSyncRun ? state.totalSyncRun.scope : totalSyncScope}
+                    disabled={totalSyncBusy || resumableTotalSync}
+                    onChange={(event) => setTotalSyncScope(event.target.value as TotalSyncScope)}
+                  >
+                    <option value="fabian">Nur Fabian</option>
+                    <option value="pascal">Nur Pascal</option>
+                    <option value="all">Fabian und Pascal</option>
+                  </select>
+                </label>
+                <div className="total-sync-metrics">
+                  <div><span>Vollständige Adressen</span><b>{totalSyncReadyProjects.length}</b></div>
+                  <div><span>Geeignete Haustypen</span><b>{totalSyncEligibleHouses.length}</b></div>
+                  <div><span>Geplant</span><b>{totalSyncReadyProjects.length * TOTAL_SYNC_LISTINGS_PER_ADDRESS} Inserate</b></div>
+                  <div><span>Aktueller Lauf</span><b>{totalSyncRunProgress.uploaded}/{totalSyncRunProgress.total || 0} übertragen</b></div>
+                </div>
+              </div>
+
+              {state.totalSyncRun ? (
+                <div className="total-sync-progress" role="status" aria-live="polite">
+                  <div>
+                    <b>{totalSyncStatus || `${totalSyncRunProgress.uploaded}/${totalSyncRunProgress.total} einzeln übertragen`}</b>
+                    <span>{totalSyncRunProgress.completedProjects}/{state.totalSyncRun.tasks.length} Adressen abgeschlossen</span>
+                  </div>
+                  <div className="progress-track" aria-label="Fortschritt Totalabgleich">
+                    <span style={{ width: `${totalSyncRunProgress.total ? Math.round((totalSyncRunProgress.uploaded / totalSyncRunProgress.total) * 100) : 0}%` }} />
+                  </div>
+                  {state.totalSyncRun.tasks.find((task) => task.lastError)?.lastError ? (
+                    <small>{state.totalSyncRun.tasks.find((task) => task.lastError)?.lastError}</small>
+                  ) : null}
+                </div>
+              ) : null}
+
+              <div className="button-row total-sync-actions">
+                <button
+                  className="primary"
+                  disabled={totalSyncBusy
+                    ? totalSyncStopping
+                    : uploading || generatingAi || savingCredentials}
+                  onClick={totalSyncBusy ? stopTotalSync : startOrResumeTotalSync}
+                >
+                  {totalSyncBusy
+                    ? "Nach aktuellem Schritt anhalten"
+                    : resumableTotalSync
+                      ? "Totalabgleich fortsetzen"
+                      : `Totalabgleich starten · ${totalSyncReadyProjects.length * TOTAL_SYNC_LISTINGS_PER_ADDRESS} Inserate`}
+                </button>
+                {state.totalSyncRun && !totalSyncBusy ? (
+                  <button className="secondary" onClick={discardTotalSyncRun}>Gespeicherten Lauf verwerfen</button>
+                ) : null}
+              </div>
+              <p className="total-sync-warning">
+                Vor dem Start die bisherigen Anzeigen in Immoprofessional löschen. Der Lauf erzeugt kostenpflichtige KI-Texte und kann bei sehr vielen Inseraten mehrere Stunden dauern. Die Portalveröffentlichung bleibt ausgeschaltet.
+                {totalSyncSkippedProjects ? ` ${totalSyncSkippedProjects} unvollständige Adressentwürfe werden übersprungen.` : ""}
+              </p>
             </div>
           </div>
 
@@ -1915,8 +2437,8 @@ export default function InseratStudio() {
               <div><span>Automatik</span><b>Wohngebiet · Gäste-WC · Nutzfläche</b></div>
               <div><span>Veröffentlichung</span><b>manuell in Immoprofessional</b></div>
             </div>
-            <button className="primary full" disabled={uploading || !activeProject.listings.length} onClick={uploadPackage}>{uploading ? uploadStatus || "Wird übertragen …" : "Entwürfe zu Immoprofessional laden"}</button>
-            <button className="secondary full" disabled={!activeProject.listings.length} onClick={downloadPackage}>Importpaket nur herunterladen</button>
+            <button className="primary full" disabled={uploading || totalSyncBusy || !activeProject.listings.length} onClick={uploadPackage}>{uploading ? uploadStatus || "Wird übertragen …" : "Entwürfe zu Immoprofessional laden"}</button>
+            <button className="secondary full" disabled={totalSyncBusy || !activeProject.listings.length} onClick={downloadPackage}>Importpaket nur herunterladen</button>
             <p className="first-test">Der erste Upload sollte mit einem einzelnen, nicht veröffentlichten Testobjekt geprüft werden. Immoprofessional kann eigene Importregeln anwenden.</p>
           </aside>
 

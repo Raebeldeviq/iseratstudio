@@ -50,6 +50,7 @@ export type ProjectInput = {
   selectedHouseIds: string[];
   listings: GeneratedListing[];
   createdAt: string;
+  lastTotalSyncAt?: string;
 };
 
 export type ListingTexts = {
@@ -69,7 +70,29 @@ export type GeneratedListing = {
   texts: ListingTexts;
   titleHistory?: string[];
   writingProfile?: string;
+  totalSyncRunId?: string;
+  uploadedAt?: string;
   version: number;
+};
+
+export type TotalSyncScope = AddressOwner | "all";
+
+export type TotalSyncProjectTask = {
+  projectId: string;
+  houseIds: string[];
+  generated: boolean;
+  uploadedExternalIds: string[];
+  lastError?: string;
+};
+
+export type TotalSyncRun = {
+  id: string;
+  scope: TotalSyncScope;
+  createdAt: string;
+  completedAt?: string;
+  status: "ready" | "running" | "paused" | "completed";
+  skippedProjectCount: number;
+  tasks: TotalSyncProjectTask[];
 };
 
 export type ProviderSettings = {
@@ -88,4 +111,5 @@ export type StudioState = {
   provider: ProviderSettings;
   promotionImage: HouseImage | null;
   promotionImageEnabled: boolean;
+  totalSyncRun?: TotalSyncRun;
 };

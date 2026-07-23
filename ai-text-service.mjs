@@ -7,6 +7,7 @@ import {
 const DEFAULT_MODEL = "gpt-5.6-luna";
 const ALLOWED_MODELS = new Set([DEFAULT_MODEL, "gpt-5.6-terra", "gpt-5.6-sol"]);
 const TEXT_FIELDS = ["title", "description", "equipment", "location", "other"];
+const FORBIDDEN_HEADLINE_WORD_PATTERN = /klar/iu;
 const MAX_IMAGE_CAPTIONS = 14;
 const MAX_HEADLINE_HISTORY = 60;
 
@@ -90,7 +91,7 @@ Verbindliche Qualitätsregeln:
 10. Weiche deutlich von eventuell gelieferten bisherigen Texten ab: neuer Einstieg, andere Satzstruktur, andere Reihenfolge und frische Formulierungen. Zahlen, Eigennamen und verbindliche Fachbegriffe bleiben unverändert.
 11. Formuliere rechtlich vorsichtig: projektiert/geplant, soweit technisch, planerisch und baurechtlich möglich; endgültige Energiekennwerte gemäß konkreter Planung und Energieausweis; maßgeblich sind individuelle Vereinbarungen und die Bau- und Leistungsbeschreibung.
 12. Prüfe vor der Ausgabe intern Grammatik, Rechtschreibung, Zahlenkonsistenz, Dopplungen und unbelegte Behauptungen.
-13. Die Überschrift ist kurz, modern und leicht humorvoll: 3 bis 8 Wörter und 18 bis 60 Zeichen. Sie darf charmant, überraschend oder augenzwinkernd sein, muss aber erwachsen, hochwertig und verständlich bleiben. Verwende niemals die gelieferte Haus- oder Modellbezeichnung, Produktfamilien oder Modellnummern. Vermeide austauschbare Immobilienfloskeln und die in den Quelldaten aufgeführten früheren Überschriften. Keine Doppelpunkte, Ausrufezeichen, Emojis oder erzwungenen Kalauer.
+13. Die Überschrift ist kurz, modern und leicht humorvoll: 3 bis 8 Wörter und 18 bis 60 Zeichen. Sie darf charmant, überraschend oder augenzwinkernd sein, muss aber erwachsen, hochwertig und verständlich bleiben. Verwende niemals die gelieferte Haus- oder Modellbezeichnung, Produktfamilien oder Modellnummern. Das Wort „klar“ sowie sämtliche Beugungen, Ableitungen und Zusammensetzungen mit diesem Wortstamm sind in der Überschrift verboten. Vermeide austauschbare Immobilienfloskeln und die in den Quelldaten aufgeführten früheren Überschriften. Keine Doppelpunkte, Ausrufezeichen, Emojis oder erzwungenen Kalauer.
 14. Gib jedem Text einen erkennbaren roten Faden. Wechsle bewusst zwischen kurzen pointierten und längeren erklärenden Sätzen. Verwende konkrete Verben und anschauliche, aber nicht erfundene Bilder. Vermeide Satzketten, Nominalstil und wiederkehrende Starts mit „Dieses“, „Hier“, „Das Haus“ oder „Mit“.
 15. Gliedere die Objektbeschreibung in mindestens vier, die Ausstattung in mindestens fünf, die Lage in mindestens drei und Sonstiges in mindestens drei lesbare Absätze. Jeder Absatz erfüllt eine neue Aufgabe; kein Absatz wiederholt nur den vorherigen.
 Gib ausschließlich das verlangte JSON aus.`;
@@ -254,7 +255,7 @@ export function buildSourceData(input = {}, retryFeedback = []) {
       tone: "hochwertig, vertrauenswürdig, bildhaft und beratungsstark; die Überschrift modern, charmant und leicht augenzwinkernd",
       uniqueness: "Das Inserat muss sich auch von den anderen Haustypen derselben Adresse erkennbar unterscheiden.",
       headlineDirection: headlineDirection(headlineCycleId, listingPosition),
-      headlineTaboos: "Keine Wiederholung oder enge Umformulierung früherer Überschriften. Vermeide die Muster „Mehr Raum …“, „Neues Zuhause …“, „Zukunft beginnt …“, „Wohnen mit Weitblick …“, „Platz für Familie …“ und „neue Lebenspläne“.",
+      headlineTaboos: "Keine Wiederholung oder enge Umformulierung früherer Überschriften. Das Wort „klar“ und alle Wortbildungen mit diesem Stamm sind ausgeschlossen. Vermeide außerdem die Muster „Mehr Raum …“, „Neues Zuhause …“, „Zukunft beginnt …“, „Wohnen mit Weitblick …“, „Platz für Familie …“ und „neue Lebenspläne“.",
       bodyProfileId: bodyProfile.id,
       bodyApproach: bodyProfile.instruction,
       fieldStructure: {
@@ -297,7 +298,7 @@ export function createOpenAiRequest(input, retryFeedback = []) {
           additionalProperties: false,
           required: TEXT_FIELDS,
           properties: {
-            title: { type: "string", description: "Moderne, charmante und leicht humorvolle Überschrift mit 3 bis 8 Wörtern und 18 bis 60 Zeichen; eigenständig, ohne Hausname, Modellbezeichnung, Modellnummer oder austauschbare Immobilienfloskel." },
+            title: { type: "string", description: "Moderne, charmante und leicht humorvolle Überschrift mit 3 bis 8 Wörtern und 18 bis 60 Zeichen; eigenständig, ohne Hausname, Modellbezeichnung, Modellnummer, das Wort „klar“ oder Wortbildungen mit diesem Stamm und ohne austauschbare Immobilienfloskel." },
             description: { type: "string", description: "Lebendige, individuell erzählte Objektbeschreibung mit interessantem Einstieg, mindestens vier Absätzen und 1.200 bis 6.000 Zeichen." },
             equipment: { type: "string", description: "Anschauliche Ausstattung mit verständlichem Alltagsnutzen, mindestens fünf Absätzen und 1.500 bis 7.000 Zeichen." },
             location: { type: "string", description: "Faktengebundene, atmosphärische Lagebeschreibung mit Alltagsbezug, mindestens drei Absätzen und 500 bis 3.500 Zeichen." },
@@ -478,6 +479,9 @@ export function validateListingTexts(texts, house = {}) {
   }
   if (title && /[:!]/u.test(title)) {
     errors.push("Die Überschrift soll klar ohne Doppelpunkt oder Ausrufezeichen formuliert sein.");
+  }
+  if (title && FORBIDDEN_HEADLINE_WORD_PATTERN.test(title)) {
+    errors.push("Die Überschrift enthält das ausgeschlossene Wort „klar“ oder eine Wortbildung damit.");
   }
   if (title && titleContainsHouseDesignation(title, house)) {
     errors.push("Die Überschrift enthält die Hausbezeichnung oder Modellnummer.");

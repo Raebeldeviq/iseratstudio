@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { dirname, join, parse } from "node:path";
 import { Readable } from "node:stream";
+import appPackage from "./package.json" with { type: "json" };
 import { generateAiImageCaptions, generateAiListing, validateOpenAiApiKey } from "./ai-text-service.mjs";
 import {
   clearCredentialVault,
@@ -142,7 +143,11 @@ const server = createServer(async (request, response) => {
   }
 
   if (request.method === "GET" && pathname === "/health") {
-    send(response, 200, { ok: true, service: "fabian-pascal-helper" }, origin);
+    send(response, 200, {
+      ok: true,
+      service: "fabian-pascal-helper",
+      version: appPackage.version,
+    }, origin);
     return;
   }
 

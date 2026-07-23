@@ -177,6 +177,14 @@ test("requires short headlines without the configured house designation", () => 
     { ...validTexts, title: "Familienglück: Raum für neue Pläne" },
   );
   assert.ok(punctuationErrors.some((value) => value.includes("Doppelpunkt")));
+  const forbiddenWordErrors = validateListingTexts(
+    { ...validTexts, title: "Klare Sache für Familienmenschen" },
+  );
+  assert.ok(forbiddenWordErrors.some((value) => value.includes("ausgeschlossene Wort")));
+  const forbiddenWordFormErrors = validateListingTexts(
+    { ...validTexts, title: "Klarheit trifft auf Lieblingsplätze" },
+  );
+  assert.ok(forbiddenWordFormErrors.some((value) => value.includes("ausgeschlossene Wort")));
 });
 
 test("rejects repeated, similar and overused headlines", () => {

@@ -29,17 +29,42 @@ einzelne Bilddateien gesichert; Textänderungen übertragen die Fotos nicht erne
    unter **Adresse & Auswahl** die hochwertige KI-Überschrift und alle vier
    Textblöcke gemeinsam erzeugen.
    Die Überschrift besteht aus 3 bis 8 Wörtern und enthält keine Haus- oder
-   Modellbezeichnung. Sie wird stattdessen kurz, klar und am konkreten
+   Modellbezeichnung. Sie wird stattdessen kurz, prägnant und am konkreten
    Wohnvorteil ausgerichtet. Frühere Überschriften werden im Studio gespeichert
    und bei neuen Durchläufen ausgeschlossen. Bis zu vier parallel erzeugte
    Inserate erhalten unterschiedliche Stilrichtungen. Wiederholt sich eine
    Überschrift trotzdem zu stark, lässt das Studio diese Fassung automatisch
    neu schreiben. Der gewünschte Ton ist modern, charmant und leicht humorvoll,
-   bleibt dabei aber seriös und verständlich.
+   bleibt dabei aber seriös und verständlich. Das Wort „klar“ sowie sämtliche
+   Wortbildungen mit diesem Stamm sind in Überschriften ausgeschlossen.
 4. Unter **Texte & Vorschau** Überschrift und die vier neu formulierten
    Textblöcke prüfen und bei Bedarf bearbeiten.
 5. Unter **Export & Upload** das OpenImmo-Paket herunterladen oder nach einer
    ausdrücklichen Bestätigung an den Immoprofessional-FTP-Zugang übertragen.
+
+## Totalabgleich für alle gespeicherten Adressen
+
+Unter **Export & Upload** kann ein Totalabgleich für Fabian, Pascal oder beide
+Adressbücher gestartet werden. Das Studio berücksichtigt alle vollständigen
+Adressen des gewählten Bereichs und wählt je Adresse vier unterschiedliche,
+zufällige Haustypen aus den uploadfähigen Vorlagen mit jeweils vier bis 14
+Bildern. Für jedes Inserat werden eine neue Überschrift und vier neue Textblöcke
+erzeugt. Jeder Totalabgleich erhält neue technische Objektkennungen.
+
+Anschließend wird jedes Inserat als eigener OpenImmo-Import streng nacheinander
+an Immoprofessional übertragen. Es gibt kein Sammelpaket. Fortschritt,
+Haustypauswahl, erzeugte Inserate und bereits erfolgreiche Einzeluploads werden
+nach jedem Schritt lokal gespeichert. Nach einem Fehler, Neustart oder
+absichtlichen Stopp kann der Lauf fortgesetzt werden; bereits erfolgreich
+übertragene Objektkennungen werden dabei übersprungen. Vorübergehende KI- und
+Uploadfehler werden mit begrenzten Wiederholungsversuchen abgefangen.
+
+Vor einem neuen Totalabgleich müssen die bisherigen Anzeigen in
+Immoprofessional manuell gelöscht werden. Der Bestätigungsdialog zeigt vor dem
+Start die Zahl der vollständigen Adressen und die Gesamtzahl der neuen
+Inserate. Unvollständige Adressentwürfe werden nicht hochgeladen und in der
+Übersicht als übersprungen ausgewiesen. Die Weitergabe an Immobilienportale
+bleibt auch beim Totalabgleich deaktiviert.
 
 ## Getrennte Grundstücksadressen für Fabian und Pascal
 
@@ -79,10 +104,11 @@ Objektadresse nicht frei. Der erste Import muss dennoch mit einem einzelnen
 Testobjekt geprüft werden, da Immoprofessional eigene Importregeln anwenden
 kann.
 
-Neue Objekte werden ohne OpenImmo-Änderungsaktion übertragen und dadurch vom
-Empfänger als neue Datensätze behandelt. Die technischen Uploadschritte werden
-ohne Benutzernamen oder Passwörter im lokalen Diagnoseprotokoll `upload.log`
-festgehalten.
+Neue Totalabgleich-Objekte erhalten neue technische Objektkennungen. Der Export
+verwendet die OpenImmo-Aktion `CHANGE`, damit Immoprofessional die jeweilige
+Kennung kontrolliert anlegen oder aktualisieren kann. Die technischen
+Uploadschritte werden ohne Benutzernamen oder Passwörter im lokalen
+Diagnoseprotokoll `upload.log` festgehalten.
 
 Für jedes Inserat setzt der Export automatisch das Gebiet auf **Wohngebiet**,
 aktiviert **Gäste-WC** und überträgt die **Nutzfläche in m²**. Die Nutzfläche
