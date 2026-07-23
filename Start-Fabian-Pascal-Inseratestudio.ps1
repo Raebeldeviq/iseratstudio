@@ -22,13 +22,24 @@ if (-not (Test-Path -LiteralPath (Join-Path $appRoot "node_modules"))) {
 
 $workRoot = Join-Path $appRoot "work"
 New-Item -ItemType Directory -Force -Path $workRoot | Out-Null
+$dataRoot = Join-Path $env:LOCALAPPDATA "Fabian-Pascal Inseratestudio"
+$sessionFile = Join-Path $dataRoot "helper-session"
+New-Item -ItemType Directory -Force -Path $dataRoot | Out-Null
+if (-not (Test-Path -LiteralPath $sessionFile)) {
+  $sessionToken = [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLowerInvariant()
+  [IO.File]::WriteAllText($sessionFile, $sessionToken)
+} else {
+  $sessionToken = [IO.File]::ReadAllText($sessionFile).Trim()
+}
+$env:FPI_SESSION_TOKEN = $sessionToken
+$sessionHeaders = @{ "X-FPI-Session" = $sessionToken }
 
 $helperPort = Get-NetTCPConnection -LocalPort 43182 -State Listen -ErrorAction SilentlyContinue
 if (-not $helperPort) {
   Start-Process -FilePath $nodeExe -ArgumentList @("local-upload-server.mjs") -WorkingDirectory $appRoot -RedirectStandardOutput (Join-Path $workRoot "helper.out.log") -RedirectStandardError (Join-Path $workRoot "helper.err.log") -WindowStyle Hidden
 } else {
   try {
-    $helper = Invoke-RestMethod -Uri "http://127.0.0.1:43182/health" -TimeoutSec 2
+    $helper = Invoke-RestMethod -Uri "http://127.0.0.1:43182/health" -Headers $sessionHeaders -TimeoutSec 2
     if ($helper.service -ne "fabian-pascal-helper") { throw "Fremder Dienst" }
   } catch {
     throw "Port 43182 wird bereits von einem anderen Programm verwendet."
@@ -48,4 +59,4 @@ if (-not $studioPort) {
 }
 
 Start-Sleep -Seconds 3
-Start-Process "http://localhost:43181"
+Start-Process "http://localhost:43181/#session=$sessionToken"

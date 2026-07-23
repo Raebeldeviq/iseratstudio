@@ -1,4 +1,14 @@
 import JSZip from "jszip";
+import { APP_VERSION } from "./app-version.mjs";
+import { imageSequenceIssues, orderHouseImages } from "../../image-sequence.mjs";
+import {
+  enforceListingCopy,
+  FIXED_ANNOTATION_TEXT,
+  FIXED_PROVISION_TEXT,
+  FIXED_RECOMMENDATION_TEXT,
+  FIXED_TERMS_TEXT,
+  IMMOPROFESSIONAL_DEFAULTS,
+} from "../../listing-copy.mjs";
 import type {
   GeneratedListing,
   HouseImage,
@@ -7,12 +17,76 @@ import type {
   ProviderSettings,
 } from "../types";
 
-type PackageInput = {
+export type PackageInput = {
   project: ProjectInput;
   listings: GeneratedListing[];
   houses: HouseTemplate[];
   provider: ProviderSettings;
+  promotionImage?: HouseImage | null;
+  promotionImageEnabled?: boolean;
 };
+
+const SUPPORTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const MAX_EXPORTED_IMAGES = 14;
+
+function listingImages(input: PackageInput, house: HouseTemplate): HouseImage[] {
+  const orderedImages = orderHouseImages(house.images);
+  if (!input.promotionImageEnabled || !input.promotionImage) return orderedImages;
+  return [
+    { ...input.promotionImage, role: "promotion" },
+    ...orderedImages.filter((image) => image.id !== input.promotionImage?.id),
+  ];
+}
+
+export function validateImportPackage(input: PackageInput): string[] {
+  const errors: string[] = [];
+  if (!input.project.street.trim()) errors.push("Straße fehlt.");
+  if (!/^\d{5}$/.test(input.project.zip.trim())) errors.push("Die Postleitzahl muss fünfstellig sein.");
+  if (!input.project.city.trim()) errors.push("Ort fehlt.");
+  if (!Number.isFinite(input.project.plotArea) || input.project.plotArea <= 0) errors.push("Grundstücksfläche muss größer als 0 sein.");
+  if (!input.provider.providerNumber.trim()) errors.push("Anbieternummer fehlt.");
+  if (!input.provider.company.trim()) errors.push("Firma fehlt.");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.provider.email.trim())) errors.push("Anbieter-E-Mail ist ungültig.");
+  if (!input.listings.length) errors.push("Mindestens ein Inserat muss ausgewählt sein.");
+
+  const externalIds = new Set<string>();
+  for (const listing of input.listings) {
+    const label = listing.templateName || listing.externalId || "Inserat";
+    if (!/^[a-zA-Z0-9._-]{1,100}$/.test(listing.externalId)) {
+      errors.push(`${label}: externe Objekt-ID ist ungültig.`);
+    } else if (externalIds.has(listing.externalId)) {
+      errors.push(`${label}: externe Objekt-ID ist doppelt.`);
+    }
+    externalIds.add(listing.externalId);
+    if (!Number.isFinite(listing.price) || listing.price <= 0) errors.push(`${label}: Kaufpreis muss größer als 0 sein.`);
+    for (const [field, value] of Object.entries(listing.texts)) {
+      if (!String(value).trim()) errors.push(`${label}: Textfeld ${field} ist leer.`);
+    }
+
+    const house = input.houses.find((item) => item.id === listing.templateId);
+    if (!house) {
+      errors.push(`${label}: zugehöriger Haustyp fehlt.`);
+      continue;
+    }
+    const images = listingImages(input, house);
+    if (images.length < 4 || images.length > MAX_EXPORTED_IMAGES) {
+      errors.push(`${label}: benötigt 4 bis 14 Bilder.`);
+    }
+    for (const issue of imageSequenceIssues(images, {
+      requiresUpperFloor: house.floors > 1,
+      requiresThirdFloor: house.floors > 2,
+      maximumImages: MAX_EXPORTED_IMAGES,
+    })) {
+      errors.push(`${label}: ${issue}`);
+    }
+    for (const image of images) {
+      if (!SUPPORTED_IMAGE_TYPES.has(image.mimeType) || !/^data:image\/(?:jpeg|png|webp);base64,/i.test(image.dataUrl)) {
+        errors.push(`${label}: Bild „${image.name}“ ist kein unterstütztes JPEG-, PNG- oder WebP-Bild.`);
+      }
+    }
+  }
+  return [...new Set(errors)];
+}
 
 function xml(value: string | number | undefined | null): string {
   return String(value ?? "")
@@ -85,6 +159,7 @@ function listingXml(
   project: ProjectInput,
   listing: GeneratedListing,
   house: HouseTemplate,
+  images: HouseImage[],
   provider: ProviderSettings,
   timestamp: string,
 ): string {
@@ -92,6 +167,7 @@ function listingXml(
     useGrouping: false,
     maximumFractionDigits: 2,
   });
+  const texts = enforceListingCopy(listing.texts, { house, project });
 
   return `
       <immobilie>
@@ -121,6 +197,8 @@ function listingXml(
         </kontaktperson>
         <preise>
           <kaufpreis>${currency.format(listing.price)}</kaufpreis>
+          <provisionspflichtig>true</provisionspflichtig>
+          <courtage_hinweis>${cdata(FIXED_PROVISION_TEXT)}</courtage_hinweis>
           <waehrung iso_waehrung="EUR" />
         </preise>
         <flaechen>
@@ -133,8 +211,13 @@ function listingXml(
           <anzahl_etagen>${currency.format(house.floors)}</anzahl_etagen>
         </flaechen>
         <ausstattung>
-          <heizungsart ZENTRAL="true" FUSSBODEN="true" />
-          <befeuerung WAERMEPUMPE="true" />
+          <bad dusche="true" wanne="true" fenster="true" />
+          <kueche ebk="true" offen="true" />
+          <heizungsart fussboden="true" />
+          <befeuerung elektro="true" luftwp="true" />
+          <gartennutzung>true</gartennutzung>
+          <energietyp kfw40="true" kfw55="true" />
+          <dachboden>true</dachboden>
           <gaestewc>true</gaestewc>
         </ausstattung>
         <zustand_angaben>
@@ -143,18 +226,21 @@ function listingXml(
           <energiepass>
             <epart>BEDARF</epart>
             <endenergiebedarf>${currency.format(house.energyDemand)}</endenergiebedarf>
-            <wertklasse>${xml(house.energyClass)}</wertklasse>
+            <wertklasse>${xml(IMMOPROFESSIONAL_DEFAULTS.energyClass)}</wertklasse>
             <baujahr>${xml(house.constructionYear)}</baujahr>
           </energiepass>
         </zustand_angaben>
         <freitexte>
-          <objekttitel>${cdata(listing.texts.title)}</objekttitel>
-          <lage>${cdata(listing.texts.location)}</lage>
-          <ausstatt_beschr>${cdata(listing.texts.equipment)}</ausstatt_beschr>
-          <objektbeschreibung>${cdata(listing.texts.description)}</objektbeschreibung>
-          <sonstige_angaben>${cdata(listing.texts.other)}</sonstige_angaben>
+          <objekttitel>${cdata(texts.title)}</objekttitel>
+          <lage>${cdata(texts.location)}</lage>
+          <ausstatt_beschr>${cdata(texts.equipment)}</ausstatt_beschr>
+          <objektbeschreibung>${cdata(texts.description)}</objektbeschreibung>
+          <sonstige_angaben>${cdata(texts.other)}</sonstige_angaben>
+          <user_defined_simplefield feldname="Anmerkung">${cdata(FIXED_ANNOTATION_TEXT)}</user_defined_simplefield>
+          <user_defined_simplefield feldname="Allgemeine Geschäftsbedingungen">${cdata(FIXED_TERMS_TEXT)}</user_defined_simplefield>
+          <user_defined_simplefield feldname="Freier Textblock für Empfehlungen">${cdata(FIXED_RECOMMENDATION_TEXT)}</user_defined_simplefield>
         </freitexte>
-        <anhaenge>${imageXml(listing, house.images)}</anhaenge>
+        <anhaenge>${imageXml(listing, images)}</anhaenge>
         <verwaltung_objekt>
           <objektadresse_freigeben>false</objektadresse_freigeben>
         </verwaltung_objekt>
@@ -169,24 +255,24 @@ function listingXml(
       </immobilie>`;
 }
 
-export function buildOpenImmoXml({
-  project,
-  listings,
-  houses,
-  provider,
-}: PackageInput): string {
+export function buildOpenImmoXml(input: PackageInput): string {
+  const { project, listings, houses, provider } = input;
+  const validationErrors = validateImportPackage(input);
+  if (validationErrors.length) {
+    throw new Error(`OpenImmo-Prüfung fehlgeschlagen: ${validationErrors.join(" ")}`);
+  }
   const timestamp = new Date().toISOString();
   const objects = listings
     .map((listing) => {
       const house = houses.find((item) => item.id === listing.templateId);
       if (!house) throw new Error(`Haustyp ${listing.templateName} fehlt.`);
-      return listingXml(project, listing, house, provider, timestamp);
+      return listingXml(project, listing, house, listingImages(input, house), provider, timestamp);
     })
     .join("");
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <openimmo xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
-  <uebertragung art="OFFLINE" umfang="VOLL" version="1.2.7" sendersoftware="Fabian&amp;Pascal Inseratestudio" senderversion="0.3.13" techn_email="${xml(provider.email)}" regi_id="${xml(provider.providerNumber)}" timestamp="${xml(timestamp)}" />
+  <uebertragung art="OFFLINE" umfang="VOLL" version="1.2.7" sendersoftware="Fabian&amp;Pascal Inseratestudio" senderversion="${APP_VERSION}" techn_email="${xml(provider.email)}" regi_id="${xml(provider.providerNumber)}" timestamp="${xml(timestamp)}" />
   <anbieter>
     <anbieternr>${xml(provider.providerNumber)}</anbieternr>
     <firma>${xml(provider.company)}</firma>${objects}
@@ -221,7 +307,8 @@ export async function buildImportPackage(input: PackageInput): Promise<{
 
   input.listings.forEach((listing) => {
     const house = input.houses.find((item) => item.id === listing.templateId);
-    house?.images.forEach((image, index) => {
+    if (!house) return;
+    listingImages(input, house).forEach((image, index) => {
       zip.file(imageFilename(listing, image, index), imageBytes(image.dataUrl));
     });
   });

@@ -4,6 +4,7 @@ import type {
   ProjectInput,
   ProviderSettings,
 } from "../types";
+import { enforceListingCopy, fillMissingListingCopy } from "../../listing-copy.mjs";
 
 function hash(value: string): number {
   let result = 2166136261;
@@ -51,6 +52,21 @@ export function totalPrice(house: HouseTemplate, project: ProjectInput): number 
   return Math.max(0, house.housePrice + project.plotPrice + project.additionalCosts);
 }
 
+export function completeListingTexts(
+  house: HouseTemplate,
+  project: ProjectInput,
+  provider: ProviderSettings,
+  texts?: Partial<ListingTexts>,
+  version = 1,
+): ListingTexts {
+  const fallbackTexts = generateListingTexts(house, project, provider, version);
+  return fillMissingListingCopy(
+    texts,
+    fallbackTexts,
+    { house, project },
+  ) as ListingTexts;
+}
+
 export function generateListingTexts(
   house: HouseTemplate,
   project: ProjectInput,
@@ -70,12 +86,16 @@ export function generateListingTexts(
 
   const title = pick(
     [
-      `Bauen statt Mieten: ${house.name} in ${place}`,
-      `Eigenheim statt Miete – ${house.name} in ${place}`,
-      `${place}: modern bauen mit ${formatNumber(house.livingArea)} m² Wohnfläche`,
-      `Dein Living Haus in ${place} – ${rooms} individuell geplant`,
-      `${house.name} in ${place}: Raum für dein neues Zuhause`,
-      `Zukunft bauen in ${place}: ${house.name} auf ${formatNumber(project.plotArea)} m²`,
+      "Mehr Raum für euer Familienleben",
+      `Dein neues Zuhause in ${place}`,
+      "Großzügig wohnen und entspannt ankommen",
+      "Zukunft beginnt im eigenen Zuhause",
+      "Platz für Familie, Arbeit und Leben",
+      "Wohnen mit Weitblick und Freiraum",
+      house.floors <= 1
+        ? "Ebenerdig ins neue Zuhause"
+        : "Zwei Ebenen für neue Lebenspläne",
+      `${formatNumber(house.livingArea)} m² für neue Lebenspläne`,
     ],
     seed,
     1,
@@ -240,7 +260,7 @@ export function generateListingTexts(
     locationOpening,
     locationFacts.length
       ? locationFacts
-      : "Aussagen zu Nahversorgung, Schulen, Verkehrsanbindung und Freizeitmöglichkeiten werden vor der Veröffentlichung ausschließlich anhand bestätigter Standortdaten ergänzt.",
+      : `${place} bietet den Rahmen für ein individuell geplantes Zuhause. Versorgung, Bildung, Arbeitswege und Freizeit lassen sich im persönlichen Beratungsgespräch passend zum eigenen Alltag betrachten.`,
     locationClosing,
     "Die konkrete Bebaubarkeit und Positionierung des Hauses werden im weiteren Planungsverlauf mit den Grundstücksgegebenheiten und den öffentlich-rechtlichen Vorgaben abgestimmt.",
   ].flat());
@@ -265,7 +285,7 @@ export function generateListingTexts(
     ? `Haben wir dein Interesse geweckt? Dann vereinbare einen kostenlosen Beratungstermin${contactName ? ` mit ${contactName}` : ""} unter ${provider.phone}.`
     : "Haben wir dein Interesse geweckt? Dann vereinbare einen kostenlosen persönlichen Beratungstermin.";
 
-  return {
+  return enforceListingCopy({
     title,
     description: joinParagraphs([
       descriptionOpening,
@@ -297,5 +317,5 @@ export function generateListingTexts(
       "Gute Beratung ist entscheidend für den Erfolg. Gemeinsam analysieren wir Vorstellungen, Wünsche und Bedürfnisse, damit Haus, Grundstück und Finanzierung zueinander passen.",
       otherContact,
     ]),
-  };
+  }, { house, project }) as ListingTexts;
 }

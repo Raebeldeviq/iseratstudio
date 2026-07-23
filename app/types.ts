@@ -1,10 +1,31 @@
+export type ImageRole =
+  | "promotion"
+  | "cover"
+  | "kitchen"
+  | "bathroom"
+  | "bedroom"
+  | "kids"
+  | "living"
+  | "office"
+  | "emotion"
+  | "floorplan_ground"
+  | "floorplan_upper"
+  | "floorplan_third"
+  | "awards"
+  | "trust"
+  | "qr"
+  | "other";
+
 export type HouseImage = {
   id: string;
+  sourceId?: string;
   name: string;
   mimeType: string;
   dataUrl: string;
   caption: string;
   isFloorplan: boolean;
+  role?: ImageRole;
+  captionLocked?: boolean;
 };
 
 export type HouseTemplate = {
@@ -28,14 +49,19 @@ export type HouseTemplate = {
   images: HouseImage[];
 };
 
+export type AddressOwner = "fabian" | "pascal";
+
 export type ProjectInput = {
   id: string;
+  owner: AddressOwner;
   name: string;
   street: string;
   houseNumber: string;
   zip: string;
   city: string;
   district: string;
+  federalState?: string;
+  county?: string;
   plotArea: number;
   plotPrice: number;
   additionalCosts: number;
@@ -81,4 +107,6 @@ export type StudioState = {
   houses: HouseTemplate[];
   projects: ProjectInput[];
   provider: ProviderSettings;
+  promotionImage: HouseImage | null;
+  promotionImageEnabled: boolean;
 };

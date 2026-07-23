@@ -8,6 +8,7 @@ import {
   clearCredentialVault,
   loadCredentialVault,
   normalizeCredentials,
+  publicCredentialStatus,
   saveCredentialVault,
 } from "../credential-vault.mjs";
 
@@ -27,7 +28,34 @@ test("normalizes only the supported local credentials", () => {
     ftpUser: "user",
     ftpPassword: "secret",
     ftpPath: "/inbox",
+    ftpSecure: "explicit",
   });
+});
+
+test("migrates legacy LivingHaus aliases to the certificate-compatible FTPS host", () => {
+  for (const ftpHost of [
+    "fabianraebel.livinghaus.info",
+    "pascalfroehlich.livinghaus.info",
+    "PASCALFROEHLICH.LIVINGHAUS.INFO.",
+  ]) {
+    assert.equal(normalizeCredentials({ ftpHost }).ftpHost, "server22.immoprofessional.eu");
+  }
+  assert.equal(normalizeCredentials({}).ftpHost, "server22.immoprofessional.eu");
+  assert.equal(normalizeCredentials({ ftpHost: "other.example.test" }).ftpHost, "other.example.test");
+});
+
+test("exposes only non-secret credential status to the browser", () => {
+  const status = publicCredentialStatus({
+    openAiKey: "sk-local-test-value-1234567890",
+    ftpUser: "fabian",
+    ftpPassword: "password-only-for-test",
+    ftpSecure: "implicit",
+  });
+  assert.equal(status.hasOpenAiKey, true);
+  assert.equal(status.hasFtpCredentials, true);
+  assert.equal(status.ftpSecure, "implicit");
+  assert.equal("openAiKey" in status, false);
+  assert.equal("ftpPassword" in status, false);
 });
 
 test("accepts all three GPT-5.6 quality profiles", () => {
@@ -48,6 +76,7 @@ test("round-trips credentials through Windows user encryption", { skip: process.
     ftpUser: "fabian",
     ftpPassword: "password-only-for-test",
     ftpPath: "/openimmo",
+    ftpSecure: "explicit",
   };
   await saveCredentialVault(credentials, vaultPath);
   const encryptedFile = await readFile(vaultPath, "utf8");
