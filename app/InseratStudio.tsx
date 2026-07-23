@@ -4,6 +4,10 @@
 import { ChangeEvent, useEffect, useState } from "react";
 import { readSheet } from "read-excel-file/browser";
 import { parseAddressWorkbookRows } from "./lib/address-import";
+import {
+  headlinesAreTooSimilar,
+  removePrivateAddressFromHeadline,
+} from "./lib/headline-diversity.js";
 import { buildImportPackage } from "./lib/openimmo";
 import { ADDRESS_OWNERS, normalizeProjectOwners, projectOwner } from "./lib/project-owners";
 import { totalPrice } from "./lib/text-generator";
@@ -868,7 +872,7 @@ export default function InseratStudio() {
     const images: HouseImage[] = await Promise.all(
       files.map(
         (file, index) =>
-          new Promise((resolve, reject) => {
+          new Promise<HouseImage>((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = () => {
               const isFloorplan = /grundriss|floor/i.test(file.name);
@@ -1028,82 +1032,137 @@ export default function InseratStudio() {
     const projectSnapshot = activeProject;
     const houseSnapshots = [...selectedHouses];
     const selectedHouseNames = houseSnapshots.map((house) => house.name);
+    const headlineCycleId = crypto.randomUUID();
+    const historicalTitles = Array.from(new Set(
+      state.projects.flatMap((project) => (
+        project.listings.flatMap((listing) => [
+          ...(listing.titleHistory ?? []),
+          listing.texts.title,
+        ]).map((title) => removePrivateAddressFromHeadline(title, project))
+      )).filter(Boolean),
+    )).slice(-60);
     setGeneratingAi(true);
-    setNotice(`Qualitätsmodus arbeitet: ${houseSnapshots.length} Inserat${houseSnapshots.length === 1 ? "" : "e"} werden individuell geschrieben und geprüft …`);
+    setNotice(`Qualitätsmodus arbeitet: ${houseSnapshots.length} Inserat${houseSnapshots.length === 1 ? "" : "e"} erhalten neue Überschriften und lebendige, unterschiedlich aufgebaute Anzeigentexte …`);
 
     try {
+      const requestListingTexts = async (
+        house: HouseTemplate,
+        index: number,
+        previous: GeneratedListing | undefined,
+        titlesToAvoid: string[],
+      ): Promise<{ texts: ListingTexts; writingProfile: string }> => {
+        const response = await fetch("http://127.0.0.1:43182/generate-texts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            apiKey: openAiKey.trim(),
+            model: aiModel,
+            house: {
+              name: house.name,
+              houseType: house.houseType,
+              livingArea: house.livingArea,
+              rooms: house.rooms,
+              bedrooms: house.bedrooms,
+              bathrooms: house.bathrooms,
+              floors: house.floors,
+              housePrice: house.housePrice,
+              constructionYear: house.constructionYear,
+              energyDemand: house.energyDemand,
+              energyClass: house.energyClass,
+              heatingType: house.heatingType,
+              energySource: house.energySource,
+              architecture: house.architecture,
+              equipmentHighlights: house.equipmentHighlights,
+              useStandardPackage: house.useStandardPackage,
+            },
+            project: {
+              name: projectSnapshot.name,
+              street: projectSnapshot.street,
+              houseNumber: projectSnapshot.houseNumber,
+              zip: projectSnapshot.zip,
+              city: projectSnapshot.city,
+              district: projectSnapshot.district,
+              plotArea: projectSnapshot.plotArea,
+              plotPrice: projectSnapshot.plotPrice,
+              additionalCosts: projectSnapshot.additionalCosts,
+              locationFacts: projectSnapshot.locationFacts,
+              transportFacts: projectSnapshot.transportFacts,
+              familyFacts: projectSnapshot.familyFacts,
+              natureFacts: projectSnapshot.natureFacts,
+              notes: projectSnapshot.notes,
+            },
+            provider: {
+              company: state.provider.company,
+              firstName: state.provider.firstName,
+              lastName: state.provider.lastName,
+              phone: state.provider.phone,
+            },
+            previousTexts: previous?.texts,
+            previousWritingProfile: previous?.writingProfile,
+            titlesToAvoid,
+            headlineCycleId,
+            listingPosition: index + 1,
+            listingCount: houseSnapshots.length,
+            selectedHouseNames,
+            variationId: crypto.randomUUID(),
+          }),
+        });
+        const data = (await response.json()) as {
+          ok?: boolean;
+          message?: string;
+          texts?: ListingTexts;
+          writingProfile?: string;
+          qualityChecked?: boolean;
+        };
+        if (!response.ok || !data.ok || !data.texts || !data.qualityChecked) {
+          throw new Error(data.message || `Der KI-Text für „${house.name}“ konnte nicht erzeugt werden.`);
+        }
+        return {
+          texts: data.texts,
+          writingProfile: data.writingProfile ?? "",
+        };
+      };
+
       const generated = await Promise.all(
         houseSnapshots.map(async (house, index) => {
           const previous = projectSnapshot.listings.find(
             (listing) => listing.templateId === house.id,
           );
-          const response = await fetch("http://127.0.0.1:43182/generate-texts", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              apiKey: openAiKey.trim(),
-              model: aiModel,
-              house: {
-                name: house.name,
-                houseType: house.houseType,
-                livingArea: house.livingArea,
-                rooms: house.rooms,
-                bedrooms: house.bedrooms,
-                bathrooms: house.bathrooms,
-                floors: house.floors,
-                housePrice: house.housePrice,
-                constructionYear: house.constructionYear,
-                energyDemand: house.energyDemand,
-                energyClass: house.energyClass,
-                heatingType: house.heatingType,
-                energySource: house.energySource,
-                architecture: house.architecture,
-                equipmentHighlights: house.equipmentHighlights,
-                useStandardPackage: house.useStandardPackage,
-              },
-              project: {
-                name: projectSnapshot.name,
-                street: projectSnapshot.street,
-                houseNumber: projectSnapshot.houseNumber,
-                zip: projectSnapshot.zip,
-                city: projectSnapshot.city,
-                district: projectSnapshot.district,
-                plotArea: projectSnapshot.plotArea,
-                plotPrice: projectSnapshot.plotPrice,
-                additionalCosts: projectSnapshot.additionalCosts,
-                locationFacts: projectSnapshot.locationFacts,
-                transportFacts: projectSnapshot.transportFacts,
-                familyFacts: projectSnapshot.familyFacts,
-                natureFacts: projectSnapshot.natureFacts,
-                notes: projectSnapshot.notes,
-              },
-              provider: {
-                company: state.provider.company,
-                firstName: state.provider.firstName,
-                lastName: state.provider.lastName,
-                phone: state.provider.phone,
-              },
-              previousTexts: previous?.texts,
-              listingPosition: index + 1,
-              listingCount: houseSnapshots.length,
-              selectedHouseNames,
-              variationId: crypto.randomUUID(),
-            }),
-          });
-          const data = (await response.json()) as {
-            ok?: boolean;
-            message?: string;
-            texts?: ListingTexts;
-            qualityChecked?: boolean;
+          const result = await requestListingTexts(house, index, previous, historicalTitles);
+          return {
+            house,
+            index,
+            previous,
+            texts: result.texts,
+            writingProfile: result.writingProfile,
           };
-          if (!response.ok || !data.ok || !data.texts || !data.qualityChecked) {
-            throw new Error(data.message || `Der KI-Text für „${house.name}“ konnte nicht erzeugt werden.`);
-          }
-          return { house, index, previous, texts: data.texts };
         }),
       );
 
-      const listings: GeneratedListing[] = generated.map(({ house, index, previous, texts }) => ({
+      const acceptedTitles = [...historicalTitles];
+      for (const generatedListing of generated) {
+        if (acceptedTitles.some((title) => (
+          headlinesAreTooSimilar(generatedListing.texts.title, title)
+        ))) {
+          const replacement = await requestListingTexts(
+            generatedListing.house,
+            generatedListing.index,
+            generatedListing.previous,
+            acceptedTitles,
+          );
+          generatedListing.texts = replacement.texts;
+          generatedListing.writingProfile = replacement.writingProfile;
+        }
+        acceptedTitles.push(generatedListing.texts.title);
+      }
+
+      const listings: GeneratedListing[] = generated.map(({
+        house,
+        index,
+        previous,
+        texts,
+        writingProfile,
+      }) => ({
         id: previous?.id ?? uid(),
         externalId:
           previous?.externalId ??
@@ -1112,6 +1171,11 @@ export default function InseratStudio() {
         templateName: house.name,
         price: totalPrice(house, projectSnapshot),
         texts,
+        writingProfile: writingProfile || previous?.writingProfile,
+        titleHistory: Array.from(new Set([
+          ...(previous?.titleHistory ?? []),
+          ...(previous?.texts.title ? [previous.texts.title] : []),
+        ])).slice(-40),
         version: (previous?.version ?? 0) + 1,
       }));
 
@@ -1123,7 +1187,7 @@ export default function InseratStudio() {
       }));
       setActiveProjectId(projectSnapshot.id);
       setTab("preview");
-      setNotice(`${listings.length} hochwertige KI-Inserat${listings.length === 1 ? "" : "e"} wurden vollständig neu geschrieben und lokal qualitätsgeprüft.`);
+      setNotice(`${listings.length} hochwertige KI-Inserat${listings.length === 1 ? "" : "e"} wurden mit neuen Überschriften, interessanten Einstiegen und abwechslungsreichen Textprofilen erstellt und lokal geprüft.`);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Die KI-Texte konnten nicht erzeugt werden.");
     } finally {
@@ -1719,7 +1783,7 @@ export default function InseratStudio() {
               </div>
             </div>
             <div className="action-bar">
-              <div><b>Bereit für neue KI-Texte?</b><span>Die KI erzeugt eine kurze, klare Überschrift ohne Hausbezeichnung sowie vier eigenständige Textblöcke. Als Ortsbezug sind nur Ort und Ortsteil erlaubt.</span></div>
+              <div><b>Bereit für neue KI-Texte?</b><span>Die KI erzeugt jedes Mal eine andere, moderne Überschrift und vier lebendige Textblöcke mit interessanten Einstiegen, klarer Struktur und einer eigenen Erzählrichtung je Inserat. Als Ortsbezug sind nur Ort und Ortsteil erlaubt.</span></div>
               <div className="button-row action-buttons">
                 <button className="primary" disabled={generatingAi} onClick={generateAiListings}>{generatingAi ? "KI schreibt und prüft …" : "KI-Überschrift & Texte erzeugen"}</button>
               </div>
@@ -1819,7 +1883,7 @@ export default function InseratStudio() {
                 </select>
               </label>
             </div>
-            <p className="security-note">Der Schlüssel wird vor dem Speichern direkt bei OpenAI geprüft und anschließend für dein Windows-Benutzerkonto verschlüsselt. Die KI erzeugt eine kurze Überschrift ohne Haus- oder Modellbezeichnung und vier Textblöcke gemeinsam. An die Text-KI werden weder Straße, Hausnummer noch PLZ übergeben; in den Inserattexten sind nur Ort und Ortsteil als konkrete Ortsangaben erlaubt.</p>
+            <p className="security-note">Der Schlüssel wird vor dem Speichern direkt bei OpenAI geprüft und anschließend für dein Windows-Benutzerkonto verschlüsselt. Die KI erzeugt eine moderne, gegenüber früheren Fassungen neue Überschrift sowie vier abwechslungsreiche Textblöcke mit eigenem Erzählprofil. An die Text-KI werden weder Straße, Hausnummer noch PLZ übergeben; in den Inserattexten sind nur Ort und Ortsteil als konkrete Ortsangaben erlaubt.</p>
 
             <div className="divider" />
             <div className="section-heading"><div><span className="eyebrow">Verschlüsselt auf diesem Gerät</span><h2>Immoprofessional-Zugang</h2></div><span className={helperOnline ? "status online" : "status offline"}>{helperOnline ? "Upload bereit" : "Upload-Helfer offline"}</span></div>

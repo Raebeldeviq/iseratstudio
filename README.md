@@ -30,7 +30,12 @@ einzelne Bilddateien gesichert; Textänderungen übertragen die Fotos nicht erne
    Textblöcke gemeinsam erzeugen.
    Die Überschrift besteht aus 3 bis 8 Wörtern und enthält keine Haus- oder
    Modellbezeichnung. Sie wird stattdessen kurz, klar und am konkreten
-   Wohnvorteil ausgerichtet.
+   Wohnvorteil ausgerichtet. Frühere Überschriften werden im Studio gespeichert
+   und bei neuen Durchläufen ausgeschlossen. Bis zu vier parallel erzeugte
+   Inserate erhalten unterschiedliche Stilrichtungen. Wiederholt sich eine
+   Überschrift trotzdem zu stark, lässt das Studio diese Fassung automatisch
+   neu schreiben. Der gewünschte Ton ist modern, charmant und leicht humorvoll,
+   bleibt dabei aber seriös und verständlich.
 4. Unter **Texte & Vorschau** Überschrift und die vier neu formulierten
    Textblöcke prüfen und bei Bedarf bearbeiten.
 5. Unter **Export & Upload** das OpenImmo-Paket herunterladen oder nach einer
@@ -104,9 +109,14 @@ Der KI-Qualitätsmodus erstellt bei jedem Durchlauf eine eigenständige Fassung
 mit angepasster Dramaturgie und Wortwahl. Er verwendet strukturierte Ausgaben
 für Überschrift, Objektbeschreibung, Ausstattung, Lage und Sonstiges. Der
 lokale Helfer prüft Mindesttiefe, Vollständigkeit, sichtbare Markdown-Zeichen,
-Platzhalter und doppelte längere Absätze; eine nicht bestandene Fassung wird
+Platzhalter, doppelte längere Absätze, formelhafte Einstiege und die
+Mindestgliederung aller vier Textblöcke; eine nicht bestandene Fassung wird
 einmal automatisch gezielt neu geschrieben. Frühere Texte werden dem Modell
-als zu vermeidende Fassung mitgegeben.
+als zu vermeidende Fassung mitgegeben. Jedes Inserat erhält zusätzlich eines
+von acht Erzählprofilen, zum Beispiel Alltagsszene, Raumreise,
+Zukunftsflexibilität oder Lieblingsplätze. Bei einer neuen Fassung wechselt
+das Profil, damit nicht nur einzelne Wörter, sondern auch Aufbau und Perspektive
+abwechslungsreich bleiben.
 
 Standardmäßig verwendet das Studio GPT-5.6 Luna für kostengünstige Text- und
 Bildauswertung. GPT-5.6 Terra und GPT-5.6 Sol bleiben im Qualitätsprofil als

@@ -67,6 +67,8 @@ export type GeneratedListing = {
   templateName: string;
   price: number;
   texts: ListingTexts;
+  titleHistory?: string[];
+  writingProfile?: string;
   version: number;
 };
 

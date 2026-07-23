@@ -8,10 +8,17 @@ import {
   extractImageCaptions,
   extractListingTexts,
   looksLikeOpenAiApiKey,
+  validateEditorialQuality,
+  validateHeadlineDiversity,
   validateListingTexts,
   validateLocationPrivacy,
   validateNovelty,
 } from "../ai-text-service.mjs";
+import {
+  headlineSimilarity,
+  headlinesAreTooSimilar,
+  removePrivateAddressFromHeadline,
+} from "../app/lib/headline-diversity.js";
 
 const longText = (sentence, minimum) => {
   let value = sentence;
@@ -41,7 +48,13 @@ test("removes the exact house number before building the AI source data", () => 
 });
 
 test("uses the Responses API quality settings and a strict text schema", () => {
-  const request = createOpenAiRequest({ model: "gpt-5.6-sol", project: {}, house: {} });
+  const request = createOpenAiRequest({
+    model: "gpt-5.6-sol",
+    project: {},
+    house: {},
+    titlesToAvoid: ["Couch sucht endlich mehr Platz"],
+    headlineCycleId: "cycle-1",
+  });
   assert.equal(request.model, "gpt-5.6-sol");
   assert.equal(request.store, false);
   assert.equal(request.reasoning.effort, "medium");
@@ -50,6 +63,44 @@ test("uses the Responses API quality settings and a strict text schema", () => {
   assert.deepEqual(request.text.format.schema.required, ["title", "description", "equipment", "location", "other"]);
   assert.match(request.text.format.schema.properties.title.description, /3 bis 8 Wörtern/);
   assert.match(request.input[0].content[0].text, /niemals die gelieferte Haus- oder Modellbezeichnung/);
+  assert.match(request.input[0].content[0].text, /modern und leicht humorvoll/);
+  assert.match(request.input[0].content[0].text, /mindestens vier/);
+  assert.match(request.input[1].content[0].text, /Couch sucht endlich mehr Platz/);
+  assert.match(request.text.format.schema.properties.description.description, /interessantem Einstieg/);
+});
+
+test("assigns different headline and body directions within one generation batch", () => {
+  const first = buildSourceData({
+    project: {},
+    house: {},
+    headlineCycleId: "shared-cycle",
+    listingPosition: 1,
+  });
+  const second = buildSourceData({
+    project: {},
+    house: {},
+    headlineCycleId: "shared-cycle",
+    listingPosition: 2,
+  });
+  assert.notEqual(
+    first.writingDirection.headlineDirection,
+    second.writingDirection.headlineDirection,
+  );
+  assert.notEqual(
+    first.writingDirection.bodyProfileId,
+    second.writingDirection.bodyProfileId,
+  );
+  const nextVersion = buildSourceData({
+    project: {},
+    house: {},
+    headlineCycleId: "shared-cycle",
+    listingPosition: 1,
+    previousWritingProfile: first.writingDirection.bodyProfileId,
+  });
+  assert.notEqual(
+    first.writingDirection.bodyProfileId,
+    nextVersion.writingDirection.bodyProfileId,
+  );
 });
 
 test("uses GPT-5.6 Luna as the economical default", () => {
@@ -87,6 +138,31 @@ test("accepts complete texts and rejects short or Markdown-formatted output", ()
   assert.ok(errors.some((value) => value.includes("Markdown")));
 });
 
+test("requires engaging openings and readable paragraph structure", () => {
+  const engagingTexts = {
+    ...validTexts,
+    description: [
+      "Morgens Ruhe, nachmittags Leben und abends genug Platz für alle.",
+      "Der geplante Grundriss verbindet gemeinschaftliche Bereiche mit Rückzugsorten.",
+      "Die Räume lassen sich im Rahmen der Planung auf den Alltag abstimmen.",
+      "Im persönlichen Gespräch werden Haus, Grundstück und Wünsche zusammengeführt.",
+    ].join("\n\n"),
+    equipment: ["Komfort im Alltag", "Technik mit Nutzen", "Individuelle Auswahl", "Klare Planung", "Verlässliche Abstimmung"].join("\n\n"),
+    location: ["Schulzendorf bildet den Rahmen.", "Bestätigte Fakten werden alltagsnah eingeordnet.", "Die Planung berücksichtigt das Grundstück."].join("\n\n"),
+    other: ["Das Haus ist projektiert.", "Kosten werden individuell geprüft.", "Maßgeblich sind die Vereinbarungen."].join("\n\n"),
+  };
+  assert.deepEqual(validateEditorialQuality(engagingTexts), []);
+
+  const flatTexts = {
+    ...engagingTexts,
+    description: "Dieses projektierte Haus bietet einen klassischen Einstieg.\n\nZweiter Absatz.\n\nDritter Absatz.\n\nVierter Absatz.",
+    equipment: "Nur ein langer Ausstattungsblock.",
+  };
+  const errors = validateEditorialQuality(flatTexts);
+  assert.ok(errors.some((value) => value.includes("zu formelhaft")));
+  assert.ok(errors.some((value) => value.includes("Ausstattung")));
+});
+
 test("requires short headlines without the configured house designation", () => {
   assert.deepEqual(
     validateListingTexts({ ...validTexts, title: "Mehr Raum für euer Familienleben" }, { name: "Sunshine 125" }),
@@ -101,6 +177,39 @@ test("requires short headlines without the configured house designation", () => 
     { ...validTexts, title: "Familienglück: Raum für neue Pläne" },
   );
   assert.ok(punctuationErrors.some((value) => value.includes("Doppelpunkt")));
+});
+
+test("rejects repeated, similar and overused headlines", () => {
+  assert.deepEqual(
+    validateHeadlineDiversity(
+      "Die Couch bekommt ein eigenes Zimmer",
+      ["Küche gut, Familienchaos besser"],
+    ),
+    [],
+  );
+  assert.ok(validateHeadlineDiversity(
+    "Die Couch bekommt endlich ein Zimmer",
+    ["Die Couch bekommt ein eigenes Zimmer"],
+  ).some((value) => value.includes("bereits verwendeten")));
+  assert.ok(validateHeadlineDiversity(
+    "Mehr Raum für neue Lieblingsmomente",
+    [],
+  ).some((value) => value.includes("Standardformulierung")));
+  assert.equal(
+    headlinesAreTooSimilar(
+      "Die Couch bekommt endlich ein Zimmer",
+      "Die Couch bekommt ein eigenes Zimmer",
+    ),
+    true,
+  );
+  assert.ok(headlineSimilarity("Küche gut, Familienchaos besser", "Endlich Feierabend mit Garten") < 0.6);
+  assert.equal(
+    removePrivateAddressFromHeadline(
+      "Familienglück in der Bergstraße 27a",
+      { street: "Bergstraße", houseNumber: "27a", zip: "15732" },
+    ),
+    "Familienglück in der",
+  );
 });
 
 test("extracts structured text from a Responses API output block", () => {

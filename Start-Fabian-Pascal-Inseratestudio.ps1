@@ -23,17 +23,18 @@ if (-not (Test-Path -LiteralPath (Join-Path $appRoot "node_modules"))) {
 $workRoot = Join-Path $appRoot "work"
 New-Item -ItemType Directory -Force -Path $workRoot | Out-Null
 
-$helperPort = Get-NetTCPConnection -LocalPort 43182 -State Listen -ErrorAction SilentlyContinue
-if (-not $helperPort) {
-  Start-Process -FilePath $nodeExe -ArgumentList @("local-upload-server.mjs") -WorkingDirectory $appRoot -RedirectStandardOutput (Join-Path $workRoot "helper.out.log") -RedirectStandardError (Join-Path $workRoot "helper.err.log") -WindowStyle Hidden
-} else {
+$helperPort = Get-NetTCPConnection -LocalPort 43182 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($helperPort) {
   try {
     $helper = Invoke-RestMethod -Uri "http://127.0.0.1:43182/health" -TimeoutSec 2
     if ($helper.service -ne "fabian-pascal-helper") { throw "Fremder Dienst" }
+    Stop-Process -Id $helperPort.OwningProcess
+    Start-Sleep -Milliseconds 500
   } catch {
     throw "Port 43182 wird bereits von einem anderen Programm verwendet."
   }
 }
+Start-Process -FilePath $nodeExe -ArgumentList @("local-upload-server.mjs") -WorkingDirectory $appRoot -RedirectStandardOutput (Join-Path $workRoot "helper.out.log") -RedirectStandardError (Join-Path $workRoot "helper.err.log") -WindowStyle Hidden
 
 $studioPort = Get-NetTCPConnection -LocalPort 43181 -State Listen -ErrorAction SilentlyContinue
 if (-not $studioPort) {
