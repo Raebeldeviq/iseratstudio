@@ -1,5 +1,11 @@
 import JSZip from "jszip";
 import { orderHouseImages } from "../../image-sequence.mjs";
+import {
+  fillMissingProjectingDefaults,
+  FIXED_PROVISION_TEXT,
+  IMMOPROFESSIONAL_DEFAULTS,
+} from "../../listing-copy.mjs";
+import { APP_VERSION } from "./app-version.mjs";
 import type {
   GeneratedListing,
   HouseImage,
@@ -123,6 +129,7 @@ function listingXml(
     useGrouping: false,
     maximumFractionDigits: 2,
   });
+  const projecting = fillMissingProjectingDefaults(listing.projectingSettings);
 
   return `
       <immobilie>
@@ -152,6 +159,8 @@ function listingXml(
         </kontaktperson>
         <preise>
           <kaufpreis>${currency.format(listing.price)}</kaufpreis>
+          <provisionspflichtig>${projecting.commissionRequired}</provisionspflichtig>
+          <courtage_hinweis>${cdata(FIXED_PROVISION_TEXT)}</courtage_hinweis>
           <waehrung iso_waehrung="EUR" />
         </preise>
         <flaechen>
@@ -164,17 +173,23 @@ function listingXml(
           <anzahl_etagen>${currency.format(house.floors)}</anzahl_etagen>
         </flaechen>
         <ausstattung>
-          <heizungsart ZENTRAL="true" FUSSBODEN="true" />
-          <befeuerung WAERMEPUMPE="true" />
-          <gaestewc>true</gaestewc>
+          <ausstatt_kategorie WERTIGKEIT="${xml(projecting.equipmentQuality)}" />
+          <bad dusche="${IMMOPROFESSIONAL_DEFAULTS.shower}" wanne="${IMMOPROFESSIONAL_DEFAULTS.bathtub}" fenster="${IMMOPROFESSIONAL_DEFAULTS.bathroomWindow}" />
+          <kueche ebk="${IMMOPROFESSIONAL_DEFAULTS.fittedKitchen}" offen="${IMMOPROFESSIONAL_DEFAULTS.openKitchen}" />
+          <heizungsart fussboden="${projecting.underfloorHeating}" />
+          <befeuerung elektro="${IMMOPROFESSIONAL_DEFAULTS.electricFuel}" luftwp="${projecting.airSourceHeatPump}" />
+          <gartennutzung>${IMMOPROFESSIONAL_DEFAULTS.gardenUse}</gartennutzung>
+          <energietyp kfw40="${projecting.kfw40}" kfw55="${projecting.kfw55}" />
+          <dachboden>${IMMOPROFESSIONAL_DEFAULTS.attic}</dachboden>
+          <gaestewc>${IMMOPROFESSIONAL_DEFAULTS.guestWc}</gaestewc>
         </ausstattung>
         <zustand_angaben>
           <baujahr>${xml(house.constructionYear)}</baujahr>
-          <zustand zustand_art="PROJEKTIERT" />
+          <zustand zustand_art="${xml(projecting.constructionPhase)}" />
           <energiepass>
             <epart>BEDARF</epart>
             <endenergiebedarf>${currency.format(house.energyDemand)}</endenergiebedarf>
-            <wertklasse>${xml(house.energyClass)}</wertklasse>
+            <wertklasse>${xml(projecting.energyCertificateClass)}</wertklasse>
             <baujahr>${xml(house.constructionYear)}</baujahr>
           </energiepass>
         </zustand_angaben>
@@ -184,6 +199,7 @@ function listingXml(
           <ausstatt_beschr>${cdata(listing.texts.equipment)}</ausstatt_beschr>
           <objektbeschreibung>${cdata(listing.texts.description)}</objektbeschreibung>
           <sonstige_angaben>${cdata(listing.texts.other)}</sonstige_angaben>
+          <user_defined_simplefield feldname="Energieklasse">${cdata(projecting.energyClass)}</user_defined_simplefield>
         </freitexte>
         <anhaenge>${imageXml(listing, images)}</anhaenge>
         <verwaltung_objekt>
@@ -213,7 +229,7 @@ export function buildOpenImmoXml(input: PackageInput): string {
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <openimmo xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
-  <uebertragung art="OFFLINE" umfang="VOLL" version="1.2.7" sendersoftware="Fabian&amp;Pascal Inseratestudio" senderversion="0.4.0" techn_email="${xml(provider.email)}" regi_id="${xml(provider.providerNumber)}" timestamp="${xml(timestamp)}" />
+  <uebertragung art="OFFLINE" umfang="VOLL" version="1.2.7" sendersoftware="Fabian&amp;Pascal Inseratestudio" senderversion="${xml(APP_VERSION)}" techn_email="${xml(provider.email)}" regi_id="${xml(provider.providerNumber)}" timestamp="${xml(timestamp)}" />
   <anbieter>
     <anbieternr>${xml(provider.providerNumber)}</anbieternr>
     <firma>${xml(provider.company)}</firma>${objects}

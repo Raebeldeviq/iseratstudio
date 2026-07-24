@@ -5,6 +5,7 @@ import { ChangeEvent, useEffect, useRef, useState } from "react";
 import { readSheet } from "read-excel-file/browser";
 import appPackage from "../package.json";
 import { resolveHousePrice } from "../house-price-catalog.mjs";
+import { fillMissingProjectingDefaults } from "../listing-copy.mjs";
 import {
   captionForImageRole,
   IMAGE_ROLE_LABELS,
@@ -14,6 +15,7 @@ import {
   orderHouseImages,
 } from "../image-sequence.mjs";
 import { parseAddressWorkbookRows } from "./lib/address-import";
+import { APP_VERSION } from "./lib/app-version.mjs";
 import {
   headlinesAreTooSimilar,
   removePrivateAddressFromHeadline,
@@ -177,6 +179,18 @@ function effectiveListingImages(
     { ...promotionImage, role: "promotion" as const },
     ...house.images.filter((image) => image.id !== promotionImage.id),
   ].slice(0, MAX_HOUSE_IMAGES);
+}
+
+function AppVersionBadge() {
+  return (
+    <div
+      className="app-version-badge"
+      aria-label={`Geöffnete InseratStudio-Version ${APP_VERSION}`}
+      title={`Fabian&Pascal Inseratestudio · Version ${APP_VERSION}`}
+    >
+      v{APP_VERSION}
+    </div>
+  );
 }
 
 function euro(value: number): string {
@@ -1783,6 +1797,7 @@ export default function InseratStudio() {
           ...(previous?.titleHistory ?? []),
           ...(previous?.texts.title ? [previous.texts.title] : []),
         ])).slice(-40),
+        projectingSettings: fillMissingProjectingDefaults(previous?.projectingSettings),
         version: (previous?.version ?? 0) + 1,
       }));
 
@@ -2136,6 +2151,7 @@ export default function InseratStudio() {
                 ...(previous?.titleHistory ?? []),
                 ...(previous?.texts.title ? [previous.texts.title] : []),
               ])).slice(-40),
+              projectingSettings: fillMissingProjectingDefaults(previous?.projectingSettings),
               totalSyncRunId: run.id,
               version: (previous?.version ?? 0) + 1,
             });
@@ -2442,6 +2458,7 @@ export default function InseratStudio() {
   if (isPrimaryTab === false) {
     return (
       <main className="loading-screen duplicate-tab-screen">
+        <AppVersionBadge />
         <div className="loading-mark">F&amp;P</div>
         <h1>Inseratestudio ist bereits geöffnet</h1>
         <p>Bitte nur einen Inseratestudio-Tab verwenden. Schließe den anderen Tab; dieser Tab wird danach automatisch freigeschaltet.</p>
@@ -2452,6 +2469,7 @@ export default function InseratStudio() {
   if (isPrimaryTab !== true || !ready || !activeProject || !activeHouse) {
     return (
       <main className="loading-screen">
+        <AppVersionBadge />
         <div className="loading-mark">F&amp;P</div>
         <p>Fabian&amp;Pascal Inseratestudio wird vorbereitet …</p>
       </main>
@@ -2460,6 +2478,7 @@ export default function InseratStudio() {
 
   return (
     <main className="studio-shell">
+      <AppVersionBadge />
       <header className="topbar">
         <div className="brand-lockup">
           <div className="brand-mark">F&amp;P</div>

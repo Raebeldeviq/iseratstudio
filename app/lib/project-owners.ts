@@ -1,4 +1,5 @@
 import type { AddressOwner, ProjectInput, StudioState } from "../types";
+import { fillMissingProjectingDefaults } from "../../listing-copy.mjs";
 import {
   projectPromotionCount,
   reconcilePromotionAssignments,
@@ -43,6 +44,7 @@ export function normalizeProjectOwners(state: StudioState): StudioState {
           ...listing,
           promotionImageId: listing.promotionImageId
             ?? promotionAssignments[listing.templateId],
+          projectingSettings: fillMissingProjectingDefaults(listing.projectingSettings),
         })),
         owner: projectOwner(project),
         promotionImageCount,

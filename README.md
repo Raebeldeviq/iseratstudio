@@ -127,6 +127,15 @@ Für jedes Inserat setzt der Export automatisch das Gebiet auf **Wohngebiet**,
 aktiviert **Gäste-WC** und überträgt die **Nutzfläche in m²**. Die Nutzfläche
 entspricht dabei der beim Haustyp hinterlegten Wohnfläche.
 
+Pascals Projektierungsstandardwerte aus Version **0.9.5** werden je Inserat
+ergänzt, wenn dort noch kein eigener Wert gespeichert ist: gehobene
+Ausstattungsqualität, Status **PROJEKTIERT**, Fußbodenheizung,
+Luft-Wärmepumpe, KfW40 und KfW55, Energieklasse A++,
+`provisionspflichtig=false` sowie Energieausweis-Effizienzklasse A+.
+Bereits vorhandene abweichende Werte und ausdrücklich gespeicherte
+Ja-/Nein-Werte bleiben unverändert. Derselbe Abgleich erfolgt beim Laden,
+bei der KI-Erzeugung, beim Totalabgleich und unmittelbar vor dem Export.
+
 ## Textvorlagen
 
 Der Textgenerator folgt dem Aufbau der bereitgestellten Exposés:

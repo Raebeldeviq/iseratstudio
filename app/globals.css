@@ -32,6 +32,27 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
 
 .studio-shell { min-height: 100vh; padding-bottom: 5rem; }
 
+.app-version-badge {
+  position: fixed;
+  right: 12px;
+  bottom: 10px;
+  z-index: 80;
+  padding: 0.28rem 0.5rem;
+  border: 1px solid rgba(23, 52, 45, 0.13);
+  border-radius: 999px;
+  background: rgba(251, 250, 246, 0.82);
+  box-shadow: 0 4px 18px rgba(23, 52, 45, 0.07);
+  backdrop-filter: blur(10px);
+  color: rgba(23, 52, 45, 0.62);
+  font-size: 0.62rem;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.05em;
+  line-height: 1;
+  pointer-events: none;
+  user-select: none;
+}
+
 .topbar {
   min-height: 76px;
   padding: 0 4vw;
@@ -502,6 +523,7 @@ input:focus, textarea:focus, select:focus { border-color: #91bc47; box-shadow: 0
 }
 
 @media (max-width: 620px) {
+  .app-version-badge { right: 7px; bottom: 7px; font-size: 0.58rem; }
   .topbar { padding: 0 1rem; }
   .storage-pill { max-width: 150px; overflow: hidden; white-space: nowrap; }
   .hero-panel, .workspace, .step-nav, .notice { width: calc(100vw - 1.25rem); }

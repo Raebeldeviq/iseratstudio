@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { APP_VERSION } from "../app/lib/app-version.mjs";
 import { buildImportPackage, buildOpenImmoXml } from "../app/lib/openimmo.ts";
 
 test("exports listings with the OpenImmo CHANGE upsert action", async () => {
@@ -87,8 +88,19 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
   };
   const xml = buildOpenImmoXml(input);
 
+  assert.match(xml, new RegExp(`senderversion="${APP_VERSION.replaceAll(".", "\\.")}"`));
   assert.match(xml, /<openimmo_obid>FPI-TEST-1<\/openimmo_obid>/);
   assert.match(xml, /<aktion aktionart="CHANGE" timestamp="[^"]+" \/>/);
+  assert.match(xml, /<ausstatt_kategorie WERTIGKEIT="GEHOBEN" \/>/);
+  assert.match(xml, /<bad dusche="true" wanne="true" fenster="true" \/>/);
+  assert.match(xml, /<kueche ebk="true" offen="true" \/>/);
+  assert.match(xml, /<heizungsart fussboden="true" \/>/);
+  assert.match(xml, /<befeuerung elektro="true" luftwp="true" \/>/);
+  assert.match(xml, /<energietyp kfw40="true" kfw55="true" \/>/);
+  assert.match(xml, /<zustand zustand_art="PROJEKTIERT" \/>/);
+  assert.match(xml, /<wertklasse>A\+<\/wertklasse>/);
+  assert.match(xml, /<provisionspflichtig>false<\/provisionspflichtig>/);
+  assert.match(xml, /<user_defined_simplefield feldname="Energieklasse"><!\[CDATA\[A\+\+\]\]><\/user_defined_simplefield>/);
   assert.ok(xml.indexOf("Aktuelles Angebot für dein neues Zuhause") < xml.indexOf("Eigenes Hausbild"));
 
   const assignedInput = {
@@ -122,4 +134,81 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
 
   const packageResult = await buildImportPackage(input);
   assert.match(packageResult.filename, /testprojekt-testhaus-fpi-test-1-\d{4}-\d{2}-\d{2}\.zip/);
+});
+
+test("preserves explicit per-listing projecting values during export", () => {
+  const xml = buildOpenImmoXml({
+    project: {
+      street: "Teststraße",
+      houseNumber: "1",
+      zip: "15732",
+      city: "Schulzendorf",
+      district: "",
+      plotArea: 600,
+      name: "Bestehendes Projekt",
+    },
+    listings: [{
+      id: "listing-explicit-projecting-values",
+      externalId: "FPI-EXPLICIT-VALUES",
+      templateId: "house-explicit-projecting-values",
+      templateName: "Bestandshaus",
+      price: 500000,
+      version: 1,
+      projectingSettings: {
+        equipmentQuality: "LUXUS",
+        constructionPhase: "ERSTBEZUG",
+        underfloorHeating: false,
+        airSourceHeatPump: false,
+        kfw40: false,
+        kfw55: false,
+        energyClass: "B",
+        commissionRequired: true,
+        energyCertificateClass: "C",
+      },
+      texts: {
+        title: "Vorhandener Titel",
+        description: "Vorhandene Beschreibung",
+        equipment: "Vorhandene Ausstattung",
+        location: "Vorhandene Lage",
+        other: "Vorhandenes Sonstiges",
+      },
+    }],
+    houses: [{
+      id: "house-explicit-projecting-values",
+      name: "Bestandshaus",
+      houseType: "Einfamilienhaus",
+      livingArea: 150,
+      rooms: 5,
+      bedrooms: 3,
+      bathrooms: 2,
+      floors: 2,
+      housePrice: 400000,
+      constructionYear: 2027,
+      energyDemand: 18,
+      energyClass: "B",
+      heatingType: "Radiatoren",
+      energySource: "Gas",
+      architecture: "",
+      equipmentHighlights: "",
+      useStandardPackage: true,
+      images: [],
+    }],
+    provider: {
+      providerNumber: "30435",
+      company: "Testfirma",
+      firstName: "Max",
+      lastName: "Mustermann",
+      email: "test@example.com",
+      phone: "0000",
+    },
+  });
+
+  assert.match(xml, /<ausstatt_kategorie WERTIGKEIT="LUXUS" \/>/);
+  assert.match(xml, /<heizungsart fussboden="false" \/>/);
+  assert.match(xml, /<befeuerung elektro="true" luftwp="false" \/>/);
+  assert.match(xml, /<energietyp kfw40="false" kfw55="false" \/>/);
+  assert.match(xml, /<zustand zustand_art="ERSTBEZUG" \/>/);
+  assert.match(xml, /<wertklasse>C<\/wertklasse>/);
+  assert.match(xml, /<provisionspflichtig>true<\/provisionspflichtig>/);
+  assert.match(xml, /<user_defined_simplefield feldname="Energieklasse"><!\[CDATA\[B\]\]><\/user_defined_simplefield>/);
 });

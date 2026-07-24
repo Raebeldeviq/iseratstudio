@@ -74,6 +74,59 @@ export const FIXED_TERMS_TEXT =
 export const FIXED_RECOMMENDATION_TEXT =
   "Haus, Grundstück und Finanzierung werden im persönlichen Beratungsgespräch gemeinsam betrachtet. Zusätzliche Baunebenkosten und mögliche Förderprogramme werden dabei transparent eingeordnet. Maßgeblich sind die individuelle Planung, die konkreten Grundstücksbedingungen und die vereinbarte Bau- und Leistungsbeschreibung.";
 
+export const IMMOPROFESSIONAL_DEFAULTS = Object.freeze({
+  equipmentQuality: "GEHOBEN",
+  constructionPhase: "PROJEKTIERT",
+  attic: true,
+  guestWc: true,
+  gardenUse: true,
+  underfloorHeating: true,
+  electricFuel: true,
+  airSourceHeatPump: true,
+  kfw40: true,
+  kfw55: true,
+  energyClass: "A++",
+  commissionRequired: false,
+  energyCertificateClass: "A+",
+  fittedKitchen: true,
+  openKitchen: true,
+  shower: true,
+  bathtub: true,
+  bathroomWindow: true,
+});
+
+export function isMissingProjectingValue(value) {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLocaleLowerCase("de-DE")
+    .replace(/[_-]+/gu, " ")
+    .replace(/\s+/gu, " ");
+  return !normalized || normalized === "keine angabe";
+}
+
+export function fillMissingProjectingDefaults(values = {}) {
+  const source = values && typeof values === "object" ? values : {};
+  const choice = (key) => isMissingProjectingValue(source[key])
+    ? IMMOPROFESSIONAL_DEFAULTS[key]
+    : String(source[key]).trim();
+  const flag = (key) => typeof source[key] === "boolean"
+    ? source[key]
+    : IMMOPROFESSIONAL_DEFAULTS[key];
+
+  return {
+    ...source,
+    equipmentQuality: choice("equipmentQuality"),
+    constructionPhase: choice("constructionPhase"),
+    underfloorHeating: flag("underfloorHeating"),
+    airSourceHeatPump: flag("airSourceHeatPump"),
+    kfw40: flag("kfw40"),
+    kfw55: flag("kfw55"),
+    energyClass: choice("energyClass"),
+    commissionRequired: flag("commissionRequired"),
+    energyCertificateClass: choice("energyCertificateClass"),
+  };
+}
+
 function descriptionBody(value) {
   let body = clean(value);
   const fixedCtaIndex = body.indexOf(DESCRIPTION_CTA_START);
