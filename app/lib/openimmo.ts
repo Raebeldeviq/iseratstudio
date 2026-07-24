@@ -3,11 +3,11 @@ import { APP_VERSION } from "./app-version.mjs";
 import { imageSequenceIssues, orderHouseImages } from "../../image-sequence.mjs";
 import {
   enforceListingCopy,
+  fillMissingProjectingDefaults,
   FIXED_ANNOTATION_TEXT,
   FIXED_PROVISION_TEXT,
   FIXED_RECOMMENDATION_TEXT,
   FIXED_TERMS_TEXT,
-  IMMOPROFESSIONAL_DEFAULTS,
 } from "../../listing-copy.mjs";
 import type {
   GeneratedListing,
@@ -168,6 +168,7 @@ function listingXml(
     maximumFractionDigits: 2,
   });
   const texts = enforceListingCopy(listing.texts, { house, project });
+  const projecting = fillMissingProjectingDefaults(listing.projectingSettings);
 
   return `
       <immobilie>
@@ -197,7 +198,7 @@ function listingXml(
         </kontaktperson>
         <preise>
           <kaufpreis>${currency.format(listing.price)}</kaufpreis>
-          <provisionspflichtig>true</provisionspflichtig>
+          <provisionspflichtig>${projecting.commissionRequired}</provisionspflichtig>
           <courtage_hinweis>${cdata(FIXED_PROVISION_TEXT)}</courtage_hinweis>
           <waehrung iso_waehrung="EUR" />
         </preise>
@@ -211,22 +212,23 @@ function listingXml(
           <anzahl_etagen>${currency.format(house.floors)}</anzahl_etagen>
         </flaechen>
         <ausstattung>
+          <ausstatt_kategorie WERTIGKEIT="${xml(projecting.equipmentQuality)}" />
           <bad dusche="true" wanne="true" fenster="true" />
           <kueche ebk="true" offen="true" />
-          <heizungsart fussboden="true" />
-          <befeuerung elektro="true" luftwp="true" />
+          <heizungsart fussboden="${projecting.underfloorHeating}" />
+          <befeuerung elektro="true" luftwp="${projecting.airSourceHeatPump}" />
           <gartennutzung>true</gartennutzung>
-          <energietyp kfw40="true" kfw55="true" />
+          <energietyp kfw40="${projecting.kfw40}" kfw55="${projecting.kfw55}" />
           <dachboden>true</dachboden>
           <gaestewc>true</gaestewc>
         </ausstattung>
         <zustand_angaben>
           <baujahr>${xml(house.constructionYear)}</baujahr>
-          <zustand zustand_art="PROJEKTIERT" />
+          <zustand zustand_art="${xml(projecting.constructionPhase)}" />
           <energiepass>
             <epart>BEDARF</epart>
             <endenergiebedarf>${currency.format(house.energyDemand)}</endenergiebedarf>
-            <wertklasse>${xml(IMMOPROFESSIONAL_DEFAULTS.energyClass)}</wertklasse>
+            <wertklasse>${xml(projecting.energyCertificateClass)}</wertklasse>
             <baujahr>${xml(house.constructionYear)}</baujahr>
           </energiepass>
         </zustand_angaben>
@@ -236,6 +238,7 @@ function listingXml(
           <ausstatt_beschr>${cdata(texts.equipment)}</ausstatt_beschr>
           <objektbeschreibung>${cdata(texts.description)}</objektbeschreibung>
           <sonstige_angaben>${cdata(texts.other)}</sonstige_angaben>
+          <user_defined_simplefield feldname="Energieklasse">${cdata(projecting.energyClass)}</user_defined_simplefield>
           <user_defined_simplefield feldname="Anmerkung">${cdata(FIXED_ANNOTATION_TEXT)}</user_defined_simplefield>
           <user_defined_simplefield feldname="Allgemeine Geschäftsbedingungen">${cdata(FIXED_TERMS_TEXT)}</user_defined_simplefield>
           <user_defined_simplefield feldname="Freier Textblock für Empfehlungen">${cdata(FIXED_RECOMMENDATION_TEXT)}</user_defined_simplefield>

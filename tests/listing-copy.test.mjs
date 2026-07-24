@@ -5,6 +5,7 @@ import {
   buildListingHeadline,
   enforceListingCopy,
   fillMissingListingCopy,
+  fillMissingProjectingDefaults,
   FIXED_ANNOTATION_TEXT,
   FIXED_DESCRIPTION_CTA,
   FIXED_EQUIPMENT_TEXT,
@@ -64,6 +65,8 @@ test("fills empty existing text fields without overwriting usable dynamic copy",
 
 test("keeps the immoprofessional defaults and legal copy explicit", () => {
   assert.deepEqual(IMMOPROFESSIONAL_DEFAULTS, {
+    equipmentQuality: "GEHOBEN",
+    constructionPhase: "PROJEKTIERT",
     attic: true,
     guestWc: true,
     gardenUse: true,
@@ -73,6 +76,8 @@ test("keeps the immoprofessional defaults and legal copy explicit", () => {
     kfw40: true,
     kfw55: true,
     energyClass: "A++",
+    commissionRequired: false,
+    energyCertificateClass: "A+",
     fittedKitchen: true,
     openKitchen: true,
     shower: true,
@@ -83,4 +88,40 @@ test("keeps the immoprofessional defaults and legal copy explicit", () => {
   assert.match(FIXED_ANNOTATION_TEXT, /Informationenbezüglich des Grundstückes/);
   assert.match(FIXED_TERMS_TEXT, /Kenntnis und Ihr Einverständnis/);
   assert.match(FIXED_RECOMMENDATION_TEXT, /HEUN-Finanz/);
+});
+
+test("fills only missing projecting defaults and preserves explicit user values", () => {
+  assert.deepEqual(fillMissingProjectingDefaults({
+    equipmentQuality: "keine Angabe",
+    constructionPhase: "",
+    underfloorHeating: false,
+    airSourceHeatPump: false,
+    kfw40: false,
+    kfw55: true,
+    energyClass: "B",
+    commissionRequired: true,
+    energyCertificateClass: "C",
+  }), {
+    equipmentQuality: "GEHOBEN",
+    constructionPhase: "PROJEKTIERT",
+    underfloorHeating: false,
+    airSourceHeatPump: false,
+    kfw40: false,
+    kfw55: true,
+    energyClass: "B",
+    commissionRequired: true,
+    energyCertificateClass: "C",
+  });
+
+  assert.deepEqual(fillMissingProjectingDefaults(), {
+    equipmentQuality: "GEHOBEN",
+    constructionPhase: "PROJEKTIERT",
+    underfloorHeating: true,
+    airSourceHeatPump: true,
+    kfw40: true,
+    kfw55: true,
+    energyClass: "A++",
+    commissionRequired: false,
+    energyCertificateClass: "A+",
+  });
 });

@@ -83,6 +83,18 @@ export type ListingTexts = {
   other: string;
 };
 
+export type ProjectingSettings = {
+  equipmentQuality?: string;
+  constructionPhase?: string;
+  underfloorHeating?: boolean;
+  airSourceHeatPump?: boolean;
+  kfw40?: boolean;
+  kfw55?: boolean;
+  energyClass?: string;
+  commissionRequired?: boolean;
+  energyCertificateClass?: string;
+};
+
 export type GeneratedListing = {
   id: string;
   externalId: string;
@@ -91,6 +103,7 @@ export type GeneratedListing = {
   price: number;
   texts: ListingTexts;
   version: number;
+  projectingSettings?: ProjectingSettings;
 };
 
 export type ProviderSettings = {

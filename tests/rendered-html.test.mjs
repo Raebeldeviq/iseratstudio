@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { APP_VERSION } from "../app/lib/app-version.mjs";
+
 async function render() {
   const serverUrl = new URL("../dist/server/ssr/index.js", import.meta.url);
   serverUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
@@ -16,6 +18,6 @@ test("renders the isolated Fabian&Pascal studio shell", async () => {
   const html = await response.text();
   assert.match(html, /<title>Fabian(?:&|&amp;)Pascal Inseratestudio<\/title>/i);
   assert.match(html, /Fabian(?:&|&amp;)Pascal Inseratestudio wird vorbereitet/i);
-  assert.match(html, /Geöffnete InseratStudio-Version 0\.9\.4/i);
+  assert.ok(html.includes(`Geöffnete InseratStudio-Version ${APP_VERSION}`));
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/i);
 });

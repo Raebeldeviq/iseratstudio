@@ -95,19 +95,22 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
   };
   const xml = buildOpenImmoXml(input);
 
-  assert.match(xml, /senderversion="0\.9\.4"/);
+  assert.match(xml, /senderversion="0\.9\.5"/);
   assert.match(xml, /<openimmo_obid>FPI-TEST-1<\/openimmo_obid>/);
   assert.match(xml, /<aktion aktionart="CHANGE" timestamp="[^"]+" \/>/);
   assert.match(xml, /<bad dusche="true" wanne="true" fenster="true" \/>/);
   assert.match(xml, /<kueche ebk="true" offen="true" \/>/);
+  assert.match(xml, /<ausstatt_kategorie WERTIGKEIT="GEHOBEN" \/>/);
   assert.match(xml, /<heizungsart fussboden="true" \/>/);
   assert.match(xml, /<befeuerung elektro="true" luftwp="true" \/>/);
   assert.match(xml, /<gartennutzung>true<\/gartennutzung>/);
   assert.match(xml, /<energietyp kfw40="true" kfw55="true" \/>/);
   assert.match(xml, /<dachboden>true<\/dachboden>/);
   assert.match(xml, /<gaestewc>true<\/gaestewc>/);
-  assert.match(xml, /<wertklasse>A\+\+<\/wertklasse>/);
-  assert.match(xml, /<provisionspflichtig>true<\/provisionspflichtig>/);
+  assert.match(xml, /<zustand zustand_art="PROJEKTIERT" \/>/);
+  assert.match(xml, /<wertklasse>A\+<\/wertklasse>/);
+  assert.match(xml, /<provisionspflichtig>false<\/provisionspflichtig>/);
+  assert.match(xml, /<user_defined_simplefield feldname="Energieklasse"><!\[CDATA\[A\+\+\]\]><\/user_defined_simplefield>/);
   assert.ok(xml.includes(FIXED_PROVISION_TEXT));
   assert.ok(xml.includes(FIXED_EQUIPMENT_TEXT));
   assert.ok(xml.includes(FIXED_OTHER_TEXT));
@@ -122,6 +125,91 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
   const packageResult = await buildImportPackage(input);
   assert.match(packageResult.filename, /testprojekt-testhaus-fpi-test-1-\d{4}-\d{2}-\d{2}\.zip/);
   assert.deepEqual(validateImportPackage(input), []);
+});
+
+test("does not overwrite explicit projecting values during export", () => {
+  const input = {
+    project: {
+      street: "Teststraße",
+      houseNumber: "1",
+      zip: "15732",
+      city: "Schulzendorf",
+      district: "",
+      plotArea: 600,
+      name: "Bestehendes Projekt",
+    },
+    listings: [{
+      id: "listing-explicit-projecting-values",
+      externalId: "FPI-EXPLICIT-VALUES",
+      templateId: "house-explicit-projecting-values",
+      templateName: "Bestandshaus",
+      price: 500000,
+      version: 1,
+      projectingSettings: {
+        equipmentQuality: "LUXUS",
+        constructionPhase: "ERSTBEZUG",
+        underfloorHeating: false,
+        airSourceHeatPump: false,
+        kfw40: false,
+        kfw55: false,
+        energyClass: "B",
+        commissionRequired: true,
+        energyCertificateClass: "C",
+      },
+      texts: {
+        title: "Vorhandener Titel",
+        description: "Vorhandene Beschreibung",
+        equipment: "Vorhandene Ausstattung",
+        location: "Vorhandene Lage",
+        other: "Vorhandenes Sonstiges",
+      },
+    }],
+    houses: [{
+      id: "house-explicit-projecting-values",
+      name: "Bestandshaus",
+      houseType: "Einfamilienhaus",
+      livingArea: 150,
+      rooms: 5,
+      bedrooms: 3,
+      bathrooms: 2,
+      floors: 2,
+      housePrice: 400000,
+      constructionYear: 2027,
+      energyDemand: 18,
+      energyClass: "B",
+      heatingType: "Radiatoren",
+      energySource: "Gas",
+      architecture: "",
+      equipmentHighlights: "",
+      useStandardPackage: true,
+      images: Array.from({ length: 4 }, (_, index) => ({
+        id: `explicit-image-${index + 1}`,
+        name: `explicit-image-${index + 1}.jpg`,
+        mimeType: "image/jpeg",
+        dataUrl: "data:image/jpeg;base64,/9j/2Q==",
+        caption: `Bild ${index + 1}`,
+        isFloorplan: false,
+      })),
+    }],
+    provider: {
+      providerNumber: "30435",
+      company: "Testfirma",
+      firstName: "Max",
+      lastName: "Mustermann",
+      email: "test@example.com",
+      phone: "0000",
+    },
+  };
+
+  const xml = buildOpenImmoXml(input);
+  assert.match(xml, /<ausstatt_kategorie WERTIGKEIT="LUXUS" \/>/);
+  assert.match(xml, /<heizungsart fussboden="false" \/>/);
+  assert.match(xml, /<befeuerung elektro="true" luftwp="false" \/>/);
+  assert.match(xml, /<energietyp kfw40="false" kfw55="false" \/>/);
+  assert.match(xml, /<zustand zustand_art="ERSTBEZUG" \/>/);
+  assert.match(xml, /<wertklasse>C<\/wertklasse>/);
+  assert.match(xml, /<provisionspflichtig>true<\/provisionspflichtig>/);
+  assert.match(xml, /<user_defined_simplefield feldname="Energieklasse"><!\[CDATA\[B\]\]><\/user_defined_simplefield>/);
 });
 
 test("rejects malformed project and unsupported image data before packaging", () => {

@@ -1,5 +1,44 @@
 # Änderungsprotokoll
 
+## Ergänzende Projektierungsstandardwerte – 24. Juli 2026
+
+### Report
+
+- Die Standardwerte für Immoprofessional-Projektierungen zentral in
+  `IMMOPROFESSIONAL_DEFAULTS` zusammengeführt und eine gemeinsame,
+  ergänzende Normalisierung ergänzt.
+- Neue und automatisch erzeugte Inserat-Projektierungen erhalten gehobene
+  Ausstattungsqualität, den Status `PROJEKTIERT`, Fußbodenheizung,
+  Luft-Wärmepumpe, KfW40 und KfW55, Energieklasse A++, keine
+  Provisionspflicht sowie die GEG-2022-Effizienzklasse A+.
+- Bereits gespeicherte Projektierungen werden beim Laden nur vervollständigt.
+  Leere Werte und „keine Angabe“ erhalten den Standard; vorhandene Texte sowie
+  explizite Wahr-/Falsch-Werte bleiben unverändert.
+- Den OpenImmo-Export auf dieselbe Normalisierung umgestellt. Die
+  GEG-Effizienzklasse wird standardkonform als `energiepass/wertklasse`
+  übertragen; die separate Immoprofessional-Energieklasse bleibt davon
+  unabhängig. Anwendungsversion auf 0.9.5 angehoben.
+
+### Begründung
+
+Eine einzige Konfiguration verhindert abweichende Werte zwischen Erzeugung,
+lokaler Wiederherstellung und Export. Die Einstellungen liegen je Inserat,
+damit künftig unterschiedliche Benutzerwerte innerhalb desselben
+Grundstücksprojekts erhalten bleiben können. Die erneute Ergänzung unmittelbar
+vor dem Export schützt zugleich ältere lokale Sicherungen mit noch fehlenden
+Feldern.
+
+### Hürden und Risiken
+
+- Immoprofessional unterscheidet die allgemeine Energieklasse A++ von der
+  Energieeffizienzklasse des Energieausweises. Deshalb wird A++ als benanntes
+  Immoprofessional-Zusatzfeld und A+ im OpenImmo-Energiepass ausgegeben.
+- Der bestehende feste Courtage-Hinweis bleibt unverändert, obwohl
+  `provisionspflichtig` bei fehlender Angabe nun wie gefordert auf `false`
+  gesetzt wird. Damit wird kein bisher vorgeschriebener Freitext verändert.
+- Alle übrigen Energieausweisfelder, Ausstattungsmerkmale, Texte und Abläufe
+  bleiben technisch unverändert.
+
 ## Dauerhaft sichtbare Versionsanzeige – 23. Juli 2026
 
 ### Report

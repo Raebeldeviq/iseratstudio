@@ -50,6 +50,8 @@ Gute Beratung ist der Anfang von Allem. Deshalb analysieren wir gemeinsam mit eu
 Interessiert? Kontaktiere mich und vereinbare noch heute einen kostenlosen und unverbindlichen Beratungstermin.`;
 
 export const IMMOPROFESSIONAL_DEFAULTS = Object.freeze({
+  equipmentQuality: "GEHOBEN",
+  constructionPhase: "PROJEKTIERT",
   attic: true,
   guestWc: true,
   gardenUse: true,
@@ -59,12 +61,46 @@ export const IMMOPROFESSIONAL_DEFAULTS = Object.freeze({
   kfw40: true,
   kfw55: true,
   energyClass: "A++",
+  commissionRequired: false,
+  energyCertificateClass: "A+",
   fittedKitchen: true,
   openKitchen: true,
   shower: true,
   bathtub: true,
   bathroomWindow: true,
 });
+
+export function isMissingProjectingValue(value) {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLocaleLowerCase("de-DE")
+    .replace(/[_-]+/gu, " ")
+    .replace(/\s+/gu, " ");
+  return !normalized || normalized === "keine angabe";
+}
+
+export function fillMissingProjectingDefaults(values = {}) {
+  const source = values && typeof values === "object" ? values : {};
+  const choice = (key) => isMissingProjectingValue(source[key])
+    ? IMMOPROFESSIONAL_DEFAULTS[key]
+    : String(source[key]).trim();
+  const flag = (key) => typeof source[key] === "boolean"
+    ? source[key]
+    : IMMOPROFESSIONAL_DEFAULTS[key];
+
+  return {
+    ...source,
+    equipmentQuality: choice("equipmentQuality"),
+    constructionPhase: choice("constructionPhase"),
+    underfloorHeating: flag("underfloorHeating"),
+    airSourceHeatPump: flag("airSourceHeatPump"),
+    kfw40: flag("kfw40"),
+    kfw55: flag("kfw55"),
+    energyClass: choice("energyClass"),
+    commissionRequired: flag("commissionRequired"),
+    energyCertificateClass: choice("energyCertificateClass"),
+  };
+}
 
 const HEADLINE_OPENINGS = Object.freeze([
   "Dein sicheres Zuhause",

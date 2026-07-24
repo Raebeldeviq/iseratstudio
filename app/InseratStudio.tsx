@@ -18,6 +18,7 @@ import {
 import { resolveHousePrice } from "../house-price-catalog.mjs";
 import { IMMOPROFESSIONAL_FTPS_HOST } from "../ftp-config.mjs";
 import {
+  fillMissingProjectingDefaults,
   fillMissingListingCopy,
   FIXED_ANNOTATION_TEXT,
   FIXED_DESCRIPTION_CTA,
@@ -27,6 +28,7 @@ import {
   FIXED_RECOMMENDATION_TEXT,
   FIXED_TERMS_TEXT,
   IMMOPROFESSIONAL_DEFAULTS,
+  isMissingProjectingValue,
 } from "../listing-copy.mjs";
 import { parseAddressWorkbookRows } from "./lib/address-import";
 import { APP_VERSION } from "./lib/app-version.mjs";
@@ -184,9 +186,15 @@ const initialState = (): StudioState => ({
 function normalizeMandatoryListingStandards(state: StudioState): StudioState {
   const houses = state.houses.map((house) => ({
     ...house,
-    energyClass: IMMOPROFESSIONAL_DEFAULTS.energyClass,
-    heatingType: "Fußbodenheizung mit Luft-Wasser-Wärmepumpe",
-    energySource: "Umweltwärme und Strom",
+    energyClass: isMissingProjectingValue(house.energyClass)
+      ? IMMOPROFESSIONAL_DEFAULTS.energyClass
+      : house.energyClass,
+    heatingType: isMissingProjectingValue(house.heatingType)
+      ? "Fußbodenheizung mit Luft-Wasser-Wärmepumpe"
+      : house.heatingType,
+    energySource: isMissingProjectingValue(house.energySource)
+      ? "Umweltwärme und Strom"
+      : house.energySource,
   }));
   const houseById = new Map(houses.map((house) => [house.id, house]));
   return {
@@ -205,6 +213,7 @@ function normalizeMandatoryListingStandards(state: StudioState): StudioState {
         );
         return {
           ...listing,
+          projectingSettings: fillMissingProjectingDefaults(listing.projectingSettings),
           texts: fillMissingListingCopy(
             listing.texts,
             fallbackTexts,
@@ -1625,6 +1634,7 @@ export default function InseratStudio() {
         price: totalPrice(house, projectSnapshot),
         texts,
         version,
+        projectingSettings: fillMissingProjectingDefaults(previous?.projectingSettings),
       }));
 
       setState((current) => ({

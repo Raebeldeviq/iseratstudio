@@ -182,6 +182,13 @@ gekennzeichnet und werden beim OpenImmo-Export erneut erzwungen. Provision wird
 OpenImmo-`user_defined_simplefield` im Freitextblock mit ihren sichtbaren
 Feldbezeichnungen ausgegeben.
 
+Projektierungsmerkmale werden je Inserat nur bei fehlenden Werten ergänzt. Die
+zentrale Konfiguration setzt gehobene Ausstattungsqualität, `PROJEKTIERT`,
+Fußbodenheizung, Luft-Wärmepumpe, KfW40 und KfW55, Energieklasse A++,
+`provisionspflichtig=false` sowie die Energieausweis-Effizienzklasse A+.
+Explizite Benutzerwerte einschließlich `false` bleiben erhalten. Die übrigen
+Energieausweisfelder werden nicht verändert.
+
 ## FTPS-Verbindung
 
 Der zertifikatskonforme FTPS-Host ist `server22.immoprofessional.eu`. Die
