@@ -532,6 +532,7 @@ export default function InseratStudio() {
   const [replacingAllImageCaptions, setReplacingAllImageCaptions] = useState(false);
   const [openAiKeyVerified, setOpenAiKeyVerified] = useState(false);
   const [isPrimaryTab, setIsPrimaryTab] = useState<boolean | null>(null);
+  const [promotionPoolOpen, setPromotionPoolOpen] = useState(false);
   const [mediaLibraryOpen, setMediaLibraryOpen] = useState(false);
   const [mediaLibraryItems, setMediaLibraryItems] = useState<MediaLibraryItem[]>([]);
   const [mediaLibraryGroups, setMediaLibraryGroups] = useState<MediaLibraryGroup[]>([]);
@@ -2530,7 +2531,7 @@ export default function InseratStudio() {
 
       {tab === "houses" ? (
         <>
-        <section className="workspace promotion-card">
+        <section className={`workspace promotion-card ${promotionPoolOpen ? "expanded" : "collapsed"}`}>
           <div className="promotion-copy">
             <span className="eyebrow">Zentraler Aktionsbild-Pool</span>
             <h2>Bis zu {MAX_PROMOTION_IMAGES} Aktionsbilder</h2>
@@ -2538,49 +2539,62 @@ export default function InseratStudio() {
           </div>
           <div className="promotion-pool-header">
             <b>{promotionPool(state).length}/{MAX_PROMOTION_IMAGES} gespeichert</b>
-            <div className="button-row">
-              <label className={`secondary file-label${promotionPool(state).length >= MAX_PROMOTION_IMAGES ? " disabled" : ""}`}>
-                Aktionsbilder hinzufügen
-                <input
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
-                  multiple
-                  disabled={promotionPool(state).length >= MAX_PROMOTION_IMAGES}
-                  onChange={addPromotionImages}
-                />
-              </label>
-              <button className="primary" disabled={savingHouses} onClick={saveHousesNow}>
-                {savingHouses ? "Wird gespeichert …" : "Aktionsbild-Pool speichern"}
-              </button>
-            </div>
+            <button
+              className="secondary promotion-pool-toggle"
+              type="button"
+              aria-expanded={promotionPoolOpen}
+              aria-controls="promotion-pool-content"
+              onClick={() => setPromotionPoolOpen((open) => !open)}
+            >
+              {promotionPoolOpen ? "Aktionspool schließen" : "Aktionspool öffnen"}
+            </button>
           </div>
-          {promotionPool(state).length ? (
-            <div className="promotion-pool-grid">
-              {promotionPool(state).map((image, index) => (
-                <article className="promotion-pool-item" key={image.id}>
-                  <div className="promotion-pool-image">
-                    <span>{index + 1}</span>
-                    <img src={image.dataUrl} alt={image.caption || image.name} />
-                  </div>
-                  <label className="image-caption">
-                    <span>Bildtext im Inserat</span>
-                    <input
-                      value={image.caption}
-                      onChange={(event) => updatePromotionImage(image.id, { caption: event.target.value })}
-                    />
-                  </label>
-                  <button className="text-danger" onClick={() => removePromotionImage(image.id)}>Entfernen</button>
-                </article>
-              ))}
+          {promotionPoolOpen ? (
+            <div className="promotion-pool-content" id="promotion-pool-content">
+              <div className="button-row promotion-pool-actions">
+                <label className={`secondary file-label${promotionPool(state).length >= MAX_PROMOTION_IMAGES ? " disabled" : ""}`}>
+                  Aktionsbilder hinzufügen
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    multiple
+                    disabled={promotionPool(state).length >= MAX_PROMOTION_IMAGES}
+                    onChange={addPromotionImages}
+                  />
+                </label>
+                <button className="primary" disabled={savingHouses} onClick={saveHousesNow}>
+                  {savingHouses ? "Wird gespeichert …" : "Aktionsbild-Pool speichern"}
+                </button>
+              </div>
+              {promotionPool(state).length ? (
+                <div className="promotion-pool-grid">
+                  {promotionPool(state).map((image, index) => (
+                    <article className="promotion-pool-item" key={image.id}>
+                      <div className="promotion-pool-image">
+                        <span>{index + 1}</span>
+                        <img src={image.dataUrl} alt={image.caption || image.name} />
+                      </div>
+                      <label className="image-caption">
+                        <span>Bildtext im Inserat</span>
+                        <input
+                          value={image.caption}
+                          onChange={(event) => updatePromotionImage(image.id, { caption: event.target.value })}
+                        />
+                      </label>
+                      <button className="text-danger" onClick={() => removePromotionImage(image.id)}>Entfernen</button>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <label className="promotion-upload">
+                  <span>+</span>
+                  <b>Aktionsbilder einfügen</b>
+                  <small>Mehrfachauswahl möglich · JPEG, PNG oder WebP</small>
+                  <input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={addPromotionImages} />
+                </label>
+              )}
             </div>
-          ) : (
-            <label className="promotion-upload">
-              <span>+</span>
-              <b>Aktionsbilder einfügen</b>
-              <small>Mehrfachauswahl möglich · JPEG, PNG oder WebP</small>
-              <input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={addPromotionImages} />
-            </label>
-          )}
+          ) : null}
         </section>
         <section className="workspace two-column">
           <aside className="rail-card">
