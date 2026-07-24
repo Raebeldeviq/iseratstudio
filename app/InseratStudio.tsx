@@ -2672,7 +2672,7 @@ export default function InseratStudio() {
             {activeHousePriceMatch ? (
               <div className="price-catalog-card">
                 <div>
-                  <span className="eyebrow">Pascals Preisliste</span>
+                  <span className="eyebrow">Preisliste</span>
                   <b>{activeHousePriceMatch.label}: {euro(activeHousePriceMatch.price)}</b>
                   <small>
                     {activeHouse.housePrice === activeHousePriceMatch.price
@@ -2687,7 +2687,7 @@ export default function InseratStudio() {
                     onClick={() => {
                       updateHouse({ housePrice: activeHousePriceMatch.price });
                       setNotice(
-                        `${activeHousePriceMatch.label}: ${euro(activeHousePriceMatch.price)} wurde bewusst aus Pascals Preisliste übernommen.`,
+                        `${activeHousePriceMatch.label}: ${euro(activeHousePriceMatch.price)} wurde bewusst aus der Preisliste übernommen.`,
                       );
                     }}
                   >
