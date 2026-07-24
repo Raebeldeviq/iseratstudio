@@ -20,6 +20,7 @@ type PackageInput = {
   houses: HouseTemplate[];
   provider: ProviderSettings;
   promotionImages?: HouseImage[];
+  portalPublicationEnabled?: boolean;
   // Legacy fields keep older local backups importable.
   promotionImage?: HouseImage | null;
   promotionImageEnabled?: boolean;
@@ -124,6 +125,7 @@ function listingXml(
   images: HouseImage[],
   provider: ProviderSettings,
   timestamp: string,
+  portalPublicationEnabled: boolean,
 ): string {
   const currency = new Intl.NumberFormat("de-DE", {
     useGrouping: false,
@@ -210,7 +212,7 @@ function listingXml(
           <openimmo_obid>${xml(listing.externalId)}</openimmo_obid>
           <kennung_ursprung>${xml(listing.externalId)}</kennung_ursprung>
           <stand_vom>${xml(timestamp)}</stand_vom>
-          <weitergabe_generell>false</weitergabe_generell>
+          <weitergabe_generell>${portalPublicationEnabled}</weitergabe_generell>
           <sprache>de</sprache>
         </verwaltung_techn>
       </immobilie>`;
@@ -218,12 +220,21 @@ function listingXml(
 
 export function buildOpenImmoXml(input: PackageInput): string {
   const { project, listings, houses, provider } = input;
+  const portalPublicationEnabled = input.portalPublicationEnabled === true;
   const timestamp = new Date().toISOString();
   const objects = listings
     .map((listing) => {
       const house = houses.find((item) => item.id === listing.templateId);
       if (!house) throw new Error(`Haustyp ${listing.templateName} fehlt.`);
-      return listingXml(project, listing, house, listingImages(input, house, listing), provider, timestamp);
+      return listingXml(
+        project,
+        listing,
+        house,
+        listingImages(input, house, listing),
+        provider,
+        timestamp,
+        portalPublicationEnabled,
+      );
     })
     .join("");
 

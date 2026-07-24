@@ -7,7 +7,9 @@ import {
   createOpenAiRequest,
   extractImageCaptions,
   extractListingTexts,
+  generateAiListing,
   looksLikeOpenAiApiKey,
+  normalizeOpenAiUsage,
   validateEditorialQuality,
   validateHeadlineDiversity,
   validateListingTexts,
@@ -32,6 +34,28 @@ const validTexts = {
   equipment: longText("Die geplante Ausstattung kombiniert eine moderne Wärmepumpe, komfortable Flächen und individuell zu vereinbarende Materialien gemäß Bau- und Leistungsbeschreibung.", 1550),
   location: longText("Das Grundstück liegt in Schulzendorf und bietet einen stimmigen Rahmen für das geplante Zuhause; alle weiteren Details werden anhand bestätigter Standortdaten beurteilt.", 550),
   other: longText("Das Haus ist projektiert; maßgeblich sind die konkrete Planung, die Grundstücksprüfung und die individuell vereinbarte Bau- und Leistungsbeschreibung.", 600),
+};
+
+const repeatParagraph = (opening, minimum) => {
+  const sentence = "Die Planung verbindet angenehme Proportionen mit alltagstauglichen Wegen und flexibel nutzbaren Bereichen.";
+  let value = opening;
+  while (value.length < minimum) value += ` ${sentence}`;
+  return value;
+};
+
+const validGeneratedTexts = {
+  title: "Die Couch bekommt ein Zimmer",
+  description: [
+    repeatParagraph("Morgens beginnt der Tag entspannt und mit Platz für alle.", 330),
+    repeatParagraph("Im Mittelpunkt stehen gemeinsame Stunden und kurze Wege.", 330),
+    repeatParagraph("Ruhige Bereiche schaffen Raum für Arbeit und Erholung.", 330),
+    repeatParagraph("Persönliche Wünsche fließen in die weitere Abstimmung ein.", 330),
+  ].join("\n\n"),
+  location: [
+    repeatParagraph("Schulzendorf bietet den passenden Rahmen für den neuen Lebensmittelpunkt.", 190),
+    repeatParagraph("Der Standort wird anhand der bestätigten Grundstücksdaten sorgfältig eingeordnet.", 190),
+    repeatParagraph("Alle Einzelheiten zur Umgebung werden im persönlichen Gespräch nachvollziehbar abgestimmt.", 190),
+  ].join("\n\n"),
 };
 
 test("removes the exact house number before building the AI source data", () => {
@@ -227,6 +251,126 @@ test("extracts structured text from a Responses API output block", () => {
     output: [{ content: [{ type: "output_text", text: JSON.stringify(validTexts) }] }],
   };
   assert.deepEqual(extractListingTexts(response), validTexts);
+});
+
+test("normalizes and aggregates Responses API token usage across quality attempts", async () => {
+  assert.deepEqual(normalizeOpenAiUsage({
+    input_tokens: 12.9,
+    output_tokens: "34",
+  }), {
+    inputTokens: 12,
+    outputTokens: 34,
+    requestCount: 1,
+  });
+
+  const originalFetch = globalThis.fetch;
+  const responses = [
+    {
+      output_text: JSON.stringify({ ...validGeneratedTexts, title: "Zu kurz" }),
+      usage: { input_tokens: 100, output_tokens: 200 },
+    },
+    {
+      output_text: JSON.stringify(validGeneratedTexts),
+      usage: { input_tokens: 300, output_tokens: 400 },
+    },
+  ];
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => responses.shift(),
+  });
+
+  try {
+    const result = await generateAiListing({
+      apiKey: "sk-proj-123456789012345678901234567890",
+      model: "gpt-5.6-luna",
+      project: {},
+      house: {},
+    });
+    assert.equal(result.attempts, 2);
+    assert.deepEqual(result.usage, {
+      inputTokens: 400,
+      outputTokens: 600,
+      requestCount: 2,
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("carries accumulated token usage and model on final generation errors", async () => {
+  const originalFetch = globalThis.fetch;
+  const responses = [
+    {
+      output_text: JSON.stringify({ ...validGeneratedTexts, title: "Zu kurz" }),
+      usage: { input_tokens: 50, output_tokens: 60 },
+    },
+    {
+      output_text: JSON.stringify({ ...validGeneratedTexts, title: "Noch kurz" }),
+      usage: { input_tokens: 70, output_tokens: 80 },
+    },
+  ];
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => responses.shift(),
+  });
+
+  try {
+    await assert.rejects(
+      generateAiListing({
+        apiKey: "sk-proj-123456789012345678901234567890",
+        model: "gpt-5.6-terra",
+        project: {},
+        house: {},
+      }),
+      (error) => {
+        assert.equal(error.model, "gpt-5.6-terra");
+        assert.deepEqual(error.usage, {
+          inputTokens: 120,
+          outputTokens: 140,
+          requestCount: 2,
+        });
+        return true;
+      },
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("preserves usage from an unsuccessful Responses API response", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 429,
+    json: async () => ({
+      error: { message: "Rate limit" },
+      usage: { input_tokens: 25, output_tokens: 5 },
+    }),
+  });
+
+  try {
+    await assert.rejects(
+      generateAiListing({
+        apiKey: "sk-proj-123456789012345678901234567890",
+        project: {},
+        house: {},
+      }),
+      (error) => {
+        assert.equal(error.httpStatus, 429);
+        assert.equal(error.model, "gpt-5.6-luna");
+        assert.deepEqual(error.usage, {
+          inputTokens: 25,
+          outputTokens: 5,
+          requestCount: 1,
+        });
+        return true;
+      },
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("rejects a new version that repeats the previous listing", () => {

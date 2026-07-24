@@ -574,6 +574,35 @@ function apiErrorMessage(status, body) {
   return detail ? `OpenAI hat die Anfrage abgelehnt: ${detail}` : `OpenAI-Anfrage fehlgeschlagen (HTTP ${status}).`;
 }
 
+function tokenCount(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : 0;
+}
+
+export function normalizeOpenAiUsage(value) {
+  return {
+    inputTokens: tokenCount(value?.input_tokens),
+    outputTokens: tokenCount(value?.output_tokens),
+    requestCount: 1,
+  };
+}
+
+function emptyOpenAiUsage() {
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    requestCount: 0,
+  };
+}
+
+function aggregateOpenAiUsage(...values) {
+  return values.reduce((total, value) => ({
+    inputTokens: total.inputTokens + tokenCount(value?.inputTokens),
+    outputTokens: total.outputTokens + tokenCount(value?.outputTokens),
+    requestCount: total.requestCount + tokenCount(value?.requestCount),
+  }), emptyOpenAiUsage());
+}
+
 async function requestOnce(apiKey, input, retryFeedback) {
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
@@ -585,12 +614,22 @@ async function requestOnce(apiKey, input, retryFeedback) {
     signal: AbortSignal.timeout(180_000),
   });
   const body = await response.json().catch(() => ({}));
+  const usage = normalizeOpenAiUsage(body?.usage);
   if (!response.ok) {
     const error = new Error(apiErrorMessage(response.status, body));
     error.httpStatus = response.status === 401 || response.status === 403 || response.status === 429 ? response.status : 502;
+    error.usage = usage;
     throw error;
   }
-  return extractListingTexts(body);
+  try {
+    return {
+      texts: extractListingTexts(body),
+      usage,
+    };
+  } catch (error) {
+    if (error && typeof error === "object") error.usage = usage;
+    throw error;
+  }
 }
 
 async function requestImageCaptionsOnce(apiKey, input) {
@@ -614,20 +653,37 @@ async function requestImageCaptionsOnce(apiKey, input) {
 
 export async function generateAiListing(input = {}) {
   const apiKey = cleanString(input.apiKey, 400);
+  const model = cleanString(input.model, 100) || DEFAULT_MODEL;
   if (!looksLikeOpenAiApiKey(apiKey)) {
     const error = new Error("Der gespeicherte Wert ist kein OpenAI API-Schlüssel. Bitte einen aktiven Schlüssel einfügen, der mit sk- beginnt.");
     error.httpStatus = 400;
+    error.model = model;
+    error.usage = emptyOpenAiUsage();
     throw error;
   }
   if (input.model && !ALLOWED_MODELS.has(input.model)) {
     const error = new Error("Das ausgewählte KI-Modell wird nicht unterstützt.");
     error.httpStatus = 400;
+    error.model = model;
+    error.usage = emptyOpenAiUsage();
     throw error;
   }
 
   let feedback = [];
+  let usage = emptyOpenAiUsage();
   for (let attempt = 1; attempt <= 2; attempt += 1) {
-    const rawTexts = await requestOnce(apiKey, input, feedback);
+    let result;
+    try {
+      result = await requestOnce(apiKey, input, feedback);
+    } catch (error) {
+      if (error && typeof error === "object") {
+        error.model = model;
+        error.usage = aggregateOpenAiUsage(usage, error.usage);
+      }
+      throw error;
+    }
+    usage = aggregateOpenAiUsage(usage, result.usage);
+    const rawTexts = result.texts;
     const texts = enforceListingCopy(rawTexts, { provider: input.provider });
     feedback = [
       ...validateListingTexts(texts, input.house),
@@ -641,15 +697,18 @@ export async function generateAiListing(input = {}) {
       return {
         texts: Object.fromEntries(TEXT_FIELDS.map((field) => [field, texts[field].trim()])),
         writingProfile: sourceData.writingDirection.bodyProfileId,
-        model: input.model || DEFAULT_MODEL,
+        model,
         qualityChecked: true,
         attempts: attempt,
+        usage,
       };
     }
   }
 
   const error = new Error(`Die KI-Fassung hat die Qualitätsprüfung nicht bestanden: ${feedback.join(" ")}`);
   error.httpStatus = 422;
+  error.model = model;
+  error.usage = usage;
   throw error;
 }
 

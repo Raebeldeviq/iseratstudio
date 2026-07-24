@@ -91,6 +91,8 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
   assert.match(xml, new RegExp(`senderversion="${APP_VERSION.replaceAll(".", "\\.")}"`));
   assert.match(xml, /<openimmo_obid>FPI-TEST-1<\/openimmo_obid>/);
   assert.match(xml, /<aktion aktionart="CHANGE" timestamp="[^"]+" \/>/);
+  assert.match(xml, /<objektadresse_freigeben>false<\/objektadresse_freigeben>/);
+  assert.match(xml, /<weitergabe_generell>false<\/weitergabe_generell>/);
   assert.match(xml, /<ausstatt_kategorie WERTIGKEIT="GEHOBEN" \/>/);
   assert.match(xml, /<bad dusche="true" wanne="true" fenster="true" \/>/);
   assert.match(xml, /<kueche ebk="true" offen="true" \/>/);
@@ -102,6 +104,13 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
   assert.match(xml, /<provisionspflichtig>false<\/provisionspflichtig>/);
   assert.match(xml, /<user_defined_simplefield feldname="Energieklasse"><!\[CDATA\[A\+\+\]\]><\/user_defined_simplefield>/);
   assert.ok(xml.indexOf("Aktuelles Angebot für dein neues Zuhause") < xml.indexOf("Eigenes Hausbild"));
+
+  const publicationXml = buildOpenImmoXml({
+    ...input,
+    portalPublicationEnabled: true,
+  });
+  assert.match(publicationXml, /<weitergabe_generell>true<\/weitergabe_generell>/);
+  assert.match(publicationXml, /<objektadresse_freigeben>false<\/objektadresse_freigeben>/);
 
   const assignedInput = {
     ...input,

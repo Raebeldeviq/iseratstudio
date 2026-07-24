@@ -4,6 +4,10 @@
 import { ChangeEvent, useEffect, useRef, useState } from "react";
 import { readSheet } from "read-excel-file/browser";
 import appPackage from "../package.json";
+import { AddressBookTable } from "./components/AddressBookTable";
+import { PreflightPanel } from "./components/PreflightPanel";
+import { SevenDayWorkCenter } from "./components/SevenDayWorkCenter";
+import { UploadJobCenter } from "./components/UploadJobCenter";
 import {
   housePriceCatalogEntries,
   resolveHousePrice,
@@ -18,12 +22,27 @@ import {
   isFixedCaptionRole,
   orderHouseImages,
 } from "../image-sequence.mjs";
-import { parseAddressWorkbookRows } from "./lib/address-import";
+import {
+  parseAddressWorkbookRows,
+  replaceAddressWorkbookRows,
+} from "./lib/address-import";
 import { APP_VERSION } from "./lib/app-version.mjs";
 import {
   headlinesAreTooSimilar,
   removePrivateAddressFromHeadline,
 } from "./lib/headline-diversity.js";
+import { buildInventoryWorkbook } from "./lib/inventory-export";
+import {
+  appendJobAttempt,
+  buildUploadRunHistoryEntry,
+  interruptedRun,
+  jobShouldRun,
+  normalizeJobCenterState,
+  replaceTotalSyncListingJob,
+  runCompletionStatus,
+  runJobProgress,
+  upsertUploadRunHistory,
+} from "./lib/job-center";
 import { buildImportPackage } from "./lib/openimmo";
 import {
   MAX_PROMOTED_LISTINGS,
@@ -32,20 +51,28 @@ import {
   randomPromotionAssignments,
   reconcilePromotionAssignments,
 } from "./lib/promotion-images.js";
+import {
+  buildPreflightReport,
+  houseIsReadyForUpload,
+} from "./lib/preflight";
+import { runBoundedProductionPipeline } from "./lib/production-pipeline";
 import { ADDRESS_OWNERS, normalizeProjectOwners, projectOwner } from "./lib/project-owners";
+import { buildRenewalSchedule } from "./lib/renewal-schedule";
 import { totalPrice } from "./lib/text-generator";
 import {
   createTotalSyncRun,
   projectIsReadyForTotalSync,
+  protectedProjectLocationMatches,
   projectsInTotalSyncScope,
   TOTAL_SYNC_LISTINGS_PER_ADDRESS,
   totalSyncCanResume,
-  totalSyncExternalId,
   totalSyncProgress,
 } from "./lib/total-sync";
 import { loadStudioSnapshot, saveStudioState, STORAGE_ID } from "./lib/storage";
 import type {
   AddressOwner,
+  AiModelId,
+  AiTokenUsage,
   GeneratedListing,
   HouseImage,
   HouseTemplate,
@@ -54,13 +81,14 @@ import type {
   ProjectInput,
   ProviderSettings,
   StudioState,
+  TotalSyncAttemptMode,
+  TotalSyncListingJob,
   TotalSyncProjectTask,
   TotalSyncRun,
   TotalSyncScope,
 } from "./types";
 
-type Tab = "houses" | "project" | "preview" | "settings";
-type AiModel = "gpt-5.6-luna" | "gpt-5.6-terra" | "gpt-5.6-sol";
+type Tab = "houses" | "project" | "preview" | "renewal" | "jobs" | "settings";
 type MediaLibraryKind = "house" | "floorplan" | "interior" | "location" | "marketing";
 
 type MediaLibraryItem = {
@@ -77,10 +105,25 @@ type MediaLibraryItem = {
   role?: ImageRole;
   captionLocked?: boolean;
   brandedCover?: boolean;
+  managed?: boolean;
+  bytes?: number;
+  referenceCount?: number;
   imageUrl: string;
 };
 
 type MediaLibraryGroup = { name: string; count: number };
+type MediaLibraryDuplicateGroup = {
+  id: string;
+  group: string;
+  kind: MediaLibraryKind;
+  bytes: number;
+  itemCount: number;
+  duplicateCount: number;
+  recommendedKeepId: string;
+  redundantBytes: number;
+  physicallyReclaimableBytes: number;
+  items: MediaLibraryItem[];
+};
 
 const MIN_HOUSE_IMAGES = 4;
 const MAX_HOUSE_IMAGES = 14;
@@ -93,6 +136,50 @@ const MEDIA_KIND_LABELS: Record<MediaLibraryKind, string> = {
   location: "Standort",
   marketing: "Anzeige",
 };
+
+type UploadFailureOutcome = "failed" | "unknown";
+
+class ListingUploadError extends Error {
+  outcome: UploadFailureOutcome;
+
+  constructor(message: string, outcome: UploadFailureOutcome) {
+    super(message);
+    this.name = "ListingUploadError";
+    this.outcome = outcome;
+  }
+}
+
+type AiUsageError = Error & {
+  status?: number;
+  aiUsage?: AiTokenUsage;
+  stopped?: boolean;
+};
+
+function emptyAiUsage(model: AiModelId): AiTokenUsage {
+  return {
+    model,
+    inputTokens: 0,
+    outputTokens: 0,
+    requestCount: 0,
+  };
+}
+
+function mergeAiUsage(
+  current: AiTokenUsage,
+  value: Partial<AiTokenUsage> | undefined,
+): AiTokenUsage {
+  if (!value) return current;
+  const nonNegativeInteger = (candidate: unknown): number => {
+    const number = Number(candidate);
+    return Number.isFinite(number) && number >= 0 ? Math.floor(number) : 0;
+  };
+  return {
+    model: current.model,
+    inputTokens: current.inputTokens + nonNegativeInteger(value.inputTokens),
+    outputTokens: current.outputTokens + nonNegativeInteger(value.outputTokens),
+    requestCount: current.requestCount + nonNegativeInteger(value.requestCount),
+  };
+}
 
 function looksLikeOpenAiApiKey(value: string): boolean {
   return /^sk-[a-zA-Z0-9_-]{20,}$/.test(value.trim());
@@ -164,6 +251,8 @@ const initialState = (): StudioState => ({
   promotionImages: [],
   promotionImage: null,
   promotionImageEnabled: false,
+  portalPublicationEnabled: false,
+  uploadRunHistory: [],
 });
 
 function promotionPool(state: StudioState): HouseImage[] {
@@ -206,11 +295,32 @@ function euro(value: number): string {
   }).format(value || 0);
 }
 
+function mediaBytes(value: number): string {
+  const bytes = Math.max(0, Number(value) || 0);
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toLocaleString("de-DE", {
+    maximumFractionDigits: 1,
+  })} KB`;
+  return `${(bytes / (1024 * 1024)).toLocaleString("de-DE", {
+    maximumFractionDigits: 1,
+  })} MB`;
+}
+
 function projectSelectionLabel(project: ProjectInput): string {
   const street = [project.street, project.houseNumber].filter(Boolean).join(" ");
   const place = [project.zip, project.city].filter(Boolean).join(" ");
   const address = [street, place].filter(Boolean).join(", ");
   return address ? `${project.name} · ${address}` : project.name;
+}
+
+function collectedProjectHeadlineHistory(project: ProjectInput): string[] {
+  return Array.from(new Set([
+    ...(project.headlineHistory ?? []),
+    ...project.listings.flatMap((listing) => [
+      ...(listing.titleHistory ?? []),
+      listing.texts.title,
+    ]),
+  ].filter(Boolean))).slice(-160);
 }
 
 function localImageCaption(filename: string, isFloorplan: boolean, index: number): string {
@@ -271,6 +381,7 @@ function Field({
   placeholder,
   suffix,
   min,
+  disabled = false,
 }: {
   label: string;
   value: string | number;
@@ -279,6 +390,7 @@ function Field({
   placeholder?: string;
   suffix?: string;
   min?: number;
+  disabled?: boolean;
 }) {
   return (
     <label className="field">
@@ -289,6 +401,7 @@ function Field({
           value={value}
           min={min}
           placeholder={placeholder}
+          disabled={disabled}
           onChange={(event) => onChange(event.target.value)}
         />
         {suffix ? <small>{suffix}</small> : null}
@@ -303,12 +416,14 @@ function TextField({
   onChange,
   placeholder,
   rows = 4,
+  disabled = false,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
   rows?: number;
+  disabled?: boolean;
 }) {
   return (
     <label className="field field-wide">
@@ -317,6 +432,7 @@ function TextField({
         value={value}
         rows={rows}
         placeholder={placeholder}
+        disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
       />
     </label>
@@ -528,7 +644,7 @@ export default function InseratStudio() {
   const [helperOnline, setHelperOnline] = useState(false);
   const [helperNeedsRestart, setHelperNeedsRestart] = useState(false);
   const [openAiKey, setOpenAiKey] = useState("");
-  const [aiModel, setAiModel] = useState<AiModel>("gpt-5.6-luna");
+  const [aiModel, setAiModel] = useState<AiModelId>("gpt-5.6-luna");
   const [generatingAi, setGeneratingAi] = useState(false);
   const [credentialsReady, setCredentialsReady] = useState(false);
   const [credentialSaveLabel, setCredentialSaveLabel] = useState("Verschlüsselter Zugangstresor wird vorbereitet …");
@@ -536,7 +652,10 @@ export default function InseratStudio() {
   const [savingAddress, setSavingAddress] = useState(false);
   const [savingCredentials, setSavingCredentials] = useState(false);
   const [importingAddresses, setImportingAddresses] = useState(false);
+  const [replacingAddresses, setReplacingAddresses] = useState(false);
+  const [exportingInventory, setExportingInventory] = useState(false);
   const [addressImportReport, setAddressImportReport] = useState<string[]>([]);
+  const [addressCenterOpen, setAddressCenterOpen] = useState(true);
   const [captioningImageIds, setCaptioningImageIds] = useState<string[]>([]);
   const [replacingAllImageCaptions, setReplacingAllImageCaptions] = useState(false);
   const [openAiKeyVerified, setOpenAiKeyVerified] = useState(false);
@@ -556,11 +675,31 @@ export default function InseratStudio() {
   const [mediaLibraryError, setMediaLibraryError] = useState("");
   const [selectedMediaItems, setSelectedMediaItems] = useState<MediaLibraryItem[]>([]);
   const [importingMedia, setImportingMedia] = useState(false);
+  const [addingMediaLibraryItems, setAddingMediaLibraryItems] = useState(false);
+  const [deletingMediaItemIds, setDeletingMediaItemIds] = useState<string[]>([]);
+  const [mediaLibraryUploadKind, setMediaLibraryUploadKind] = useState<MediaLibraryKind>("house");
+  const [mediaLibraryUploadGroup, setMediaLibraryUploadGroup] = useState("");
+  const [mediaLibraryMutationStatus, setMediaLibraryMutationStatus] = useState("");
+  const [mediaDuplicateGroups, setMediaDuplicateGroups] = useState<MediaLibraryDuplicateGroup[]>([]);
+  const [mediaDuplicateKeepIds, setMediaDuplicateKeepIds] = useState<Record<string, string>>({});
+  const [scanningMediaDuplicates, setScanningMediaDuplicates] = useState(false);
+  const [deletingMediaDuplicates, setDeletingMediaDuplicates] = useState(false);
   const [totalSyncScope, setTotalSyncScope] = useState<TotalSyncScope>("fabian");
+  const [totalSyncPromotionCount, setTotalSyncPromotionCount] = useState(0);
   const [totalSyncBusy, setTotalSyncBusy] = useState(false);
   const [totalSyncStopping, setTotalSyncStopping] = useState(false);
   const [totalSyncStatus, setTotalSyncStatus] = useState("");
+  const [renewalScope, setRenewalScope] = useState<TotalSyncScope>("all");
+  const [renewalPromotionCount, setRenewalPromotionCount] = useState(1);
+  const [selectedRenewalProjectIds, setSelectedRenewalProjectIds] = useState<string[]>([]);
+  const [renewalNow, setRenewalNow] = useState(() => new Date());
   const totalSyncStopRequested = useRef(false);
+  const addressEditorRef = useRef<HTMLDivElement>(null);
+
+  const selectWorkspaceTab = (nextTab: Tab) => {
+    if (nextTab === "renewal") setRenewalNow(new Date());
+    setTab(nextTab);
+  };
 
   const selectActiveHouse = (houseId: string) => {
     setSelectedMediaItems([]);
@@ -640,7 +779,9 @@ export default function InseratStudio() {
               houses: houseCatalog.state.houses,
             }
           : selectedState;
-        const normalized = normalizeProjectOwners(stateWithCurrentHouseCatalog);
+        const normalized = normalizeJobCenterState(
+          normalizeProjectOwners(stateWithCurrentHouseCatalog),
+        );
         const loaded = {
           ...normalized,
           houses: normalized.houses.map(applyConfirmedHouseModelDetails),
@@ -657,6 +798,16 @@ export default function InseratStudio() {
             ? next.totalSyncRun.scope
             : projectOwner(next.projects[0]),
         );
+        setTotalSyncPromotionCount(
+          totalSyncCanResume(next.totalSyncRun) && next.totalSyncRun
+            ? next.totalSyncRun.promotionImageCount ?? 0
+            : 0,
+        );
+        if (next.totalSyncRun?.kind === "seven-day") {
+          setRenewalScope(next.totalSyncRun.scope);
+          setRenewalPromotionCount(next.totalSyncRun.promotionImageCount ?? 0);
+          setSelectedRenewalProjectIds(next.totalSyncRun.tasks.map((task) => task.projectId));
+        }
         setSaveLabel(selected?.source === "windows" ? "Aus lokaler Gerätesicherung geladen" : "Doppelt lokal gespeichert");
       })
       .catch(() => setSaveLabel("Lokaler Speicher nicht verfügbar"))
@@ -694,7 +845,7 @@ export default function InseratStudio() {
           message?: string;
           credentials?: {
             openAiKey?: string;
-            aiModel?: AiModel;
+            aiModel?: AiModelId;
             ftpHost?: string;
             ftpUser?: string;
             ftpPassword?: string;
@@ -779,9 +930,39 @@ export default function InseratStudio() {
     return () => window.clearTimeout(timer);
   }, [helperOnline, isPrimaryTab, ready, state]);
 
+  useEffect(() => {
+    if (tab !== "renewal") return;
+    const timer = window.setInterval(() => setRenewalNow(new Date()), 60_000);
+    return () => window.clearInterval(timer);
+  }, [tab]);
+
   const activeHouses = state.houses.filter((house) => house.archived !== true);
   const activeHouse =
     activeHouses.find((house) => house.id === activeHouseId) ?? activeHouses[0];
+  const mediaLibraryBusy = (
+    mediaLibraryLoading
+    || importingMedia
+    || addingMediaLibraryItems
+    || scanningMediaDuplicates
+    || deletingMediaDuplicates
+    || deletingMediaItemIds.length > 0
+  );
+  const mediaDuplicateDeleteItems = mediaDuplicateGroups.flatMap((group) => {
+    const keepId = mediaDuplicateKeepIds[group.id] || group.recommendedKeepId;
+    return group.items.filter((item) => item.id !== keepId);
+  });
+  const mediaDuplicateDeleteIds = mediaDuplicateDeleteItems.map((item) => item.id);
+  const mediaDuplicateReferencedCount = mediaDuplicateDeleteItems.reduce(
+    (sum, item) => sum + (item.referenceCount || 0),
+    0,
+  );
+  const mediaDuplicateManagedCount = mediaDuplicateDeleteItems.filter(
+    (item) => item.managed,
+  ).length;
+  const mediaDuplicateManagedBytes = mediaDuplicateDeleteItems.reduce(
+    (sum, item) => sum + (item.managed ? item.bytes || 0 : 0),
+    0,
+  );
   const activeHousePriceMatch = resolveHousePrice([
     activeHouse.name,
     ...activeHouse.images.map((image) => image.name),
@@ -800,18 +981,170 @@ export default function InseratStudio() {
   const selectedHouses = activeHouses.filter((house) =>
     activeSelectedHouseIds.includes(house.id),
   );
+  const activePromotionCount = projectPromotionCount(activeProject);
   const resumableTotalSync = totalSyncCanResume(state.totalSyncRun);
+  const activeRunKind = state.totalSyncRun?.kind ?? "total-sync";
+  const activeRunIsSevenDay = activeRunKind === "seven-day";
   const totalSyncEffectiveScope = resumableTotalSync && state.totalSyncRun
     ? state.totalSyncRun.scope
     : totalSyncScope;
+  const totalSyncEffectivePromotionCount = resumableTotalSync && state.totalSyncRun
+    ? state.totalSyncRun.promotionImageCount ?? 0
+    : totalSyncPromotionCount;
+  const portalPublicationEnabled = state.portalPublicationEnabled === true;
+  const totalSyncEffectivePortalPublication = resumableTotalSync && state.totalSyncRun
+    ? state.totalSyncRun.portalPublicationEnabled === true
+    : portalPublicationEnabled;
   const totalSyncScopedProjects = projectsInTotalSyncScope(state.projects, totalSyncEffectiveScope);
-  const totalSyncReadyProjects = totalSyncScopedProjects.filter(projectIsReadyForTotalSync);
-  const totalSyncSkippedProjects = totalSyncScopedProjects.length - totalSyncReadyProjects.length;
-  const totalSyncEligibleHouses = activeHouses.filter((house) => {
-    const imageCount = house.images.length;
-    return imageCount >= MIN_HOUSE_IMAGES && imageCount <= MAX_HOUSE_IMAGES;
-  });
+  const configuredTotalSyncReadyProjects = totalSyncScopedProjects.filter(projectIsReadyForTotalSync);
+  const totalSyncReadyProjects = resumableTotalSync && state.totalSyncRun
+    ? state.projects.filter((project) => (
+        state.totalSyncRun!.tasks.some((task) => task.projectId === project.id)
+      ))
+    : configuredTotalSyncReadyProjects;
+  const totalSyncSkippedProjects = resumableTotalSync && state.totalSyncRun
+    ? state.totalSyncRun.skippedProjectCount
+    : totalSyncScopedProjects.length - configuredTotalSyncReadyProjects.length;
+  const totalSyncEligibleHouses = activeHouses.filter((house) => (
+    houseIsReadyForUpload(house, MIN_HOUSE_IMAGES, MAX_HOUSE_IMAGES)
+  ));
   const totalSyncRunProgress = totalSyncProgress(state.totalSyncRun);
+  const renewalScopedProjects = projectsInTotalSyncScope(state.projects, renewalScope);
+  const renewalReadyProjects = renewalScopedProjects.filter(projectIsReadyForTotalSync);
+  const renewalEntries = buildRenewalSchedule(
+    renewalReadyProjects,
+    renewalNow,
+    renewalScope,
+  );
+  const renewalIncompleteProjectCount = renewalScopedProjects.length - renewalReadyProjects.length;
+  const renewalEffectivePromotionCount = resumableTotalSync
+    && activeRunIsSevenDay
+    && state.totalSyncRun
+    ? state.totalSyncRun.promotionImageCount ?? 0
+    : Math.min(renewalPromotionCount, promotionPool(state).length, TOTAL_SYNC_LISTINGS_PER_ADDRESS);
+  const renewalPreviousExternalIds = Object.fromEntries(
+    (activeRunIsSevenDay ? state.totalSyncRun?.tasks ?? [] : []).map((task) => [
+      task.projectId,
+      task.previousExternalIds ?? [],
+    ]),
+  );
+  const addressEditingLocked = totalSyncBusy || resumableTotalSync;
+  const preflightCredentials = {
+    credentialsReady,
+    ftpHost,
+    ftpUser,
+    ftpPassword,
+    helperOnline,
+    helperNeedsRestart,
+    openAiKeyValid: looksLikeOpenAiApiKey(openAiKey),
+    openAiKeyVerified,
+  };
+  const promotionImages = promotionPool(state);
+  const housesById = new Map(state.houses.map((house) => [house.id, house]));
+  const housesForIds = (houseIds: Iterable<string>): HouseTemplate[] => {
+    const ids = new Set(houseIds);
+    return [...ids]
+      .map((houseId) => housesById.get(houseId))
+      .filter((house): house is HouseTemplate => Boolean(house));
+  };
+  const manualPreflightHouses = housesForIds(
+    activeProject?.listings.map((listing) => listing.templateId) ?? [],
+  );
+  const manualPreflightReport = buildPreflightReport({
+    mode: "manual-upload",
+    projects: activeProject ? [activeProject] : [],
+    allProjects: state.projects,
+    houses: manualPreflightHouses,
+    provider: state.provider,
+    credentials: preflightCredentials,
+    requireOpenAi: false,
+    minHouseImages: MIN_HOUSE_IMAGES,
+    maxHouseImages: MAX_HOUSE_IMAGES,
+    promotionImages,
+    checkListings: true,
+    minimumListingCount: 1,
+  });
+  const preparedRunTasks = state.totalSyncRun?.tasks ?? [];
+  const preparedRunProjectIds = preparedRunTasks.map((task) => task.projectId);
+  const preparedPendingTasks = preparedRunTasks.filter(
+    (task) => (task.listingJobs?.length
+      ? task.listingJobs.some((job) => job.status !== "uploaded")
+      : task.uploadedExternalIds.length < task.houseIds.length),
+  );
+  const preparedPendingProjectIds = preparedPendingTasks.map((task) => task.projectId);
+  const preparedRunHouseIds = preparedPendingTasks.flatMap((task) => task.houseIds);
+  const totalSyncPreflightProjects = resumableTotalSync
+    ? state.projects.filter((project) => preparedRunProjectIds.includes(project.id))
+    : totalSyncScopedProjects;
+  const totalSyncPreflightHouses = resumableTotalSync
+    ? housesForIds(preparedRunHouseIds)
+    : activeHouses;
+  const totalSyncPreflightReport = buildPreflightReport({
+    mode: resumableTotalSync && activeRunIsSevenDay ? "seven-day" : "total-sync",
+    projects: totalSyncPreflightProjects,
+    allProjects: state.projects,
+    houses: totalSyncPreflightHouses,
+    provider: state.provider,
+    credentials: preflightCredentials,
+    requireOpenAi: true,
+    minHouseImages: MIN_HOUSE_IMAGES,
+    maxHouseImages: MAX_HOUSE_IMAGES,
+    libraryMode: !resumableTotalSync,
+    requiredReadyHouseCount: resumableTotalSync ? 0 : TOTAL_SYNC_LISTINGS_PER_ADDRESS,
+    requiredPromotionImageCount: resumableTotalSync
+      ? preparedPendingTasks.length ? totalSyncEffectivePromotionCount : 0
+      : totalSyncEffectivePromotionCount,
+    promotionImages,
+    checkListings: resumableTotalSync,
+    listingRunId: resumableTotalSync ? state.totalSyncRun?.id : undefined,
+    listingProjectIds: resumableTotalSync ? preparedPendingProjectIds : undefined,
+    expectedProjectIds: resumableTotalSync ? preparedRunProjectIds : undefined,
+    expectedHouseIds: resumableTotalSync ? preparedRunHouseIds : undefined,
+  });
+  const renewalTargetProjectIds = resumableTotalSync && activeRunIsSevenDay
+    ? preparedRunProjectIds
+    : selectedRenewalProjectIds;
+  const renewalTargetProjects = state.projects.filter(
+    (project) => renewalTargetProjectIds.includes(project.id),
+  );
+  const buildSevenDayPreflight = (
+    projects: ProjectInput[],
+    preparedRun = false,
+  ) => buildPreflightReport({
+    mode: "seven-day",
+    projects,
+    allProjects: state.projects,
+    houses: preparedRun ? housesForIds(preparedRunHouseIds) : activeHouses,
+    provider: state.provider,
+    credentials: preflightCredentials,
+    requireOpenAi: true,
+    minHouseImages: MIN_HOUSE_IMAGES,
+    maxHouseImages: MAX_HOUSE_IMAGES,
+    libraryMode: !preparedRun,
+    requiredReadyHouseCount: preparedRun ? 0 : TOTAL_SYNC_LISTINGS_PER_ADDRESS,
+    requiredPromotionImageCount: preparedRun
+      ? preparedPendingTasks.length ? renewalEffectivePromotionCount : 0
+      : renewalEffectivePromotionCount,
+    promotionImages,
+    checkListings: preparedRun,
+    listingRunId: preparedRun ? state.totalSyncRun?.id : undefined,
+    listingProjectIds: preparedRun ? preparedPendingProjectIds : undefined,
+    expectedProjectIds: preparedRun ? preparedRunProjectIds : undefined,
+    expectedHouseIds: preparedRun ? preparedRunHouseIds : undefined,
+    replacementExclusionsByProject: preparedRun
+      ? undefined
+      : Object.fromEntries(projects.map((project) => [
+          project.id,
+          Array.from(new Set([
+            ...project.selectedHouseIds,
+            ...project.listings.map((listing) => listing.templateId),
+          ])),
+        ])),
+  });
+  const renewalPreflightReport = buildSevenDayPreflight(
+    renewalTargetProjects,
+    resumableTotalSync && activeRunIsSevenDay,
+  );
 
   const saveHousesNow = async () => {
     const savedAt = new Date().toISOString();
@@ -1075,6 +1408,8 @@ export default function InseratStudio() {
   const toggleMediaLibrary = async () => {
     if (mediaLibraryOpen) {
       setMediaLibraryOpen(false);
+      setMediaDuplicateGroups([]);
+      setMediaDuplicateKeepIds({});
       return;
     }
     if (!helperOnline) {
@@ -1083,6 +1418,46 @@ export default function InseratStudio() {
     }
     setMediaLibraryOpen(true);
     await loadMediaLibrary(1);
+  };
+
+  const scanMediaLibraryDuplicates = async () => {
+    setScanningMediaDuplicates(true);
+    setMediaLibraryMutationStatus(
+      "Die Medienbibliothek wird bytegenau auf Dubletten geprüft …",
+    );
+    try {
+      const response = await fetch("http://127.0.0.1:43182/media-library/duplicates");
+      const data = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        message?: string;
+        groupCount?: number;
+        duplicateCount?: number;
+        groups?: MediaLibraryDuplicateGroup[];
+      };
+      if (!response.ok || !data.ok) {
+        throw new Error(data.message || "Die Dublettenprüfung konnte nicht abgeschlossen werden.");
+      }
+      const groups = Array.isArray(data.groups) ? data.groups : [];
+      setMediaDuplicateGroups(groups);
+      setMediaDuplicateKeepIds(Object.fromEntries(
+        groups.map((group) => [group.id, group.recommendedKeepId]),
+      ));
+      const status = groups.length
+        ? `${Number(data.duplicateCount) || 0} Dubletten in ${groups.length} Gruppen gefunden. Pro Gruppe bleibt das markierte Original erhalten.`
+        : "Keine bytegenau identischen Dubletten innerhalb derselben Bildart und Gruppe gefunden.";
+      setMediaLibraryMutationStatus(status);
+      setNotice(status);
+    } catch (error) {
+      setMediaDuplicateGroups([]);
+      setMediaDuplicateKeepIds({});
+      const status = error instanceof Error
+        ? error.message
+        : "Die Dublettenprüfung konnte nicht abgeschlossen werden.";
+      setMediaLibraryMutationStatus(status);
+      setNotice(status);
+    } finally {
+      setScanningMediaDuplicates(false);
+    }
   };
 
   const toggleMediaSelection = (item: MediaLibraryItem) => {
@@ -1176,6 +1551,172 @@ export default function InseratStudio() {
       );
     } finally {
       setImportingMedia(false);
+    }
+  };
+
+  const addMediaLibraryFiles = async (event: ChangeEvent<HTMLInputElement>) => {
+    const input = event.currentTarget;
+    const files = Array.from(input.files ?? []).filter((file) => (
+      ["image/jpeg", "image/png", "image/webp"].includes(file.type)
+    ));
+    if (!files.length) {
+      setMediaLibraryMutationStatus("Bitte JPEG-, PNG- oder WebP-Bilder auswählen.");
+      input.value = "";
+      return;
+    }
+
+    setAddingMediaLibraryItems(true);
+    setMediaLibraryMutationStatus(`${files.length} Bilder werden dauerhaft hinzugefügt …`);
+    let added = 0;
+    const failures: string[] = [];
+    try {
+      for (const [index, file] of files.entries()) {
+        setMediaLibraryMutationStatus(
+          `Bild ${index + 1} von ${files.length} wird dauerhaft hinzugefügt …`,
+        );
+        try {
+          const response = await fetch("http://127.0.0.1:43182/media-library/image", {
+            method: "POST",
+            headers: {
+              "Content-Type": file.type,
+              "X-FPI-Media-Filename": encodeURIComponent(file.name),
+              "X-FPI-Media-Kind": mediaLibraryUploadKind,
+              "X-FPI-Media-Group": encodeURIComponent(mediaLibraryUploadGroup.trim()),
+            },
+            body: file,
+          });
+          const data = (await response.json().catch(() => ({}))) as {
+            ok?: boolean;
+            message?: string;
+          };
+          if (!response.ok || !data.ok) {
+            throw new Error(data.message || "Das Bild konnte nicht gespeichert werden.");
+          }
+          added += 1;
+        } catch (error) {
+          failures.push(
+            `${file.name}: ${error instanceof Error ? error.message : "Speichern fehlgeschlagen."}`,
+          );
+        }
+      }
+
+      if (added > 0) {
+        setMediaDuplicateGroups([]);
+        setMediaDuplicateKeepIds({});
+      }
+      await loadMediaLibrary(mediaLibraryPage);
+      const status = failures.length
+        ? `${added} von ${files.length} Bildern wurden hinzugefügt. ${failures.length} konnten nicht gespeichert werden.`
+        : `${added} Bilder wurden dauerhaft in der Medienbibliothek gespeichert.`;
+      setMediaLibraryMutationStatus(status);
+      setNotice(status);
+    } finally {
+      input.value = "";
+      setAddingMediaLibraryItems(false);
+    }
+  };
+
+  const deleteMediaLibraryItem = async (item: MediaLibraryItem) => {
+    const confirmed = window.confirm(
+      `„${item.caption || item.filename}“ wirklich dauerhaft aus der Medienbibliothek löschen?\n\n`
+      + "Die Bibliotheksquelle wird dauerhaft entfernt. Bereits in Haustypen übernommene Kopien bleiben erhalten.",
+    );
+    if (!confirmed) return;
+
+    setDeletingMediaItemIds((current) => [...current, item.id]);
+    setMediaLibraryMutationStatus(`„${item.caption || item.filename}“ wird dauerhaft gelöscht …`);
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:43182/media-library/image?id=${encodeURIComponent(item.id)}&force=1`,
+        { method: "DELETE" },
+      );
+      const data = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        message?: string;
+      };
+      if (!response.ok || !data.ok) {
+        throw new Error(data.message || "Das Bild konnte nicht gelöscht werden.");
+      }
+
+      setSelectedMediaItems((current) => (
+        current.filter((selectedItem) => selectedItem.id !== item.id)
+      ));
+      setMediaDuplicateGroups([]);
+      setMediaDuplicateKeepIds({});
+      await loadMediaLibrary(mediaLibraryPage);
+      const status = `„${item.caption || item.filename}“ wurde dauerhaft aus der Medienbibliothek gelöscht. Vorhandene Haustypkopien bleiben erhalten.`;
+      setMediaLibraryMutationStatus(status);
+      setNotice(status);
+    } catch (error) {
+      const status = error instanceof Error
+        ? error.message
+        : "Das Bild konnte nicht gelöscht werden.";
+      setMediaLibraryMutationStatus(status);
+      setNotice(status);
+    } finally {
+      setDeletingMediaItemIds((current) => current.filter((id) => id !== item.id));
+    }
+  };
+
+  const cleanupMediaLibraryDuplicates = async () => {
+    if (!mediaDuplicateDeleteIds.length) return;
+    const hiddenCount = mediaDuplicateDeleteIds.length - mediaDuplicateManagedCount;
+    const referenceNote = mediaDuplicateReferencedCount
+      ? `\n${mediaDuplicateReferencedCount} vorhandene Haustyp-Zuordnungen bleiben als eigenständige Kopien erhalten.`
+      : "";
+    const confirmed = window.confirm(
+      `${mediaDuplicateDeleteIds.length} Dubletten aus ${mediaDuplicateGroups.length} Gruppen dauerhaft bereinigen?\n\n`
+      + "In jeder Gruppe bleibt genau das markierte Original erhalten.\n"
+      + `${mediaDuplicateManagedCount} eigene Dateien werden endgültig gelöscht`
+      + `${hiddenCount ? `, ${hiddenCount} integrierte Quellen dauerhaft ausgeblendet` : ""}.`
+      + referenceNote,
+    );
+    if (!confirmed) return;
+
+    setDeletingMediaDuplicates(true);
+    setDeletingMediaItemIds(mediaDuplicateDeleteIds);
+    setMediaLibraryMutationStatus(
+      `${mediaDuplicateDeleteIds.length} Dubletten werden sicher bereinigt …`,
+    );
+    try {
+      const response = await fetch(
+        "http://127.0.0.1:43182/media-library/deduplicate?force=1",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ deleteIds: mediaDuplicateDeleteIds }),
+        },
+      );
+      const data = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        message?: string;
+        deletedCount?: number;
+        hiddenCount?: number;
+      };
+      if (!response.ok || !data.ok) {
+        throw new Error(data.message || "Die Dubletten konnten nicht bereinigt werden.");
+      }
+
+      const deletedIds = new Set(mediaDuplicateDeleteIds);
+      setSelectedMediaItems((current) => (
+        current.filter((item) => !deletedIds.has(item.id))
+      ));
+      await loadMediaLibrary(mediaLibraryPage);
+      await scanMediaLibraryDuplicates();
+      const status = `${mediaDuplicateDeleteIds.length} Dubletten wurden dauerhaft bereinigt. `
+        + `${Number(data.deletedCount) || 0} eigene Dateien gelöscht, `
+        + `${Number(data.hiddenCount) || 0} integrierte Quellen ausgeblendet.`;
+      setMediaLibraryMutationStatus(status);
+      setNotice(status);
+    } catch (error) {
+      const status = error instanceof Error
+        ? error.message
+        : "Die Dubletten konnten nicht bereinigt werden.";
+      setMediaLibraryMutationStatus(status);
+      setNotice(status);
+    } finally {
+      setDeletingMediaItemIds([]);
+      setDeletingMediaDuplicates(false);
     }
   };
 
@@ -1491,6 +2032,19 @@ export default function InseratStudio() {
     setActiveProjectId(project.id);
   };
 
+  const openAddressProject = (projectId: string) => {
+    const project = state.projects.find((item) => item.id === projectId);
+    if (!project) return;
+    const owner = projectOwner(project);
+    setActiveOwner(owner);
+    setActiveProjectId(project.id);
+    if (!resumableTotalSync && !totalSyncBusy) setTotalSyncScope(owner);
+    setNotice(`„${projectSelectionLabel(project)}“ ist jetzt zur Bearbeitung geöffnet.`);
+    window.requestAnimationFrame(() => {
+      addressEditorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  };
+
   const importAddressesFromExcel = async (event: ChangeEvent<HTMLInputElement>) => {
     const input = event.target;
     const file = input.files?.[0];
@@ -1554,6 +2108,76 @@ export default function InseratStudio() {
     }
   };
 
+  const replaceAddressesFromExcel = async (event: ChangeEvent<HTMLInputElement>) => {
+    const input = event.target;
+    const file = input.files?.[0];
+    if (!file) return;
+    setReplacingAddresses(true);
+    setAddressImportReport([]);
+    try {
+      const rows = await readSheet(file);
+      const result = replaceAddressWorkbookRows(rows, state.projects, uid);
+      setAddressImportReport(result.errors.slice(0, 8));
+      if (!result.projects.length) {
+        setNotice(result.errors[0] ?? "Die Excel-Datei enthält keinen ersetzbaren Adressbestand.");
+        return;
+      }
+      const confirmed = window.confirm(
+        `${result.projects.length} Adressen aus „${file.name}“ ersetzen den bisherigen Bestand `
+        + `mit ${state.projects.length} Adressen vollständig.\n\n`
+        + `${result.preservedProjectCount} bestehende Projekte behalten ihre IDs, Inserate und Verläufe. `
+        + `${result.newProjectCount} Projekte kommen neu hinzu; ${result.removedProjectCount} bisherige Projekte werden entfernt.\n\n`
+        + "Haustypen, Bilder, Preislisten und Zugangsdaten bleiben unverändert. Jetzt ersetzen?",
+      );
+      if (!confirmed) {
+        setNotice("Bestandsersetzung abgebrochen. Es wurde nichts verändert.");
+        return;
+      }
+
+      const firstProject = result.projects[0];
+      setState((current) => ({
+        ...current,
+        projects: result.projects,
+      }));
+      setActiveOwner(firstProject.owner);
+      setActiveProjectId(firstProject.id);
+      if (!resumableTotalSync) setTotalSyncScope(firstProject.owner);
+      const details = [
+        `${result.preservedProjectCount} mit Verlauf erhalten`,
+        result.newProjectCount ? `${result.newProjectCount} neu` : "",
+        result.removedProjectCount ? `${result.removedProjectCount} entfernt` : "",
+        result.errors.length ? `${result.errors.length} fehlerhafte Zeilen ausgelassen` : "",
+      ].filter(Boolean).join(" · ");
+      setNotice(`${result.projects.length} Adressen vollständig ersetzt und lokal gespeichert · ${details}.`);
+    } catch (error) {
+      setNotice(error instanceof Error
+        ? `Bestandsersetzung fehlgeschlagen: ${error.message}`
+        : "Die Excel-Datei konnte nicht gelesen werden.");
+    } finally {
+      input.value = "";
+      setReplacingAddresses(false);
+    }
+  };
+
+  const downloadInventoryExcel = async () => {
+    setExportingInventory(true);
+    try {
+      const result = await buildInventoryWorkbook(state);
+      downloadBlob(result.blob, result.filename);
+      setNotice(
+        `Excel-Bestand heruntergeladen: ${result.addressCount} Adressen, `
+        + `${result.listingCount} Inserate und ${result.activeHouseCount} aktive Haustypen`
+        + `${result.archivedHouseCount ? ` (${result.archivedHouseCount} archiviert)` : ""}.`,
+      );
+    } catch (error) {
+      setNotice(error instanceof Error
+        ? `Excel-Download fehlgeschlagen: ${error.message}`
+        : "Der Bestand konnte nicht als Excel-Datei erstellt werden.");
+    } finally {
+      setExportingInventory(false);
+    }
+  };
+
   const toggleHouse = (houseId: string) => {
     if (!activeProject) return;
     const selected = activeSelectedHouseIds.includes(houseId);
@@ -1606,6 +2230,9 @@ export default function InseratStudio() {
         promotionImageId: promotionAssignments[listing.templateId],
       })),
     });
+    setNotice(promotionImageCount === 0
+      ? "Für diese Adresse werden keine Aktionsbilder eingesetzt. Die Auswahl ist gespeichert."
+      : `${promotionImageCount} von 4 Inseraten erhalten bei dieser Adresse ein Aktionsbild auf Position 1. Die Auswahl ist gespeichert.`);
   };
 
   const rerollProjectPromotions = () => {
@@ -1635,17 +2262,34 @@ export default function InseratStudio() {
     titlesToAvoid: string[];
     headlineCycleId: string;
     maxAttempts?: number;
-  }): Promise<{ texts: ListingTexts; writingProfile: string }> => {
+    model?: AiModelId;
+    shouldStop?: () => boolean;
+  }): Promise<{
+    texts: ListingTexts;
+    writingProfile: string;
+    aiUsage: AiTokenUsage;
+  }> => {
     const maxAttempts = Math.max(1, input.maxAttempts ?? 1);
-    let lastError: Error | null = null;
+    const requestModel = input.model ?? aiModel;
+    let accumulatedUsage = emptyAiUsage(requestModel);
+    let lastError: AiUsageError | null = null;
+    const stoppedError = (): AiUsageError => {
+      const error = new Error(
+        "Die KI-Texterstellung wurde vor der nächsten kostenpflichtigen Anfrage sicher angehalten.",
+      ) as AiUsageError;
+      error.stopped = true;
+      error.aiUsage = accumulatedUsage;
+      return error;
+    };
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      if (input.shouldStop?.()) throw stoppedError();
       try {
         const response = await fetch("http://127.0.0.1:43182/generate-texts", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             apiKey: openAiKey.trim(),
-            model: aiModel,
+            model: requestModel,
             house: {
               name: input.house.name,
               houseType: input.house.houseType,
@@ -1702,27 +2346,38 @@ export default function InseratStudio() {
           texts?: ListingTexts;
           writingProfile?: string;
           qualityChecked?: boolean;
+          usage?: Partial<AiTokenUsage>;
         };
+        accumulatedUsage = mergeAiUsage(accumulatedUsage, data.usage);
         if (!response.ok || !data.ok || !data.texts || !data.qualityChecked) {
           const error = new Error(
             data.message || `Der KI-Text für „${input.house.name}“ konnte nicht erzeugt werden.`,
-          ) as Error & { status?: number };
+          ) as AiUsageError;
           error.status = response.status;
+          error.aiUsage = accumulatedUsage;
           throw error;
         }
         return {
           texts: data.texts,
           writingProfile: data.writingProfile ?? "",
+          aiUsage: accumulatedUsage,
         };
       } catch (error) {
-        lastError = error instanceof Error ? error : new Error("Die KI-Texte konnten nicht erzeugt werden.");
-        const status = (lastError as Error & { status?: number }).status;
+        lastError = error instanceof Error
+          ? error as AiUsageError
+          : new Error("Die KI-Texte konnten nicht erzeugt werden.") as AiUsageError;
+        lastError.aiUsage = accumulatedUsage;
+        const status = lastError.status;
         const retryable = status === undefined || status === 422 || status === 429 || status >= 500;
         if (attempt >= maxAttempts || !retryable) throw lastError;
+        if (input.shouldStop?.()) throw stoppedError();
         await new Promise((resolve) => window.setTimeout(resolve, 2500 * attempt));
       }
     }
-    throw lastError ?? new Error("Die KI-Texte konnten nicht erzeugt werden.");
+    const error = lastError
+      ?? new Error("Die KI-Texte konnten nicht erzeugt werden.") as AiUsageError;
+    error.aiUsage = accumulatedUsage;
+    throw error;
   };
 
   const generationInputIsValid = () => {
@@ -1761,10 +2416,8 @@ export default function InseratStudio() {
     const headlineCycleId = crypto.randomUUID();
     const historicalTitles = Array.from(new Set(
       state.projects.flatMap((project) => (
-        project.listings.flatMap((listing) => [
-          ...(listing.titleHistory ?? []),
-          listing.texts.title,
-        ]).map((title) => removePrivateAddressFromHeadline(title, project))
+        collectedProjectHeadlineHistory(project)
+          .map((title) => removePrivateAddressFromHeadline(title, project))
       )).filter(Boolean),
     )).slice(-60);
     setGeneratingAi(true);
@@ -1852,7 +2505,12 @@ export default function InseratStudio() {
         ...current,
         projects: current.projects.map((project) =>
           project.id === projectSnapshot.id
-            ? { ...project, promotionAssignments, listings }
+            ? {
+                ...project,
+                headlineHistory: collectedProjectHeadlineHistory(projectSnapshot),
+                promotionAssignments,
+                listings,
+              }
             : project,
         ),
       }));
@@ -1890,6 +2548,7 @@ export default function InseratStudio() {
   const packageInputFor = (
     project: ProjectInput,
     listings: GeneratedListing[] = project.listings,
+    publishToPortals = portalPublicationEnabled,
   ) => {
     if (listings.length === 0) {
       throw new Error("Es wurden noch keine Inserate erzeugt.");
@@ -1917,6 +2576,7 @@ export default function InseratStudio() {
       houses: state.houses,
       provider: state.provider,
       promotionImages: promotionPool(state),
+      portalPublicationEnabled: publishToPortals,
     };
   };
 
@@ -1931,7 +2591,11 @@ export default function InseratStudio() {
     position: string,
     onStatus: (status: string) => void,
   ): Promise<void> => {
-    await new Promise<{ ok?: boolean; message?: string }>((resolve, reject) => {
+    await new Promise<{
+      ok?: boolean;
+      message?: string;
+      outcome?: UploadFailureOutcome;
+    }>((resolve, reject) => {
       const request = new XMLHttpRequest();
       request.open("POST", "http://127.0.0.1:43182/upload-binary");
       request.setRequestHeader("Content-Type", "application/zip");
@@ -1948,17 +2612,38 @@ export default function InseratStudio() {
             : `${position} · FTP-Transfer läuft …`);
         }
       };
-      request.onerror = () => reject(new Error(`Paket ${position}: Der lokale Upload-Helfer hat die Verbindung unterbrochen.`));
+      request.onerror = () => reject(new ListingUploadError(
+        `Paket ${position}: Die Verbindung zum Upload-Helfer wurde während der Übertragung unterbrochen. Bitte den Eingang in Immoprofessional prüfen.`,
+        "unknown",
+      ));
+      request.onabort = () => reject(new ListingUploadError(
+        `Paket ${position}: Die Übertragung wurde ohne Bestätigung abgebrochen. Bitte den Eingang in Immoprofessional prüfen.`,
+        "unknown",
+      ));
       request.onload = () => {
-        let responseData: { ok?: boolean; message?: string } = {};
+        let responseData: {
+          ok?: boolean;
+          message?: string;
+          outcome?: UploadFailureOutcome;
+        } = {};
         try {
-          responseData = JSON.parse(request.responseText) as { ok?: boolean; message?: string };
+          responseData = JSON.parse(request.responseText) as {
+            ok?: boolean;
+            message?: string;
+            outcome?: UploadFailureOutcome;
+          };
         } catch {
-          reject(new Error(`Paket ${position}: Der Upload-Helfer hat keine lesbare Antwort gesendet.`));
+          reject(new ListingUploadError(
+            `Paket ${position}: Der Upload-Helfer hat nach der Übertragung keine lesbare Bestätigung gesendet. Bitte den Eingang in Immoprofessional prüfen.`,
+            "unknown",
+          ));
           return;
         }
         if (request.status < 200 || request.status >= 300 || !responseData.ok) {
-          reject(new Error(`Paket ${position}: ${responseData.message || `Upload fehlgeschlagen (HTTP ${request.status}).`}`));
+          reject(new ListingUploadError(
+            `Paket ${position}: ${responseData.message || `Upload fehlgeschlagen (HTTP ${request.status}).`}`,
+            responseData.outcome === "unknown" ? "unknown" : "failed",
+          ));
           return;
         }
         resolve(responseData);
@@ -1972,26 +2657,17 @@ export default function InseratStudio() {
     listing: GeneratedListing;
     position: string;
     onStatus: (status: string) => void;
-    maxAttempts?: number;
+    portalPublicationEnabled?: boolean;
   }): Promise<void> => {
     const result = await buildImportPackage(
-      packageInputFor(input.project, [input.listing]),
+      packageInputFor(
+        input.project,
+        [input.listing],
+        input.portalPublicationEnabled === true,
+      ),
     );
-    const maxAttempts = Math.max(1, input.maxAttempts ?? 1);
-    let lastError: Error | null = null;
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      try {
-        input.onStatus(`${input.position} · ${input.listing.templateName} wird einzeln übertragen …`);
-        await uploadBinaryPackage(result.blob, result.filename, input.position, input.onStatus);
-        return;
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error("Upload fehlgeschlagen.");
-        if (attempt >= maxAttempts) throw lastError;
-        input.onStatus(`${input.position} · neuer Uploadversuch ${attempt + 1}/${maxAttempts} …`);
-        await new Promise((resolve) => window.setTimeout(resolve, 3000 * attempt));
-      }
-    }
-    throw lastError ?? new Error("Upload fehlgeschlagen.");
+    input.onStatus(`${input.position} · ${input.listing.templateName} wird einzeln übertragen …`);
+    await uploadBinaryPackage(result.blob, result.filename, input.position, input.onStatus);
   };
 
   const downloadPackage = async () => {
@@ -2020,6 +2696,14 @@ export default function InseratStudio() {
 
   const uploadPackage = async () => {
     if (!activeProject) return;
+    if (!manualPreflightReport.canStart) {
+      setNotice(
+        manualPreflightReport.targetCount
+          ? `Die Vorabprüfung sperrt den Upload: ${manualPreflightReport.blockerCount} Blocker müssen zuerst behoben werden.`
+          : "Die Vorabprüfung benötigt zuerst eine Zieladresse.",
+      );
+      return;
+    }
     if (!ftpUser || !ftpPassword) {
       setNotice("Bitte FTP-Benutzername und Passwort eingeben.");
       return;
@@ -2029,7 +2713,10 @@ export default function InseratStudio() {
       return;
     }
     const confirmed = window.confirm(
-      `${activeProject.listings.length} Entwurf${activeProject.listings.length === 1 ? "" : "e"} jetzt an ${ftpHost} übertragen?\n\nDie Weitergabe an Portale ist im Paket deaktiviert. Bitte den Entwurfsstatus nach dem Import trotzdem in Immoprofessional prüfen.`,
+      `${activeProject.listings.length} Inserat${activeProject.listings.length === 1 ? "" : "e"} jetzt an ${ftpHost} übertragen?\n\n`
+      + (portalPublicationEnabled
+        ? "AUTOMATISCHE PORTALVERÖFFENTLICHUNG IST AKTIV. Immoprofessional darf die Inserate nach dem Import an alle dort für das Objekt verbundenen Portale übertragen. Die genaue Objektadresse bleibt verborgen."
+        : "Die Weitergabe an Portale ist im Paket deaktiviert. Die Inserate landen als nicht freigegebene Objekte in Immoprofessional."),
     );
     if (!confirmed) return;
 
@@ -2037,6 +2724,8 @@ export default function InseratStudio() {
     setUploadStatus("Einzelpakete werden vorbereitet …");
     try {
       const input = packageInput();
+      let workingState = state;
+      const successfulUploadTimes: string[] = [];
       for (let index = 0; index < input.listings.length; index += 1) {
         const listing = input.listings[index];
         const position = `${index + 1}/${input.listings.length}`;
@@ -2045,9 +2734,65 @@ export default function InseratStudio() {
           listing,
           position,
           onStatus: setUploadStatus,
+          portalPublicationEnabled,
         });
+        const uploadedAt = new Date().toISOString();
+        successfulUploadTimes.push(uploadedAt);
+        workingState = {
+          ...workingState,
+          projects: workingState.projects.map((project) => (
+            project.id === input.project.id
+              ? {
+                  ...project,
+                  listings: project.listings.map((item) => (
+                    item.externalId === listing.externalId
+                      ? { ...item, uploadedAt }
+                      : item
+                  )),
+                }
+              : project
+          )),
+        };
+        setState(workingState);
+        await saveStudioState(workingState, uploadedAt);
       }
-      setNotice(`${input.listings.length} getrennte Inseratpakete wurden an Immoprofessional übertragen. Bitte den Importbericht und den Entwurfsstatus prüfen.`);
+      if (input.listings.length === TOTAL_SYNC_LISTINGS_PER_ADDRESS) {
+        const renewedAt = successfulUploadTimes.slice().sort()[0];
+        const completedAt = successfulUploadTimes.slice().sort().at(-1) ?? renewedAt;
+        workingState = {
+          ...workingState,
+          projects: workingState.projects.map((project) => (
+            project.id === input.project.id
+              ? {
+                  ...project,
+                  lastRenewedAt: renewedAt,
+                  renewalHistory: [
+                    ...(project.renewalHistory ?? []),
+                    {
+                      runId: `manual-${crypto.randomUUID()}`,
+                      renewedAt,
+                      completedAt,
+                      previousExternalIds: [],
+                      externalIds: input.listings.map((listing) => listing.externalId),
+                      houseIds: input.listings.map((listing) => listing.templateId),
+                    },
+                  ].slice(-52),
+                }
+              : project
+          )),
+        };
+        setState(workingState);
+        await saveStudioState(workingState, completedAt);
+        if (helperOnline) {
+          await queueWindowsCatalogSnapshot(workingState, completedAt).catch(() => undefined);
+        }
+      }
+      setNotice(
+        `${input.listings.length} getrennte Inseratpakete wurden an Immoprofessional übertragen. `
+        + (portalPublicationEnabled
+          ? "Die Portalweitergabe ist freigegeben. Bitte den Importbericht und den Onlinestatus des ersten Testobjekts prüfen."
+          : "Die Portalweitergabe ist deaktiviert."),
+      );
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Upload fehlgeschlagen.");
     } finally {
@@ -2070,9 +2815,10 @@ export default function InseratStudio() {
   const saveTotalSyncCheckpoint = async (
     checkpoint: StudioState,
     includeWindowsBackup = false,
+    updateInterface = true,
   ): Promise<void> => {
     const savedAt = new Date().toISOString();
-    setState(checkpoint);
+    if (updateInterface) setState(checkpoint);
     await saveStudioState(checkpoint, savedAt);
     if (includeWindowsBackup && helperOnline) {
       try {
@@ -2087,214 +2833,874 @@ export default function InseratStudio() {
   const executeTotalSync = async (
     initialState: StudioState,
     runId: string,
+    mode: TotalSyncAttemptMode = "continue",
   ): Promise<void> => {
-    let workingState = initialState;
+    let workingState = normalizeJobCenterState(initialState);
     let run = workingState.totalSyncRun;
     if (!run || run.id !== runId) {
       setNotice("Der vorbereitete Totalabgleich wurde nicht gefunden.");
       return;
     }
 
+    const attemptStartedAt = new Date().toISOString();
+    const runAiModel = run.aiModel ?? aiModel;
+    const progressBeforeAttempt = runJobProgress(run);
     totalSyncStopRequested.current = false;
     setTotalSyncStopping(false);
     setTotalSyncBusy(true);
-    run = { ...run, status: "running" };
+    run = {
+      ...run,
+      status: "running",
+      startedAt: run.startedAt ?? attemptStartedAt,
+      updatedAt: attemptStartedAt,
+      completedAt: undefined,
+      aiModel: runAiModel,
+      attempts: [
+        ...(run.attempts ?? []),
+        {
+          startedAt: attemptStartedAt,
+          mode,
+          uploadedCount: 0,
+          failedCount: 0,
+        },
+      ],
+    };
     workingState = { ...workingState, totalSyncRun: run };
+    let checkpointTail: Promise<void> = Promise.resolve();
+    const saveRunCheckpoint = async (
+      includeWindowsBackup = false,
+    ): Promise<void> => {
+      const snapshot = workingState;
+      setState(snapshot);
+      const operation = checkpointTail
+        .catch(() => undefined)
+        .then(() => saveTotalSyncCheckpoint(
+          snapshot,
+          includeWindowsBackup,
+          false,
+        ));
+      checkpointTail = operation.catch(() => undefined);
+      await operation;
+    };
 
     const acceptedTitles = Array.from(new Set(
       workingState.projects.flatMap((project) => (
-        project.listings.flatMap((listing) => [
-          ...(listing.titleHistory ?? []),
-          listing.texts.title,
-        ]).map((title) => removePrivateAddressFromHeadline(title, project))
+        collectedProjectHeadlineHistory(project)
+          .map((title) => removePrivateAddressFromHeadline(title, project))
       )).filter(Boolean),
     ));
-    let currentProjectId = "";
+
+    const installRun = (nextRun: TotalSyncRun) => {
+      run = nextRun;
+      workingState = { ...workingState, totalSyncRun: run };
+    };
+
+    const installProject = (nextProject: ProjectInput) => {
+      workingState = {
+        ...workingState,
+        projects: workingState.projects.map((project) => (
+          project.id === nextProject.id ? nextProject : project
+        )),
+        totalSyncRun: run,
+      };
+    };
+
+    const patchTask = (
+      task: TotalSyncProjectTask,
+      patch: Partial<TotalSyncProjectTask>,
+    ): TotalSyncProjectTask => {
+      const nextTask = { ...task, ...patch };
+      installRun(replaceTotalSyncTask(run!, task.projectId, nextTask));
+      return nextTask;
+    };
+
+    const patchJob = (
+      task: TotalSyncProjectTask,
+      externalId: string,
+      patch: Partial<TotalSyncListingJob>,
+    ): TotalSyncProjectTask => {
+      const listingJobs = (task.listingJobs ?? []).map((job) => (
+        job.externalId === externalId ? { ...job, ...patch } : job
+      ));
+      const uploadedExternalIds = Array.from(new Set([
+        ...task.uploadedExternalIds,
+        ...listingJobs
+          .filter((job) => job.status === "uploaded")
+          .map((job) => job.externalId),
+      ]));
+      const unresolved = listingJobs.find((job) => (
+        job.status === "failed" || job.status === "unknown"
+      ));
+      return patchTask(task, {
+        listingJobs,
+        uploadedExternalIds,
+        lastError: unresolved?.lastError,
+      });
+    };
+
+    const taskFor = (projectId: string): TotalSyncProjectTask => (
+      run!.tasks.find((task) => task.projectId === projectId)!
+    );
+
+    const finishRunAttempt = (
+      nextRun: TotalSyncRun,
+      completedAt: string,
+    ): TotalSyncRun => {
+      const progress = runJobProgress(nextRun);
+      const attempts = [...(nextRun.attempts ?? [])];
+      const attemptIndex = attempts.findLastIndex(
+        (attempt) => attempt.startedAt === attemptStartedAt,
+      );
+      if (attemptIndex >= 0) {
+        attempts[attemptIndex] = {
+          ...attempts[attemptIndex],
+          completedAt,
+          uploadedCount: Math.max(0, progress.uploaded - progressBeforeAttempt.uploaded),
+          failedCount: progress.failed,
+        };
+      }
+      return { ...nextRun, attempts, updatedAt: completedAt };
+    };
 
     const pauseAtCheckpoint = async (message: string): Promise<boolean> => {
       if (!totalSyncStopRequested.current) return false;
-      run = { ...run!, status: "paused" };
-      workingState = { ...workingState, totalSyncRun: run };
-      await saveTotalSyncCheckpoint(workingState, true);
+      const pausedAt = new Date().toISOString();
+      installRun(finishRunAttempt({ ...run!, status: "paused" }, pausedAt));
+      await saveRunCheckpoint(true);
       setTotalSyncStatus("Sicher angehalten");
       setNotice(message);
       return true;
     };
 
-    try {
-      await saveTotalSyncCheckpoint(workingState);
-      for (let taskIndex = 0; taskIndex < run.tasks.length; taskIndex += 1) {
-        let task = run.tasks[taskIndex];
-        if (task.uploadedExternalIds.length >= task.houseIds.length) continue;
-        currentProjectId = task.projectId;
-        let project = workingState.projects.find((item) => item.id === task.projectId);
-        if (!project) throw new Error("Eine Adresse des Totalabgleichs wurde nicht mehr gefunden.");
-        const houses = task.houseIds.map((houseId) => (
-          workingState.houses.find((house) => house.id === houseId)
-        ));
-        if (houses.some((house) => !house)) {
-          throw new Error(`Bei „${project.name}“ fehlt ein zufällig ausgewählter Haustyp.`);
-        }
-        const selectedTaskHouses = houses as HouseTemplate[];
-        const selectedHouseNames = selectedTaskHouses.map((house) => house.name);
-        let runListings = project.listings.filter(
-          (listing) => listing.totalSyncRunId === run!.id,
+    const finalizeProjectForRun = (
+      project: ProjectInput,
+      task: TotalSyncProjectTask,
+    ): ProjectInput => {
+      if (!protectedProjectLocationMatches(project, task.protectedLocation)) {
+        throw new Error(
+          `Die echte Adresse oder Grundstücksfläche von „${project.name}“ wurde nach Vorbereitung des Laufs verändert. Der Lauf wurde zum Schutz der Grundstücksdaten angehalten.`,
         );
+      }
+      const runListings = project.listings.filter(
+        (listing) => listing.totalSyncRunId === run!.id,
+      );
+      const uploadedTimes = runListings
+        .map((listing) => listing.uploadedAt)
+        .filter((value): value is string => Boolean(value))
+        .sort();
+      if (
+        runListings.length !== task.houseIds.length
+        || uploadedTimes.length !== task.houseIds.length
+      ) {
+        throw new Error(
+          `Die Erneuerung für „${project.name}“ ist noch nicht vollständig protokolliert und wird nicht als abgeschlossen markiert.`,
+        );
+      }
+      const renewedAt = uploadedTimes[0];
+      const completedAt = uploadedTimes.at(-1) ?? renewedAt;
+      const existingHistory = project.renewalHistory ?? [];
+      const hasHistoryEntry = existingHistory.some((entry) => entry.runId === run!.id);
+      return {
+        ...project,
+        selectedHouseIds: [...task.houseIds],
+        promotionAssignments: task.promotionAssignments ?? project.promotionAssignments,
+        listings: runListings,
+        lastRenewedAt: renewedAt,
+        lastTotalSyncAt: completedAt,
+        renewalHistory: hasHistoryEntry
+          ? existingHistory
+          : [
+              ...existingHistory,
+              {
+                runId: run!.id,
+                renewedAt,
+                completedAt,
+                previousExternalIds: task.previousExternalIds ?? [],
+                externalIds: runListings.map((listing) => listing.externalId),
+                houseIds: [...task.houseIds],
+              },
+            ].slice(-52),
+      };
+    };
 
-        if (!task.generated || runListings.length !== task.houseIds.length) {
-          if (await pauseAtCheckpoint("Der Totalabgleich wurde vor der nächsten Adresse sicher angehalten.")) return;
-          const previousListings = [...project.listings];
-          const generatedListings: GeneratedListing[] = [];
-          const headlineCycleId = `${run.id}-${project.id}`;
-          const promotionAssignments = randomPromotionAssignments(
-            task.houseIds,
-            promotionPool(workingState).map((image) => image.id),
-            projectPromotionCount(project),
-          );
-
-          for (let houseIndex = 0; houseIndex < selectedTaskHouses.length; houseIndex += 1) {
-            if (await pauseAtCheckpoint("Der Totalabgleich wurde vor dem nächsten KI-Text sicher angehalten.")) return;
-            const house = selectedTaskHouses[houseIndex];
-            const previous = previousListings.find((listing) => listing.templateId === house.id);
-            const overallPosition = taskIndex * TOTAL_SYNC_LISTINGS_PER_ADDRESS + houseIndex + 1;
-            setTotalSyncStatus(
-              `${overallPosition}/${run.tasks.length * TOTAL_SYNC_LISTINGS_PER_ADDRESS} · ${project.city} · KI-Texte für ${house.name}`,
-            );
-
-            let result: { texts: ListingTexts; writingProfile: string } | null = null;
-            for (let diversityAttempt = 1; diversityAttempt <= 3; diversityAttempt += 1) {
-              result = await requestListingTexts({
-                project,
-                house,
-                index: houseIndex,
-                listingCount: selectedTaskHouses.length,
-                selectedHouseNames,
-                previous,
-                titlesToAvoid: acceptedTitles.slice(-60),
-                headlineCycleId,
-                maxAttempts: 4,
-              });
-              const similarTitle = acceptedTitles.find((title) => (
-                headlinesAreTooSimilar(result!.texts.title, title)
-              ));
-              if (!similarTitle) break;
-              if (diversityAttempt === 3) {
-                throw new Error(`Die KI konnte für „${project.name}“ keine ausreichend neue Überschrift erzeugen.`);
-              }
-              acceptedTitles.push(similarTitle);
-            }
-            if (!result) throw new Error(`Der KI-Text für „${house.name}“ fehlt.`);
-            acceptedTitles.push(result.texts.title);
-            generatedListings.push({
-              id: uid(),
-              externalId: totalSyncExternalId(run.id, project.id, houseIndex + 1),
-              templateId: house.id,
-              templateName: house.name,
-              promotionImageId: promotionAssignments[house.id],
-              price: totalPrice(house, project),
-              texts: result.texts,
-              writingProfile: result.writingProfile || previous?.writingProfile,
-              titleHistory: Array.from(new Set([
-                ...(previous?.titleHistory ?? []),
-                ...(previous?.texts.title ? [previous.texts.title] : []),
-              ])).slice(-40),
-              projectingSettings: fillMissingProjectingDefaults(previous?.projectingSettings),
-              totalSyncRunId: run.id,
-              version: (previous?.version ?? 0) + 1,
+    try {
+      await saveRunCheckpoint();
+      for (let taskIndex = 0; taskIndex < run.tasks.length; taskIndex += 1) {
+        let task = taskFor(run.tasks[taskIndex].projectId);
+        let project = workingState.projects.find((item) => item.id === task.projectId);
+        const runnableJobs = () => (
+          (task.listingJobs ?? []).filter((job) => jobShouldRun(job, mode))
+        );
+        const markRunnableJobsFailed = async (
+          message: string,
+          stage: "validation" | "generation" | "upload" = "validation",
+        ) => {
+          for (const job of runnableJobs()) {
+            const failedAt = new Date().toISOString();
+            task = patchJob(task, job.externalId, {
+              status: "failed",
+              lastStage: stage,
+              lastAttemptAt: failedAt,
+              lastError: message,
+              attempts: appendJobAttempt(job, {
+                stage,
+                startedAt: failedAt,
+                completedAt: failedAt,
+                succeeded: false,
+                message,
+              }),
             });
           }
-
-          runListings = generatedListings;
-          project = {
-            ...project,
-            selectedHouseIds: [...task.houseIds],
-            promotionAssignments,
-            listings: generatedListings,
-          };
-          task = { ...task, generated: true, lastError: undefined };
-          run = replaceTotalSyncTask(run, task.projectId, task);
-          workingState = {
-            ...workingState,
-            projects: workingState.projects.map((item) => (
-              item.id === project!.id ? project! : item
-            )),
-            totalSyncRun: run,
-          };
-          await saveTotalSyncCheckpoint(workingState);
-        }
-
-        for (let listingIndex = 0; listingIndex < runListings.length; listingIndex += 1) {
-          const listing = runListings[listingIndex];
-          if (task.uploadedExternalIds.includes(listing.externalId)) continue;
-          if (await pauseAtCheckpoint("Der Totalabgleich wurde vor dem nächsten Einzelupload sicher angehalten.")) return;
-          const overallPosition = taskIndex * TOTAL_SYNC_LISTINGS_PER_ADDRESS + listingIndex + 1;
-          const position = `${overallPosition}/${run.tasks.length * TOTAL_SYNC_LISTINGS_PER_ADDRESS}`;
-          setTotalSyncStatus(`${position} · ${project.city} · ${listing.templateName}`);
-          await uploadSingleListingPackage({
-            project,
-            listing,
-            position,
-            onStatus: setTotalSyncStatus,
-            maxAttempts: 3,
-          });
-
-          const uploadedAt = new Date().toISOString();
-          task = {
-            ...task,
-            uploadedExternalIds: [...task.uploadedExternalIds, listing.externalId],
-            lastError: undefined,
-          };
-          run = replaceTotalSyncTask(run, task.projectId, task);
-          project = {
-            ...project,
-            listings: project.listings.map((item) => (
-              item.externalId === listing.externalId ? { ...item, uploadedAt } : item
-            )),
-          };
-          workingState = {
-            ...workingState,
-            projects: workingState.projects.map((item) => (
-              item.id === project!.id ? project! : item
-            )),
-            totalSyncRun: run,
-          };
-          await saveTotalSyncCheckpoint(workingState);
-        }
-
-        project = { ...project, lastTotalSyncAt: new Date().toISOString() };
-        run = replaceTotalSyncTask(run, task.projectId, { ...task, lastError: undefined });
-        workingState = {
-          ...workingState,
-          projects: workingState.projects.map((item) => (
-            item.id === project!.id ? project! : item
-          )),
-          totalSyncRun: run,
+          task = patchTask(task, { lastError: message });
+          await saveRunCheckpoint();
         };
-        await saveTotalSyncCheckpoint(workingState, true);
+
+        if (!project) {
+          await markRunnableJobsFailed(
+            "Die gespeicherte Grundstücksadresse wurde nicht mehr gefunden.",
+          );
+          continue;
+        }
+
+        if (!protectedProjectLocationMatches(project, task.protectedLocation)) {
+          await markRunnableJobsFailed(
+            `Die geschützten Adress- oder Grundstücksdaten von „${project.name}“ wurden nach Vorbereitung des Laufs verändert.`,
+          );
+          continue;
+        }
+
+        if (
+          (task.listingJobs?.length ?? 0) > 0
+          && task.listingJobs!.every((job) => job.status === "uploaded")
+        ) {
+          try {
+            project = finalizeProjectForRun(project, task);
+            const completedAt = project.lastTotalSyncAt ?? new Date().toISOString();
+            task = patchTask(task, { lastError: undefined, completedAt });
+            installProject(project);
+            await saveRunCheckpoint(true);
+          } catch (error) {
+            const message = error instanceof Error
+              ? error.message
+              : `„${project.name}“ konnte lokal nicht abgeschlossen werden.`;
+            task = patchTask(task, { lastError: message });
+            await saveRunCheckpoint();
+          }
+          continue;
+        }
+
+        const selectedTaskHouses = task.houseIds
+          .map((houseId) => workingState.houses.find((house) => house.id === houseId))
+          .filter((house): house is HouseTemplate => Boolean(house));
+        const selectedHouseNames = selectedTaskHouses.map((house) => house.name);
+        const headlineCycleId = `${run.id}-${project.id}`;
+
+        if (!task.promotionAssignments) {
+          const promotionImageIds = promotionPool(workingState).map((image) => image.id);
+          const previousPromotionImageIds = new Set(
+            Object.values(project.promotionAssignments ?? {}),
+          );
+          const freshPromotionImageIds = promotionImageIds.filter(
+            (imageId) => !previousPromotionImageIds.has(imageId),
+          );
+          const requestedPromotionCount = run.promotionImageCount ?? 0;
+          const promotionAssignments = randomPromotionAssignments(
+            task.houseIds,
+            run.kind === "seven-day"
+              && freshPromotionImageIds.length >= requestedPromotionCount
+              ? freshPromotionImageIds
+              : promotionImageIds,
+            requestedPromotionCount,
+          );
+          task = patchTask(task, { promotionAssignments });
+          await saveRunCheckpoint();
+        }
+
+        const plannedExternalIds = (task.listingJobs ?? [])
+          .filter((job) => jobShouldRun(job, mode))
+          .map((job) => job.externalId);
+        let pipelineFatalError: unknown;
+        const pipelineResult = await runBoundedProductionPipeline({
+          items: plannedExternalIds,
+          shouldStop: () => (
+            totalSyncStopRequested.current || pipelineFatalError !== undefined
+          ),
+          produce: async (externalId) => {
+            try {
+              let latestTask = taskFor(task.projectId);
+              let latestJob = latestTask.listingJobs?.find(
+                (item) => item.externalId === externalId,
+              );
+              const latestProject = workingState.projects.find(
+                (item) => item.id === latestTask.projectId,
+              );
+              if (!latestJob || !latestProject) {
+                throw new Error("Der vorbereitete Inseratauftrag wurde nicht mehr gefunden.");
+              }
+              const existingListing = latestProject.listings.find(
+                (item) => (
+                  item.totalSyncRunId === run!.id
+                  && item.externalId === latestJob!.externalId
+                ),
+              );
+              if (existingListing) return true;
+
+              const house = workingState.houses.find(
+                (item) => item.id === latestJob!.houseId,
+              );
+              if (!house) {
+                const message = `Der Haustyp ${latestJob.houseId} für „${latestProject.name}“ wurde nicht gefunden.`;
+                const failedAt = new Date().toISOString();
+                latestTask = patchJob(latestTask, latestJob.externalId, {
+                  status: "failed",
+                  lastStage: "validation",
+                  lastAttemptAt: failedAt,
+                  lastError: message,
+                  attempts: appendJobAttempt(latestJob, {
+                    stage: "validation",
+                    startedAt: failedAt,
+                    completedAt: failedAt,
+                    succeeded: false,
+                    message,
+                  }),
+                });
+                await saveRunCheckpoint();
+                return false;
+              }
+
+              const generationStartedAt = new Date().toISOString();
+              latestTask = patchJob(latestTask, latestJob.externalId, {
+                status: "generating",
+                lastStage: "generation",
+                lastAttemptAt: generationStartedAt,
+                lastError: undefined,
+                attempts: appendJobAttempt(latestJob, {
+                  stage: "generation",
+                  startedAt: generationStartedAt,
+                }),
+              });
+              await saveRunCheckpoint();
+              const overallPosition = taskIndex * TOTAL_SYNC_LISTINGS_PER_ADDRESS
+                + latestJob.slot;
+              setTotalSyncStatus(
+                `${overallPosition}/${run!.tasks.length * TOTAL_SYNC_LISTINGS_PER_ADDRESS} · ${latestProject.city} · KI-Texte für ${house.name}`,
+              );
+
+              const previousListingsForRequest = latestProject.listings.filter(
+                (listing) => listing.totalSyncRunId !== run!.id,
+              );
+              const previous = previousListingsForRequest.find(
+                (item) => item.templateId === house.id,
+              );
+              let accumulatedUsage = mergeAiUsage(
+                emptyAiUsage(runAiModel),
+                latestJob.aiUsage,
+              );
+              let result: {
+                texts: ListingTexts;
+                writingProfile: string;
+                aiUsage: AiTokenUsage;
+              } | null = null;
+              try {
+                for (
+                  let diversityAttempt = 1;
+                  diversityAttempt <= 3;
+                  diversityAttempt += 1
+                ) {
+                  const candidate = await requestListingTexts({
+                    project: latestProject,
+                    house,
+                    index: latestJob.slot - 1,
+                    listingCount: latestTask.houseIds.length,
+                    selectedHouseNames,
+                    previous,
+                    titlesToAvoid: acceptedTitles.slice(-60),
+                    headlineCycleId,
+                    maxAttempts: 4,
+                    model: runAiModel,
+                    shouldStop: () => totalSyncStopRequested.current,
+                  });
+                  accumulatedUsage = mergeAiUsage(
+                    accumulatedUsage,
+                    candidate.aiUsage,
+                  );
+                  const similarTitle = acceptedTitles.some((title) => (
+                    headlinesAreTooSimilar(candidate.texts.title, title)
+                  ));
+                  if (!similarTitle) {
+                    acceptedTitles.push(candidate.texts.title);
+                    result = candidate;
+                    break;
+                  }
+                  if (diversityAttempt === 3) {
+                    throw new Error(
+                      `Die KI konnte für „${latestProject.name}“ keine ausreichend neue Überschrift erzeugen.`,
+                    );
+                  }
+                }
+                if (!result) {
+                  throw new Error(`Der KI-Text für „${house.name}“ fehlt.`);
+                }
+              } catch (error) {
+                accumulatedUsage = mergeAiUsage(
+                  accumulatedUsage,
+                  (error as AiUsageError).aiUsage,
+                );
+                if ((error as AiUsageError).stopped) {
+                  const stoppedAt = new Date().toISOString();
+                  latestTask = taskFor(task.projectId);
+                  latestJob = latestTask.listingJobs?.find(
+                    (item) => item.externalId === externalId,
+                  );
+                  if (!latestJob) throw error;
+                  patchJob(latestTask, latestJob.externalId, {
+                    status: "pending",
+                    lastStage: "generation",
+                    lastAttemptAt: stoppedAt,
+                    lastError: undefined,
+                    aiUsage: accumulatedUsage,
+                    attempts: appendJobAttempt(latestJob, {
+                      stage: "generation",
+                      startedAt: generationStartedAt,
+                      completedAt: stoppedAt,
+                      message: "Vor der nächsten KI-Anfrage sicher angehalten.",
+                    }),
+                  });
+                  await saveRunCheckpoint();
+                  return false;
+                }
+                const message = error instanceof Error
+                  ? error.message
+                  : `Der KI-Text für „${house.name}“ konnte nicht erzeugt werden.`;
+                const failedAt = new Date().toISOString();
+                latestTask = taskFor(task.projectId);
+                latestJob = latestTask.listingJobs?.find(
+                  (item) => item.externalId === externalId,
+                );
+                if (!latestJob) throw new Error(message);
+                patchJob(latestTask, latestJob.externalId, {
+                  status: "failed",
+                  lastStage: "generation",
+                  lastAttemptAt: failedAt,
+                  lastError: message,
+                  aiUsage: accumulatedUsage,
+                  attempts: appendJobAttempt(latestJob, {
+                    stage: "generation",
+                    startedAt: generationStartedAt,
+                    completedAt: failedAt,
+                    succeeded: false,
+                    message,
+                  }),
+                });
+                await saveRunCheckpoint();
+                return false;
+              }
+
+              const currentProject = workingState.projects.find(
+                (item) => item.id === latestTask.projectId,
+              );
+              latestTask = taskFor(task.projectId);
+              latestJob = latestTask.listingJobs?.find(
+                (item) => item.externalId === externalId,
+              );
+              if (!currentProject || !latestJob) {
+                throw new Error("Der Inseratauftrag wurde während der Texterstellung verändert.");
+              }
+              if (!protectedProjectLocationMatches(
+                currentProject,
+                latestTask.protectedLocation,
+              )) {
+                const message = `Die geschützten Grundstücksdaten von „${currentProject.name}“ wurden während der Texterstellung verändert.`;
+                const failedAt = new Date().toISOString();
+                patchJob(latestTask, latestJob.externalId, {
+                  status: "failed",
+                  lastStage: "validation",
+                  lastAttemptAt: failedAt,
+                  lastError: message,
+                  aiUsage: accumulatedUsage,
+                  attempts: appendJobAttempt(latestJob, {
+                    stage: "validation",
+                    startedAt: failedAt,
+                    completedAt: failedAt,
+                    succeeded: false,
+                    message,
+                  }),
+                });
+                await saveRunCheckpoint();
+                return false;
+              }
+
+              const currentPreviousListings = currentProject.listings.filter(
+                (listing) => listing.totalSyncRunId !== run!.id,
+              );
+              const currentRunListings = currentProject.listings.filter(
+                (listing) => listing.totalSyncRunId === run!.id,
+              );
+              const currentPrevious = currentPreviousListings.find(
+                (item) => item.templateId === house.id,
+              );
+              const nextVersion = Math.max(
+                0,
+                ...currentPreviousListings.map((listing) => listing.version),
+              ) + 1;
+              const listing: GeneratedListing = {
+                id: uid(),
+                externalId: latestJob.externalId,
+                templateId: house.id,
+                templateName: house.name,
+                promotionImageId: latestTask.promotionAssignments?.[house.id],
+                price: totalPrice(house, currentProject),
+                texts: result.texts,
+                writingProfile: result.writingProfile
+                  || currentPrevious?.writingProfile,
+                titleHistory: Array.from(new Set([
+                  ...(currentPrevious?.titleHistory ?? []),
+                  ...(currentPrevious?.texts.title
+                    ? [currentPrevious.texts.title]
+                    : []),
+                ])).slice(-40),
+                projectingSettings: fillMissingProjectingDefaults(
+                  currentPrevious?.projectingSettings,
+                ),
+                totalSyncRunId: run!.id,
+                version: currentPrevious
+                  ? currentPrevious.version + 1
+                  : nextVersion,
+              };
+              const mergedRunListings = [
+                ...currentRunListings.filter(
+                  (item) => item.externalId !== listing.externalId,
+                ),
+                listing,
+              ].sort((left, right) => (
+                left.externalId.localeCompare(right.externalId)
+              ));
+              installProject({
+                ...currentProject,
+                headlineHistory: collectedProjectHeadlineHistory(currentProject),
+                listings: [
+                  ...currentPreviousListings,
+                  ...mergedRunListings,
+                ],
+              });
+              const generatedAt = new Date().toISOString();
+              latestTask = taskFor(task.projectId);
+              latestJob = latestTask.listingJobs!.find(
+                (item) => item.externalId === externalId,
+              )!;
+              latestTask = patchJob(latestTask, latestJob.externalId, {
+                status: "ready",
+                lastStage: "generation",
+                lastAttemptAt: generatedAt,
+                lastError: undefined,
+                aiUsage: accumulatedUsage,
+                attempts: appendJobAttempt(latestJob, {
+                  stage: "generation",
+                  startedAt: generationStartedAt,
+                  completedAt: generatedAt,
+                  succeeded: true,
+                }),
+              });
+              const latestProjectAfterMerge = workingState.projects.find(
+                (item) => item.id === latestTask.projectId,
+              );
+              patchTask(latestTask, {
+                generated: latestTask.listingJobs!.every((item) => (
+                  latestProjectAfterMerge?.listings.some(
+                    (runListing) => (
+                      runListing.totalSyncRunId === run!.id
+                      && runListing.externalId === item.externalId
+                    ),
+                  )
+                )),
+              });
+              await saveRunCheckpoint();
+              return true;
+            } catch (error) {
+              pipelineFatalError = error;
+              throw error;
+            }
+          },
+          consume: async (outcome) => {
+            try {
+              if (outcome.status === "producer-failed") {
+                throw outcome.error;
+              }
+              if (!outcome.value) return;
+
+              const externalId = outcome.item;
+              let latestTask = taskFor(task.projectId);
+              let latestJob = latestTask.listingJobs?.find(
+                (item) => item.externalId === externalId,
+              );
+              let latestProject = workingState.projects.find(
+                (item) => item.id === latestTask.projectId,
+              );
+              let listing = latestProject?.listings.find((item) => (
+                item.totalSyncRunId === run!.id
+                && item.externalId === externalId
+              ));
+              if (
+                !latestJob
+                || !latestProject
+                || !listing
+                || latestJob.status === "uploaded"
+                || latestJob.status === "unknown"
+              ) return;
+
+              const packageStartedAt = new Date().toISOString();
+              let packageResult: Awaited<ReturnType<typeof buildImportPackage>>;
+              try {
+                packageResult = await buildImportPackage({
+                  project: latestProject,
+                  listings: [listing],
+                  houses: workingState.houses,
+                  provider: workingState.provider,
+                  promotionImages: promotionPool(workingState),
+                  portalPublicationEnabled: run!.portalPublicationEnabled === true,
+                });
+              } catch (error) {
+                const message = error instanceof Error
+                  ? error.message
+                  : `Das Paket ${externalId} konnte nicht erstellt werden.`;
+                const failedAt = new Date().toISOString();
+                latestTask = taskFor(task.projectId);
+                latestJob = latestTask.listingJobs?.find(
+                  (item) => item.externalId === externalId,
+                );
+                if (!latestJob) throw error;
+                patchJob(latestTask, externalId, {
+                  status: "failed",
+                  lastStage: "upload",
+                  lastAttemptAt: failedAt,
+                  lastError: message,
+                  attempts: appendJobAttempt(latestJob, {
+                    stage: "upload",
+                    startedAt: packageStartedAt,
+                    completedAt: failedAt,
+                    succeeded: false,
+                    message,
+                  }),
+                });
+                await saveRunCheckpoint();
+                return;
+              }
+              if (totalSyncStopRequested.current) return;
+
+              latestTask = taskFor(task.projectId);
+              latestJob = latestTask.listingJobs!.find(
+                (item) => item.externalId === externalId,
+              )!;
+              latestProject = workingState.projects.find(
+                (item) => item.id === latestTask.projectId,
+              );
+              listing = latestProject?.listings.find((item) => (
+                item.totalSyncRunId === run!.id
+                && item.externalId === externalId
+              ));
+              if (!latestProject || !listing) {
+                throw new Error(`Das Inserat ${externalId} wurde vor dem Upload nicht mehr gefunden.`);
+              }
+              if (!protectedProjectLocationMatches(
+                latestProject,
+                latestTask.protectedLocation,
+              )) {
+                throw new Error(
+                  `Die geschützten Grundstücksdaten von „${latestProject.name}“ wurden vor dem Upload verändert.`,
+                );
+              }
+
+              const uploadStartedAt = packageStartedAt;
+              const jobBeforeUpload = latestJob;
+              latestTask = patchJob(latestTask, externalId, {
+                status: "uploading",
+                lastStage: "upload",
+                lastAttemptAt: uploadStartedAt,
+                lastError: undefined,
+                attempts: appendJobAttempt(latestJob, {
+                  stage: "upload",
+                  startedAt: uploadStartedAt,
+                }),
+              });
+              try {
+                await saveRunCheckpoint();
+              } catch (error) {
+                patchJob(latestTask, externalId, jobBeforeUpload);
+                throw error;
+              }
+              const overallPosition = taskIndex * TOTAL_SYNC_LISTINGS_PER_ADDRESS
+                + latestJob.slot;
+              const position = `${overallPosition}/${run!.tasks.length * TOTAL_SYNC_LISTINGS_PER_ADDRESS}`;
+              setTotalSyncStatus(
+                `${position} · ${latestProject.city} · ${listing.templateName}`,
+              );
+
+              try {
+                setTotalSyncStatus(
+                  `${position} · ${listing.templateName} wird einzeln übertragen …`,
+                );
+                await uploadBinaryPackage(
+                  packageResult.blob,
+                  packageResult.filename,
+                  position,
+                  setTotalSyncStatus,
+                );
+              } catch (error) {
+                const message = error instanceof Error
+                  ? error.message
+                  : `Das Inserat ${externalId} konnte nicht übertragen werden.`;
+                const failedAt = new Date().toISOString();
+                const uploadOutcome: UploadFailureOutcome = error instanceof ListingUploadError
+                  ? error.outcome
+                  : "failed";
+                latestTask = taskFor(task.projectId);
+                latestJob = latestTask.listingJobs!.find(
+                  (item) => item.externalId === externalId,
+                )!;
+                patchJob(latestTask, externalId, {
+                  status: uploadOutcome,
+                  lastStage: "upload",
+                  lastAttemptAt: failedAt,
+                  lastError: message,
+                  attempts: appendJobAttempt(latestJob, {
+                    stage: "upload",
+                    startedAt: uploadStartedAt,
+                    completedAt: failedAt,
+                    succeeded: uploadOutcome === "failed" ? false : undefined,
+                    message,
+                  }),
+                });
+                await saveRunCheckpoint();
+                return;
+              }
+
+              const uploadedAt = new Date().toISOString();
+              latestProject = workingState.projects.find(
+                (item) => item.id === task.projectId,
+              );
+              if (!latestProject) {
+                throw new Error("Die Grundstücksadresse fehlt nach dem Upload.");
+              }
+              installProject({
+                ...latestProject,
+                listings: latestProject.listings.map((item) => (
+                  item.externalId === externalId
+                    ? { ...item, uploadedAt }
+                    : item
+                )),
+              });
+              latestTask = taskFor(task.projectId);
+              latestJob = latestTask.listingJobs!.find(
+                (item) => item.externalId === externalId,
+              )!;
+              patchJob(latestTask, externalId, {
+                status: "uploaded",
+                lastStage: "upload",
+                lastAttemptAt: uploadedAt,
+                uploadedAt,
+                lastError: undefined,
+                attempts: appendJobAttempt(latestJob, {
+                  stage: "upload",
+                  startedAt: uploadStartedAt,
+                  completedAt: uploadedAt,
+                  succeeded: true,
+                }),
+              });
+              await saveRunCheckpoint();
+            } catch (error) {
+              pipelineFatalError = error;
+              throw error;
+            }
+          },
+        });
+        if (pipelineFatalError !== undefined) throw pipelineFatalError;
+        if (pipelineResult.stopped) {
+          if (await pauseAtCheckpoint(
+            "Der Lauf wurde nach den bereits gestarteten KI-Texten und dem aktuellen Einzelupload sicher angehalten.",
+          )) return;
+        }
+
+        task = taskFor(task.projectId);
+        project = workingState.projects.find((item) => item.id === task.projectId);
+        if (
+          project
+          && (task.listingJobs?.length ?? 0) > 0
+          && task.listingJobs!.every((job) => job.status === "uploaded")
+        ) {
+          try {
+            project = finalizeProjectForRun(project, task);
+            const completedAt = project.lastTotalSyncAt ?? new Date().toISOString();
+            task = patchTask(task, { lastError: undefined, completedAt });
+            installProject(project);
+            await saveRunCheckpoint(true);
+          } catch (error) {
+            const message = error instanceof Error
+              ? error.message
+              : `„${project.name}“ konnte lokal nicht abgeschlossen werden.`;
+            task = patchTask(task, { lastError: message });
+            await saveRunCheckpoint();
+          }
+        }
       }
 
-      run = {
+      const completedAt = new Date().toISOString();
+      const progress = runJobProgress(run);
+      const finalStatus = runCompletionStatus(run);
+      run = finishRunAttempt({
         ...run,
-        status: "completed",
-        completedAt: new Date().toISOString(),
+        status: finalStatus,
+        completedAt: finalStatus === "paused" ? undefined : completedAt,
+      }, completedAt);
+      const nextHistory = finalStatus === "paused"
+        ? workingState.uploadRunHistory
+        : upsertUploadRunHistory(
+            workingState.uploadRunHistory,
+            buildUploadRunHistoryEntry(
+              run,
+              workingState.projects,
+              workingState.houses,
+              finalStatus,
+              completedAt,
+            ),
+          );
+      workingState = {
+        ...workingState,
+        totalSyncRun: run,
+        uploadRunHistory: nextHistory,
       };
-      workingState = { ...workingState, totalSyncRun: run };
-      await saveTotalSyncCheckpoint(workingState, true);
-      const progress = totalSyncProgress(run);
-      setTotalSyncStatus(`${progress.uploaded}/${progress.total} einzeln übertragen`);
-      setNotice(
-        `Totalabgleich abgeschlossen: ${progress.uploaded} neue Inserate wurden einzeln an Immoprofessional übertragen.${run.skippedProjectCount ? ` ${run.skippedProjectCount} unvollständige Adressentwürfe wurden nicht verwendet.` : ""}`,
+      await saveRunCheckpoint(true);
+      setTotalSyncStatus(
+        finalStatus === "completed-with-errors"
+          ? `${progress.uploaded} erfolgreich · ${progress.failed} fehlgeschlagen · ${progress.unknown} zu prüfen`
+          : `${progress.uploaded}/${progress.total} einzeln übertragen`,
       );
+      if (run.kind === "seven-day" && finalStatus === "completed") {
+        setSelectedRenewalProjectIds([]);
+      }
+      if (finalStatus === "completed-with-errors") {
+        setNotice(
+          `${run.kind === "seven-day" ? "7-Tage-Erneuerung" : "Totalabgleich"} beendet: ${progress.uploaded} Inserate waren erfolgreich, ${progress.failed} sind fehlgeschlagen${progress.unknown ? ` und ${progress.unknown} müssen in Immoprofessional geprüft werden` : ""}. Alle anderen Adressen wurden weiterverarbeitet. Im Auftragszentrum kannst du nur die Fehler erneut übertragen.`,
+        );
+      } else if (finalStatus === "paused") {
+        setNotice("Der Lauf bleibt mit offenen Inseraten sicher gespeichert und kann fortgesetzt werden.");
+      } else {
+        setNotice(
+          `${run.kind === "seven-day" ? "7-Tage-Erneuerung" : "Totalabgleich"} abgeschlossen: ${progress.uploaded} neue Inserate wurden einzeln an Immoprofessional übertragen.`,
+        );
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Der Totalabgleich wurde unterbrochen.";
-      if (currentProjectId) {
-        run = replaceTotalSyncTask(run, currentProjectId, { lastError: message });
-      }
-      run = { ...run, status: "paused" };
+      const stoppedAt = new Date().toISOString();
+      run = finishRunAttempt(
+        { ...interruptedRun(run), status: "paused" },
+        stoppedAt,
+      );
       workingState = { ...workingState, totalSyncRun: run };
-      await saveTotalSyncCheckpoint(workingState, true).catch(() => undefined);
-      setTotalSyncStatus("Unterbrochen · kann fortgesetzt werden");
-      setNotice(`Der Totalabgleich wurde sicher angehalten: ${message} Bereits übertragene Inserate werden beim Fortsetzen übersprungen.`);
+      await saveRunCheckpoint(true).catch(() => undefined);
+      setTotalSyncStatus("Sicherheitsstopp · kann fortgesetzt werden");
+      setNotice(
+        `Der Lauf wurde wegen eines übergeordneten Fehlers sicher angehalten: ${message} Erfolgreiche Inserate werden nicht erneut übertragen.`,
+      );
     } finally {
       setTotalSyncBusy(false);
       setTotalSyncStopping(false);
@@ -2302,24 +3708,37 @@ export default function InseratStudio() {
     }
   };
 
-  const startOrResumeTotalSync = async () => {
-    if (totalSyncBusy) return;
+  const automatedUploadReadinessError = (): string | null => {
     if (!looksLikeOpenAiApiKey(openAiKey)) {
-      setNotice("Bitte zuerst einen gültigen OpenAI API-Schlüssel speichern.");
-      return;
+      return "Bitte zuerst einen gültigen OpenAI API-Schlüssel speichern.";
     }
     if (!ftpUser || !ftpPassword) {
-      setNotice("Bitte zuerst die Immoprofessional-Zugangsdaten speichern.");
-      return;
+      return "Bitte zuerst die Immoprofessional-Zugangsdaten speichern.";
     }
     if (!helperOnline) {
-      setNotice(helperNeedsRestart
+      return helperNeedsRestart
         ? "Der lokale Helfer muss vor dem Totalabgleich neu gestartet werden."
-        : "Der lokale Helfer ist nicht erreichbar.");
-      return;
+        : "Der lokale Helfer ist nicht erreichbar.";
     }
     if (!state.provider.providerNumber || !state.provider.company || !state.provider.email) {
-      setNotice("Bitte Anbieternummer, Firma und E-Mail unter Export & Upload ergänzen.");
+      return "Bitte Anbieternummer, Firma und E-Mail unter Export & Upload ergänzen.";
+    }
+    return null;
+  };
+
+  const startOrResumeTotalSync = async () => {
+    if (totalSyncBusy) return;
+    if (!totalSyncPreflightReport.canStart) {
+      setNotice(
+        totalSyncPreflightReport.targetCount
+          ? `Die Vorabprüfung sperrt den Start: ${totalSyncPreflightReport.blockerCount} Blocker müssen zuerst behoben werden.`
+          : "Im gewählten Adressbuch wurde keine Zieladresse für die Vorabprüfung gefunden.",
+      );
+      return;
+    }
+    const readinessError = automatedUploadReadinessError();
+    if (readinessError) {
+      setNotice(readinessError);
       return;
     }
 
@@ -2337,12 +3756,9 @@ export default function InseratStudio() {
       setNotice("Für den gewählten Benutzer wurde keine vollständige Grundstücksadresse gefunden.");
       return;
     }
-    const insufficientPromotionProject = totalSyncReadyProjects.find(
-      (project) => projectPromotionCount(project) > promotionPool(state).length,
-    );
-    if (insufficientPromotionProject) {
+    if (totalSyncPromotionCount > promotionPool(state).length) {
       setNotice(
-        `Für „${insufficientPromotionProject.name}“ werden ${projectPromotionCount(insufficientPromotionProject)} unterschiedliche Aktionsbilder benötigt. Bitte den Pool ergänzen oder die Anzahl bei dieser Adresse reduzieren.`,
+        `Für ${totalSyncPromotionCount} Aktionsbilder pro Adresse werden mindestens ${totalSyncPromotionCount} unterschiedliche Bilder im zentralen Pool benötigt.`,
       );
       return;
     }
@@ -2353,7 +3769,13 @@ export default function InseratStudio() {
       : totalSyncScope === "pascal" ? "Pascal" : "Fabian";
     const confirmed = window.confirm(
       `Totalabgleich für ${scopeLabel} starten?\n\n`
-      + `${totalSyncReadyProjects.length} vollständige Adressen × ${TOTAL_SYNC_LISTINGS_PER_ADDRESS} zufällige Haustypen = ${totalListings} neue Inserate.\n\n`
+      + `${totalSyncReadyProjects.length} vollständige Adressen × ${TOTAL_SYNC_LISTINGS_PER_ADDRESS} Haustypen = ${totalListings} neue Inserate. Pro Adresse werden mindestens ein Einfamilienhaus, ein Bungalow und ein Zweifamilienhaus ausgelost; der vierte Haustyp wird zusätzlich zufällig gewählt.\n\n`
+      + `${totalSyncPromotionCount === 0
+        ? "Die Inserate werden ohne Aktionsbilder erstellt."
+        : `${totalSyncPromotionCount} von 4 Inseraten jeder Adresse erhalten ein zufälliges Aktionsbild auf Position 1.`}\n\n`
+      + `${portalPublicationEnabled
+        ? "AUTOMATISCHE PORTALVERÖFFENTLICHUNG IST AKTIV. Alle neuen Inserate dürfen nach dem Import an die in Immoprofessional verbundenen Portale übertragen werden. Die genaue Adresse bleibt verborgen."
+        : "Die Portalveröffentlichung bleibt deaktiviert; die Inserate werden nur in Immoprofessional importiert."}\n\n`
       + "Für jedes Inserat werden neue KI-Texte und eine neue Überschrift erzeugt. Anschließend wird jedes Inserat als eigenes Paket nacheinander an Immoprofessional übertragen – niemals als Sammelpaket.\n\n"
       + `${totalSyncSkippedProjects ? `${totalSyncSkippedProjects} unvollständige Adressentwürfe werden übersprungen.\n\n` : ""}`
       + "Bitte erst bestätigen, wenn die bisherigen Anzeigen in Immoprofessional gelöscht wurden. Der Vorgang verwendet OpenAI-Guthaben und kann bei vielen Inseraten mehrere Stunden dauern.",
@@ -2362,8 +3784,14 @@ export default function InseratStudio() {
 
     const run = createTotalSyncRun({
       projects: state.projects,
-      eligibleHouseIds: totalSyncEligibleHouses.map((house) => house.id),
+      eligibleHouses: totalSyncEligibleHouses.map((house) => ({
+        id: house.id,
+        houseType: house.houseType,
+      })),
       scope: totalSyncScope,
+      promotionImageCount: totalSyncPromotionCount,
+      portalPublicationEnabled,
+      aiModel,
       runId: uid(),
       createdAt: new Date().toISOString(),
     });
@@ -2371,19 +3799,340 @@ export default function InseratStudio() {
     await executeTotalSync(nextState, run.id);
   };
 
+  const changeRenewalScope = (scope: TotalSyncScope) => {
+    if (totalSyncBusy || resumableTotalSync) return;
+    setRenewalScope(scope);
+    setSelectedRenewalProjectIds([]);
+  };
+
+  const toggleRenewalProject = (projectId: string) => {
+    if (totalSyncBusy || resumableTotalSync) return;
+    setSelectedRenewalProjectIds((current) => (
+      current.includes(projectId)
+        ? current.filter((id) => id !== projectId)
+        : [...current, projectId]
+    ));
+  };
+
+  const selectRenewalProjects = (projectIds: string[]) => {
+    if (totalSyncBusy || resumableTotalSync) return;
+    setSelectedRenewalProjectIds(Array.from(new Set(projectIds)));
+  };
+
+  const clearRenewalSelection = () => {
+    if (totalSyncBusy || resumableTotalSync) return;
+    setSelectedRenewalProjectIds([]);
+  };
+
+  const openRenewalProject = (projectId: string) => {
+    const project = state.projects.find((item) => item.id === projectId);
+    if (!project) return;
+    setActiveOwner(projectOwner(project));
+    setActiveProjectId(project.id);
+    setTab("project");
+    setNotice(
+      addressEditingLocked
+        ? `„${project.name}“ ist geöffnet. Die Grundstücksdaten bleiben bis zum Abschluss des gespeicherten Uploadlaufs geschützt.`
+        : `„${project.name}“ wurde aus der 7-Tage-Zentrale geöffnet.`,
+    );
+  };
+
+  const startSevenDayRenewal = async (
+    explicitProjectIds?: string[],
+  ): Promise<void> => {
+    if (totalSyncBusy) return;
+    if (resumableTotalSync && state.totalSyncRun) {
+      if (!activeRunIsSevenDay) {
+        setNotice("Bitte zuerst den gespeicherten Totalabgleich abschließen oder verwerfen.");
+        return;
+      }
+      if (!renewalPreflightReport.canStart) {
+        setNotice(
+          `Die Vorabprüfung sperrt die Fortsetzung: ${renewalPreflightReport.blockerCount} Blocker müssen zuerst behoben werden.`,
+        );
+        return;
+      }
+      await executeTotalSync(state, state.totalSyncRun.id);
+      return;
+    }
+
+    const requestedIds = Array.from(new Set(
+      explicitProjectIds?.length ? explicitProjectIds : selectedRenewalProjectIds,
+    ));
+    const requestedProjects = state.projects.filter(
+      (project) => requestedIds.includes(project.id),
+    );
+    if (!requestedProjects.length) {
+      setNotice("Bitte zuerst mindestens eine Grundstücksadresse auswählen.");
+      return;
+    }
+    const requestedPreflight = buildSevenDayPreflight(requestedProjects);
+    if (!requestedPreflight.canStart) {
+      setSelectedRenewalProjectIds(requestedIds);
+      setNotice(
+        `Die Vorabprüfung sperrt die Erneuerung: ${requestedPreflight.blockerCount} Blocker müssen zuerst behoben werden.`,
+      );
+      return;
+    }
+
+    const readinessError = automatedUploadReadinessError();
+    if (readinessError) {
+      setNotice(readinessError);
+      return;
+    }
+    if (totalSyncEligibleHouses.length < TOTAL_SYNC_LISTINGS_PER_ADDRESS) {
+      setNotice(
+        `Für die 7-Tage-Erneuerung werden mindestens ${TOTAL_SYNC_LISTINGS_PER_ADDRESS} geeignete Haustypen mit jeweils ${MIN_HOUSE_IMAGES} bis ${MAX_HOUSE_IMAGES} Bildern benötigt.`,
+      );
+      return;
+    }
+    if (renewalEffectivePromotionCount > promotionPool(state).length) {
+      setNotice("Für die gewählte Anzahl fehlen Aktionsbilder im zentralen Pool.");
+      return;
+    }
+
+    const selectedProjects = requestedProjects.filter(projectIsReadyForTotalSync);
+    if (!selectedProjects.length) {
+      setNotice("Bitte zuerst mindestens eine vollständige Grundstücksadresse auswählen.");
+      return;
+    }
+
+    const insufficientReplacement = selectedProjects.find((project) => {
+      const previousHouseIds = new Set([
+        ...project.selectedHouseIds,
+        ...project.listings.map((listing) => listing.templateId),
+      ]);
+      return totalSyncEligibleHouses.filter((house) => !previousHouseIds.has(house.id)).length
+        < TOTAL_SYNC_LISTINGS_PER_ADDRESS;
+    });
+    if (insufficientReplacement) {
+      setNotice(
+        `Für „${insufficientReplacement.name}“ stehen nicht vier vollständig neue Haustypen mit passenden Bildern zur Verfügung.`,
+      );
+      return;
+    }
+
+    const totalListings = selectedProjects.length * TOTAL_SYNC_LISTINGS_PER_ADDRESS;
+    const previousObjectCount = selectedProjects.reduce(
+      (sum, project) => sum + project.listings.length,
+      0,
+    );
+    const confirmed = window.confirm(
+      `7-Tage-Erneuerung für ${selectedProjects.length} Adresse${selectedProjects.length === 1 ? "" : "n"} starten?\n\n`
+      + `${totalListings} neue Inserate werden einzeln erstellt und übertragen. Jede Adresse erhält vier andere Haustypen, neue Haus- und Aktionsbilder, neue KI-Texte, neue Überschriften und vier neue Objekt-IDs.\n\n`
+      + "GESCHÜTZT UND UNVERÄNDERT: Projektname, Straße, Hausnummer, PLZ, Ort, Ortsteil, Grundstücksfläche, Grundstückspreis, Nebenkosten und geprüfte Lageangaben.\n\n"
+      + `${portalPublicationEnabled
+        ? "AUTOMATISCHE PORTALVERÖFFENTLICHUNG IST AKTIV."
+        : "Die Inserate werden nur in Immoprofessional importiert."}\n\n`
+      + `${previousObjectCount} bisherige Objekt-ID${previousObjectCount === 1 ? "" : "s"} sind in den ausgewählten Adressen gespeichert. `
+      + "Neue Objekt-IDs löschen alte Anzeigen nicht automatisch.\n\n"
+      + "Bitte nur bestätigen, wenn die bisherigen Anzeigen dieser Adressen in Immoprofessional gelöscht wurden. Der Vorgang verwendet OpenAI-Guthaben.",
+    );
+    if (!confirmed) return;
+
+    try {
+      const run = createTotalSyncRun({
+        projects: state.projects,
+        eligibleHouses: totalSyncEligibleHouses.map((house) => ({
+          id: house.id,
+          houseType: house.houseType,
+        })),
+        scope: renewalScope,
+        projectIds: selectedProjects.map((project) => project.id),
+        kind: "seven-day",
+        promotionImageCount: renewalEffectivePromotionCount,
+        portalPublicationEnabled,
+        aiModel,
+        runId: uid(),
+        createdAt: new Date().toISOString(),
+      });
+      setSelectedRenewalProjectIds(selectedProjects.map((project) => project.id));
+      const nextState = { ...state, totalSyncRun: run };
+      await executeTotalSync(nextState, run.id);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Die 7-Tage-Erneuerung konnte nicht vorbereitet werden.");
+    }
+  };
+
   const stopTotalSync = () => {
     totalSyncStopRequested.current = true;
     setTotalSyncStopping(true);
-    setTotalSyncStatus("Wird nach dem aktuellen Schritt sicher angehalten …");
+    setTotalSyncStatus("Wird nach den laufenden KI- und Uploadschritten sicher angehalten …");
   };
 
   const discardTotalSyncRun = async () => {
     if (!state.totalSyncRun || totalSyncBusy) return;
-    if (!window.confirm("Gespeicherten Totalabgleich verwerfen? Bereits zu Immoprofessional übertragene Inserate werden dadurch nicht gelöscht.")) return;
-    const nextState = { ...state, totalSyncRun: undefined };
+    const currentRun = state.totalSyncRun;
+    const runLabel = currentRun.kind === "seven-day"
+      ? "7-Tage-Erneuerung"
+      : "Totalabgleich";
+    const progress = runJobProgress(currentRun);
+    const unresolved = progress.pending + progress.ready + progress.active
+      + progress.failed + progress.unknown;
+    if (!window.confirm(
+      `Gespeicherte ${runLabel} archivieren und schließen?\n\n`
+      + `${progress.uploaded} Inserate sind erfolgreich. ${unresolved} Inserate sind noch offen, fehlgeschlagen oder ungeklärt.\n\n`
+      + (unresolved
+        ? "WICHTIG: Nach dem Schließen können diese offenen Inserate aus der Historie nicht mehr erneut übertragen werden.\n\n"
+        : "")
+      + "Bereits zu Immoprofessional übertragene Inserate werden dadurch nicht gelöscht.",
+    )) return;
+    setTotalSyncPromotionCount(currentRun.promotionImageCount ?? 0);
+    if (currentRun.kind === "seven-day") {
+      setRenewalPromotionCount(currentRun.promotionImageCount ?? 0);
+    }
+    const archivedAt = new Date().toISOString();
+    const historyStatus = currentRun.status === "completed"
+      ? "completed"
+      : currentRun.status === "completed-with-errors"
+        ? "completed-with-errors"
+        : "discarded";
+    const historyEntry = buildUploadRunHistoryEntry(
+      currentRun,
+      state.projects,
+      state.houses,
+      historyStatus,
+      archivedAt,
+    );
+    const nextState = {
+      ...state,
+      totalSyncRun: undefined,
+      uploadRunHistory: upsertUploadRunHistory(
+        state.uploadRunHistory,
+        historyEntry,
+      ),
+    };
     await saveTotalSyncCheckpoint(nextState, true);
     setTotalSyncStatus("");
-    setNotice("Der gespeicherte Totalabgleich wurde verworfen. Bereits übertragene Inserate bleiben in Immoprofessional erhalten.");
+    setNotice(`Die gespeicherte ${runLabel} wurde im Auftragszentrum archiviert und geschlossen. Bereits übertragene Inserate bleiben in Immoprofessional erhalten.`);
+  };
+
+  const retryFailedJobs = async () => {
+    if (!state.totalSyncRun || totalSyncBusy) return;
+    const progress = runJobProgress(state.totalSyncRun);
+    if (!progress.failed) {
+      setNotice("Im aktuellen Lauf gibt es keine fehlgeschlagenen Inserate.");
+      return;
+    }
+    const readinessError = automatedUploadReadinessError();
+    if (readinessError) {
+      setNotice(readinessError);
+      return;
+    }
+    await executeTotalSync(state, state.totalSyncRun.id, "failed-only");
+  };
+
+  const continueOpenJobs = async () => {
+    if (!state.totalSyncRun || totalSyncBusy) return;
+    const readinessError = automatedUploadReadinessError();
+    if (readinessError) {
+      setNotice(readinessError);
+      return;
+    }
+    await executeTotalSync(state, state.totalSyncRun.id, "continue");
+  };
+
+  const markUnknownJobFailed = async (
+    projectId: string,
+    externalId: string,
+  ) => {
+    if (!state.totalSyncRun || totalSyncBusy) return;
+    if (!window.confirm(
+      `Objekt ${externalId} wirklich zur Wiederholung freigeben?\n\n`
+      + "Bitte nur bestätigen, wenn du in Immoprofessional geprüft hast, dass dieses Objekt dort NICHT angekommen ist. Andernfalls könnte eine doppelte Anzeige entstehen.",
+    )) return;
+    const changedAt = new Date().toISOString();
+    const message = "Nach manueller Prüfung in Immoprofessional zur Wiederholung freigegeben.";
+    let nextRun = replaceTotalSyncListingJob(
+      state.totalSyncRun,
+      projectId,
+      externalId,
+      {
+        status: "failed",
+        lastStage: "upload",
+        lastAttemptAt: changedAt,
+        lastError: message,
+      },
+    );
+    const changedTask = nextRun.tasks.find((task) => task.projectId === projectId);
+    if (changedTask) {
+      nextRun = replaceTotalSyncTask(nextRun, projectId, {
+        ...changedTask,
+        lastError: message,
+      });
+    }
+    const nextStatus = runCompletionStatus(nextRun);
+    nextRun = {
+      ...nextRun,
+      status: nextStatus,
+      updatedAt: changedAt,
+      completedAt: nextStatus === "paused" ? undefined : changedAt,
+    };
+    const nextState = {
+      ...state,
+      totalSyncRun: nextRun,
+      uploadRunHistory: nextStatus === "paused"
+        ? state.uploadRunHistory
+        : upsertUploadRunHistory(
+            state.uploadRunHistory,
+            buildUploadRunHistoryEntry(
+              nextRun,
+              state.projects,
+              state.houses,
+              "completed-with-errors",
+              changedAt,
+            ),
+          ),
+    };
+    await saveTotalSyncCheckpoint(nextState, true);
+    setNotice(`Objekt ${externalId} ist jetzt als fehlgeschlagen markiert und kann gezielt erneut übertragen werden.`);
+  };
+
+  const openJobProject = (projectId: string) => {
+    const project = state.projects.find((item) => item.id === projectId);
+    if (!project) {
+      setNotice("Die zu diesem Auftrag gespeicherte Adresse ist nicht mehr vorhanden.");
+      return;
+    }
+    setActiveOwner(projectOwner(project));
+    setActiveProjectId(project.id);
+    setTab("project");
+    setNotice(
+      `„${project.name}“ wurde aus dem Auftragszentrum geöffnet.${addressEditingLocked ? " Die geschützten Grundstücksdaten bleiben bis zum Abschluss des Laufs gesperrt." : ""}`,
+    );
+  };
+
+  const handleRenewalPrimaryAction = () => {
+    if (totalSyncBusy) {
+      stopTotalSync();
+      return;
+    }
+    void startSevenDayRenewal();
+  };
+
+  const handleRenewalOne = (projectId: string) => {
+    void startSevenDayRenewal([projectId]);
+  };
+
+  const handleDiscardRenewalRun = () => {
+    void discardTotalSyncRun();
+  };
+
+  const changePortalPublication = (enabled: boolean) => {
+    if (totalSyncBusy || uploading || resumableTotalSync) {
+      setNotice("Der Veröffentlichungsmodus kann erst nach Abschluss oder Verwerfen des gespeicherten Uploadlaufs geändert werden.");
+      return;
+    }
+    if (enabled && !window.confirm(
+      "Automatische Portalveröffentlichung aktivieren?\n\n"
+      + "Neue Uploads dürfen nach dem Import von Immoprofessional automatisch an alle dort für das Objekt verbundenen Portale übertragen werden. "
+      + "Die genaue Objektadresse bleibt weiterhin verborgen.\n\n"
+      + "Bitte zuerst genau ein Testinserat übertragen und dessen Onlinestatus prüfen.",
+    )) return;
+    setState((current) => ({ ...current, portalPublicationEnabled: enabled }));
+    setNotice(enabled
+      ? "Automatische Portalveröffentlichung ist aktiviert und wird gespeichert. Der nächste Upload darf nach dem Import online gestellt werden."
+      : "Portalveröffentlichung ist deaktiviert. Neue Uploads werden nur in Immoprofessional importiert.");
   };
 
   const clearSavedCredentials = async () => {
@@ -2480,7 +4229,7 @@ export default function InseratStudio() {
         if (imported.version !== 1 || !Array.isArray(imported.houses)) {
           throw new Error("Unbekanntes Sicherungsformat.");
         }
-        const normalized = normalizeProjectOwners(imported);
+        const normalized = normalizeJobCenterState(normalizeProjectOwners(imported));
         const next = normalized.projects.length
           ? normalized
           : { ...normalized, projects: [newProject("fabian")] };
@@ -2493,6 +4242,18 @@ export default function InseratStudio() {
             ? next.totalSyncRun.scope
             : projectOwner(next.projects[0]),
         );
+        setTotalSyncPromotionCount(
+          totalSyncCanResume(next.totalSyncRun) && next.totalSyncRun
+            ? next.totalSyncRun.promotionImageCount ?? 0
+            : 0,
+        );
+        if (next.totalSyncRun?.kind === "seven-day") {
+          setRenewalScope(next.totalSyncRun.scope);
+          setRenewalPromotionCount(next.totalSyncRun.promotionImageCount ?? 0);
+          setSelectedRenewalProjectIds(next.totalSyncRun.tasks.map((task) => task.projectId));
+        } else {
+          setSelectedRenewalProjectIds([]);
+        }
         setNotice("Fabian&Pascal-Sicherung wurde lokal eingelesen.");
       } catch {
         setNotice("Die ausgewählte Datei ist keine gültige Fabian&Pascal-Sicherung.");
@@ -2539,31 +4300,54 @@ export default function InseratStudio() {
         </div>
       </header>
 
-      <section className="hero-panel">
-        <div>
+      <section className="hero-panel" aria-labelledby="studio-hero-title">
+        <div className="hero-copy">
           <span className="eyebrow">Vom Grundstück zum fertigen Entwurf</span>
-          <h1>Vier Inserate. Eine Adresse. Volle Kontrolle.</h1>
+          <h1 id="studio-hero-title">
+            Vier Inserate.
+            <span>Eine Adresse.</span>
+          </h1>
           <p>
-            Adresse erfassen, vier Haustypen wählen, Texte prüfen und erst dann als
-            Entwurf zu Immoprofessional übertragen.
+            <strong>Volle Kontrolle:</strong> Adresse erfassen, vier Haustypen wählen,
+            Texte prüfen und als Entwurf zu Immoprofessional übertragen.
           </p>
         </div>
-        <div className="workflow-summary">
-          <div><b>{activeHouses.length}</b><span>von {MAX_HOUSE_TEMPLATES} Haustypen</span></div>
-          <div><b>{activeSelectedHouseIds.length}</b><span>ausgewählt</span></div>
-          <div><b>{activeProject.listings.length}</b><span>Entwürfe</span></div>
-        </div>
+        <dl className="workflow-summary" aria-label="Aktueller Projektstatus">
+          <div>
+            <dt>Haustypen</dt>
+            <dd>{activeHouses.length}<small> / {MAX_HOUSE_TEMPLATES}</small></dd>
+          </div>
+          <div>
+            <dt>Ausgewählt</dt>
+            <dd>{activeSelectedHouseIds.length}<small> / 4</small></dd>
+          </div>
+          <div>
+            <dt>Entwürfe</dt>
+            <dd>{activeProject.listings.length}</dd>
+          </div>
+        </dl>
       </section>
 
       <nav className="step-nav" aria-label="Arbeitsbereiche">
         {([
-          ["houses", "01", "Haustypen"],
-          ["project", "02", "Adresse & Auswahl"],
-          ["preview", "03", "Texte & Vorschau"],
-          ["settings", "04", "Export & Upload"],
-        ] as Array<[Tab, string, string]>).map(([id, number, label]) => (
-          <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>
-            <span>{number}</span>{label}
+          ["houses", "01", "Haustypen", "Haustypen und Bilder"],
+          ["project", "02", "Adressen", "Adresse und Auswahl"],
+          ["preview", "03", "Texte", "Texte und Vorschau"],
+          ["renewal", "04", "7-Tage", "7-Tage-Zentrale"],
+          ["jobs", "05", "Aufträge", "Aufträge und Fehler"],
+          ["settings", "06", "Upload", "Export und Upload"],
+        ] as Array<[Tab, string, string, string]>).map(([id, number, label, accessibleLabel]) => (
+          <button
+            type="button"
+            key={id}
+            className={tab === id ? "active" : ""}
+            aria-current={tab === id ? "page" : undefined}
+            aria-label={`${number}. ${accessibleLabel}`}
+            title={accessibleLabel}
+            onClick={() => selectWorkspaceTab(id)}
+          >
+            <span className="step-number" aria-hidden="true">{number}</span>
+            <span className="step-label">{label}</span>
           </button>
         ))}
       </nav>
@@ -2786,7 +4570,11 @@ export default function InseratStudio() {
                 </div>
               </div>
               {mediaLibraryOpen ? (
-                <section className="media-library" aria-label="Integrierte Medienbibliothek">
+                <section
+                  className="media-library"
+                  aria-label="Integrierte Medienbibliothek"
+                  aria-busy={mediaLibraryBusy}
+                >
                   <div className="media-library-intro">
                     <div>
                       <b>Haus-, Innenraum-, Grundriss- und Vertrauensbilder</b>
@@ -2794,6 +4582,161 @@ export default function InseratStudio() {
                     </div>
                     <strong>{mediaLibraryTotal} Treffer</strong>
                   </div>
+                  <div className="media-library-management">
+                    <label className="media-library-management-field">
+                      <span>Neue Bilder als</span>
+                      <select
+                        value={mediaLibraryUploadKind}
+                        disabled={mediaLibraryBusy}
+                        onChange={(event) => (
+                          setMediaLibraryUploadKind(event.target.value as MediaLibraryKind)
+                        )}
+                        aria-label="Bildart für neue Medien"
+                      >
+                        <option value="house">Hausansicht</option>
+                        <option value="floorplan">Grundriss</option>
+                        <option value="interior">Innenraum</option>
+                        <option value="location">Standort</option>
+                        <option value="marketing">Allgemeine Anzeige</option>
+                      </select>
+                    </label>
+                    <label className="media-library-management-field">
+                      <span>Gruppe (optional)</span>
+                      <input
+                        value={mediaLibraryUploadGroup}
+                        disabled={mediaLibraryBusy}
+                        maxLength={80}
+                        placeholder="z. B. SUN 144 oder Küchen"
+                        onChange={(event) => setMediaLibraryUploadGroup(event.target.value)}
+                      />
+                    </label>
+                    <label
+                      className={mediaLibraryBusy ? "upload-button disabled" : "upload-button"}
+                      aria-disabled={mediaLibraryBusy}
+                    >
+                      {addingMediaLibraryItems ? "Bilder werden hinzugefügt …" : "Neue Bilder hinzufügen"}
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        multiple
+                        disabled={mediaLibraryBusy}
+                        onChange={addMediaLibraryFiles}
+                      />
+                    </label>
+                  </div>
+                  <div className="media-duplicate-tools">
+                    <div>
+                      <b>Dubletten sicher bereinigen</b>
+                      <span>
+                        Findet bytegenau identische Bilder innerhalb derselben Bildart und Gruppe.
+                        Vor dem Löschen wählst du pro Gruppe das Original aus.
+                      </span>
+                    </div>
+                    <button
+                      className="secondary"
+                      type="button"
+                      disabled={mediaLibraryBusy}
+                      onClick={() => void scanMediaLibraryDuplicates()}
+                    >
+                      {scanningMediaDuplicates ? "Dubletten werden geprüft …" : "Dubletten prüfen"}
+                    </button>
+                  </div>
+                  {mediaLibraryMutationStatus ? (
+                    <div className="media-library-status" role="status" aria-live="polite">
+                      {mediaLibraryMutationStatus}
+                    </div>
+                  ) : null}
+                  {mediaDuplicateGroups.length ? (
+                    <section
+                      className="media-duplicate-panel"
+                      aria-label="Gefundene Mediendubletten"
+                    >
+                      <header>
+                        <div>
+                          <span>Dublettenprüfung</span>
+                          <strong>
+                            {mediaDuplicateDeleteIds.length} überzählige Bilder in{" "}
+                            {mediaDuplicateGroups.length} Gruppen
+                          </strong>
+                          <small>
+                            {mediaDuplicateManagedCount} eigene Dateien ·{" "}
+                            {mediaBytes(mediaDuplicateManagedBytes)} physisch löschbar
+                            {mediaDuplicateReferencedCount
+                              ? ` · ${mediaDuplicateReferencedCount} bestehende Zuordnungen bleiben erhalten`
+                              : ""}
+                          </small>
+                        </div>
+                        <button
+                          className="media-duplicate-delete-button"
+                          type="button"
+                          disabled={mediaLibraryBusy || !mediaDuplicateDeleteIds.length}
+                          onClick={() => void cleanupMediaLibraryDuplicates()}
+                        >
+                          {deletingMediaDuplicates
+                            ? "Dubletten werden bereinigt …"
+                            : `${mediaDuplicateDeleteIds.length} Dubletten löschen`}
+                        </button>
+                      </header>
+                      <div className="media-duplicate-groups">
+                        {mediaDuplicateGroups.map((group, groupIndex) => {
+                          const keepId = (
+                            mediaDuplicateKeepIds[group.id] || group.recommendedKeepId
+                          );
+                          return (
+                            <fieldset className="media-duplicate-group" key={group.id}>
+                              <legend>
+                                Gruppe {groupIndex + 1}: {MEDIA_KIND_LABELS[group.kind]} ·{" "}
+                                {group.group} · {group.items.length} identische Bilder
+                              </legend>
+                              <div className="media-duplicate-preview">
+                                <img
+                                  src={group.items[0].imageUrl}
+                                  alt=""
+                                  loading="lazy"
+                                />
+                                <span>
+                                  Identischer Bildinhalt · je {mediaBytes(group.bytes)}
+                                </span>
+                              </div>
+                              <div className="media-duplicate-choices">
+                                {group.items.map((item) => {
+                                  const kept = item.id === keepId;
+                                  return (
+                                    <label
+                                      className={`media-duplicate-choice${kept ? " kept" : " removing"}`}
+                                      key={item.id}
+                                    >
+                                      <input
+                                        type="radio"
+                                        name={`duplicate-keeper-${group.id}`}
+                                        checked={kept}
+                                        disabled={mediaLibraryBusy}
+                                        onChange={() => setMediaDuplicateKeepIds((current) => ({
+                                          ...current,
+                                          [group.id]: item.id,
+                                        }))}
+                                      />
+                                      <span>
+                                        <b>{item.filename}</b>
+                                        <small title={item.relativePath}>
+                                          {item.managed ? "Eigenes Bild" : "Integrierte Quelle"}
+                                          {item.referenceCount
+                                            ? ` · ${item.referenceCount}× verwendet`
+                                            : " · nicht verwendet"}
+                                          {" · "}{item.relativePath}
+                                        </small>
+                                      </span>
+                                      <em>{kept ? "Original bleibt" : "wird gelöscht"}</em>
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            </fieldset>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  ) : null}
                   <form
                     className="media-library-toolbar"
                     onSubmit={(event) => {
@@ -2806,11 +4749,13 @@ export default function InseratStudio() {
                       onChange={(event) => setMediaLibraryQuery(event.target.value)}
                       placeholder="Suche, z. B. Sun 144, Küche oder Borkheide"
                       aria-label="Medien durchsuchen"
+                      disabled={mediaLibraryBusy}
                     />
                     <select
                       value={mediaLibraryGroup}
                       onChange={(event) => setMediaLibraryGroup(event.target.value)}
                       aria-label="Bildgruppe filtern"
+                      disabled={mediaLibraryBusy}
                     >
                       <option value="">Alle Gruppen</option>
                       {mediaLibraryGroups.map((group) => (
@@ -2825,6 +4770,7 @@ export default function InseratStudio() {
                         setMediaLibraryKind(event.target.value as "" | MediaLibraryKind)
                       )}
                       aria-label="Bildart filtern"
+                      disabled={mediaLibraryBusy}
                     >
                       <option value="">Alle Bildarten</option>
                       <option value="house">Hausansichten</option>
@@ -2833,7 +4779,7 @@ export default function InseratStudio() {
                       <option value="location">Standortanzeigen</option>
                       <option value="marketing">Allgemeine Anzeigen</option>
                     </select>
-                    <button className="secondary" type="submit" disabled={mediaLibraryLoading}>
+                    <button className="secondary" type="submit" disabled={mediaLibraryBusy}>
                       Filtern
                     </button>
                   </form>
@@ -2855,24 +4801,40 @@ export default function InseratStudio() {
                         const alreadyImported = activeHouse.images.some(
                           (image) => image.sourceId === item.id,
                         );
+                        const deleting = deletingMediaItemIds.includes(item.id);
                         return (
-                          <button
-                            type="button"
+                          <article
                             key={item.id}
-                            className={`media-library-card${selected ? " selected" : ""}${alreadyImported ? " imported" : ""}`}
-                            onClick={() => toggleMediaSelection(item)}
-                            disabled={alreadyImported && item.kind !== "house"}
-                            aria-pressed={selected}
+                            className={`media-library-card${selected ? " selected" : ""}${alreadyImported ? " imported" : ""}${deleting ? " deleting" : ""}`}
                             title={item.relativePath}
                           >
-                            <img src={item.imageUrl} alt={item.caption} loading="lazy" />
-                            <span className="media-selection-mark">
-                              {alreadyImported || selected ? "✓" : "+"}
-                            </span>
-                            <span className="media-kind">{MEDIA_KIND_LABELS[item.kind]}</span>
-                            <strong>{item.caption}</strong>
-                            <small>{item.group}</small>
-                          </button>
+                            <button
+                              className="media-library-select"
+                              type="button"
+                              onClick={() => toggleMediaSelection(item)}
+                              disabled={mediaLibraryBusy || (alreadyImported && item.kind !== "house")}
+                              aria-pressed={selected}
+                              aria-label={`${item.caption} auswählen`}
+                            >
+                              <img src={item.imageUrl} alt="" loading="lazy" />
+                              <span className="media-selection-mark" aria-hidden="true">
+                                {alreadyImported || selected ? "✓" : "+"}
+                              </span>
+                              <span className="media-kind">{MEDIA_KIND_LABELS[item.kind]}</span>
+                              <strong>{item.caption}</strong>
+                              <small>{item.group}</small>
+                            </button>
+                            <button
+                              className="media-library-delete"
+                              type="button"
+                              disabled={mediaLibraryBusy}
+                              onClick={() => void deleteMediaLibraryItem(item)}
+                              aria-label={`${item.caption} dauerhaft aus der Medienbibliothek löschen`}
+                              title="Dauerhaft aus der Medienbibliothek löschen"
+                            >
+                              <span aria-hidden="true">×</span>
+                            </button>
+                          </article>
                         );
                       })}
                     </div>
@@ -2887,7 +4849,7 @@ export default function InseratStudio() {
                       <button
                         className="secondary"
                         type="button"
-                        disabled={mediaLibraryLoading || mediaLibraryPage <= 1}
+                        disabled={mediaLibraryBusy || mediaLibraryPage <= 1}
                         onClick={() => void loadMediaLibrary(mediaLibraryPage - 1)}
                       >
                         Zurück
@@ -2896,7 +4858,7 @@ export default function InseratStudio() {
                       <button
                         className="secondary"
                         type="button"
-                        disabled={mediaLibraryLoading || mediaLibraryPage >= mediaLibraryPages}
+                        disabled={mediaLibraryBusy || mediaLibraryPage >= mediaLibraryPages}
                         onClick={() => void loadMediaLibrary(mediaLibraryPage + 1)}
                       >
                         Weiter
@@ -2909,7 +4871,7 @@ export default function InseratStudio() {
                         disabled={
                           selectedMediaItems.length !== 1
                           || selectedMediaItems[0]?.kind !== "house"
-                          || importingMedia
+                          || mediaLibraryBusy
                         }
                         onClick={buildAutomaticImageSequence}
                       >
@@ -2920,7 +4882,7 @@ export default function InseratStudio() {
                         type="button"
                         disabled={
                           !selectedMediaItems.length
-                          || importingMedia
+                          || mediaLibraryBusy
                           || activeHouse.images.length >= MAX_HOUSE_IMAGES
                         }
                         onClick={importSelectedMedia}
@@ -3005,7 +4967,27 @@ export default function InseratStudio() {
       {tab === "project" ? (
         <section className="workspace">
           <div className="content-card">
-            <div className="address-owner-panel">
+            <details
+              className="address-center"
+              open={addressCenterOpen}
+              onToggle={(event) => setAddressCenterOpen(event.currentTarget.open)}
+            >
+              <summary>
+                <span className="address-center-summary-copy">
+                  <span className="eyebrow">Adresszentrale</span>
+                  <strong>Adressbücher, Excel und gespeicherte Grundstücke</strong>
+                  <small>
+                    Fabian und Pascal verwalten · {state.projects.length} Adressen gespeichert
+                  </small>
+                </span>
+                <span className="address-center-summary-meta">
+                  {addressEditingLocked ? <em>Daten geschützt</em> : null}
+                  <b>{addressCenterOpen ? "Zuklappen" : "Aufklappen"}</b>
+                  <span className="address-center-chevron" aria-hidden="true">⌄</span>
+                </span>
+              </summary>
+              <div className="address-center-body">
+                <div className="address-owner-panel">
               <div>
                 <span className="eyebrow">Getrennte Adressbücher</span>
                 <h2>Wer bearbeitet diese Grundstücksadresse?</h2>
@@ -3032,14 +5014,30 @@ export default function InseratStudio() {
                 <span>Eine Zeile pro Grundstück. Die Spalte Benutzer ordnet jede Adresse automatisch Fabian oder Pascal zu.</span>
               </div>
               <div className="button-row">
+                <button
+                  className="secondary"
+                  disabled={exportingInventory}
+                  onClick={downloadInventoryExcel}
+                >
+                  {exportingInventory ? "Bestand wird erstellt …" : "Bestand als Excel herunterladen"}
+                </button>
                 <a className="secondary" href="/Fabian-Pascal-Adressimport-Vorlage.xlsx" download>Excel-Vorlage herunterladen</a>
                 <label className={`primary file-label${importingAddresses ? " disabled" : ""}`}>
                   {importingAddresses ? "Excel wird eingelesen …" : "Excel-Adressen importieren"}
                   <input
                     type="file"
                     accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    disabled={importingAddresses}
+                    disabled={importingAddresses || replacingAddresses || addressEditingLocked}
                     onChange={importAddressesFromExcel}
+                  />
+                </label>
+                <label className={`secondary file-label${replacingAddresses ? " disabled" : ""}`}>
+                  {replacingAddresses ? "Bestand wird ersetzt …" : "Bestand vollständig ersetzen"}
+                  <input
+                    type="file"
+                    accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    disabled={importingAddresses || replacingAddresses || addressEditingLocked}
+                    onChange={replaceAddressesFromExcel}
                   />
                 </label>
               </div>
@@ -3050,31 +5048,90 @@ export default function InseratStudio() {
                 {addressImportReport.map((message) => <span key={message}>{message}</span>)}
               </div>
             ) : null}
-            <div className="section-heading">
-              <div><span className="eyebrow">Adressbuch {activeOwner === "pascal" ? "Pascal" : "Fabian"}</span><h2>Grundstück speichern &amp; wiederverwenden</h2></div>
+            {addressEditingLocked ? (
+              <div className="protected-address-note" role="status">
+                <b>Grundstücksdaten geschützt</b>
+                <span>
+                  Während des gespeicherten Uploadlaufs bleiben Adresse, Grundstücksfläche,
+                  Preise und Lageangaben unverändert. Nach Abschluss oder Verwerfen können sie wieder bearbeitet werden.
+                </span>
+              </div>
+            ) : null}
+                <AddressBookTable
+                  projects={state.projects}
+                  activeProjectId={activeProject.id}
+                  onOpenProject={openAddressProject}
+                />
+              </div>
+            </details>
+            <div className="section-heading address-editor-heading" ref={addressEditorRef}>
+              <div>
+                <span className="eyebrow">Geöffnete Adresse · {activeOwner === "pascal" ? "Pascal" : "Fabian"}</span>
+                <h2>{projectSelectionLabel(activeProject)}</h2>
+              </div>
               <div className="button-row">
-                <select value={activeProject.id} onChange={(event) => setActiveProjectId(event.target.value)} aria-label="Gespeicherte Grundstücksadresse wählen">
-                  {ownerProjects.map((project) => <option key={project.id} value={project.id}>{projectSelectionLabel(project)}</option>)}
-                </select>
-                <button className="secondary" onClick={addProject}>Neue Adresse</button>
-                <button className="primary" disabled={savingAddress} onClick={saveAddressNow}>{savingAddress ? "Wird gespeichert …" : "Adresse speichern"}</button>
+                <button className="secondary" disabled={addressEditingLocked} onClick={addProject}>Neue Adresse</button>
+                <button className="primary" disabled={savingAddress || addressEditingLocked} onClick={saveAddressNow}>{savingAddress ? "Wird gespeichert …" : "Adresse speichern"}</button>
+              </div>
+            </div>
+            <div className="promotion-count-panel">
+              <div className="promotion-count-copy">
+                <span className="eyebrow">Aktionsbilder für diese Adresse</span>
+                <h3>Wie viele der vier Inserate bekommen ein Aktionsbild?</h3>
+                <p>Wähle hier 0, 1, 2, 3 oder 4. Pro gewähltem Inserat wird ein zufälliges Aktionsbild auf Position 1 gesetzt und für diese Grundstücksadresse gespeichert.</p>
+              </div>
+              <div
+                className="promotion-count-buttons"
+                role="group"
+                aria-label="Anzahl der Aktionsbilder für diese Adresse"
+              >
+                {Array.from({ length: MAX_PROMOTED_LISTINGS + 1 }, (_, count) => {
+                  const selected = activePromotionCount === count;
+                  const disabled = addressEditingLocked || count > promotionPool(state).length;
+                  return (
+                    <button
+                      type="button"
+                      key={count}
+                      className={selected ? "selected" : ""}
+                      aria-pressed={selected}
+                      aria-label={count === 0
+                        ? "Keine Aktionsbilder für die vier Inserate"
+                        : `${count} Aktionsbild${count === 1 ? "" : "er"} für die vier Inserate`}
+                      disabled={disabled}
+                      title={disabled ? `Dafür werden mindestens ${count} Bilder im Aktionspool benötigt.` : undefined}
+                      onClick={() => setProjectPromotionCount(count)}
+                    >
+                      <span>{count}</span>
+                      <b>{count === 0 ? "Keine" : count === 4 ? "Alle vier" : `${count} von 4`}</b>
+                      {selected ? <small>Ausgewählt</small> : null}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="promotion-count-summary">
+                <strong>
+                  {activePromotionCount === 0
+                    ? "Aktuell ohne Aktionsbild"
+                    : `Aktuell: ${activePromotionCount} von 4 Inseraten mit Aktionsbild`}
+                </strong>
+                <span>{promotionPool(state).length} Aktionsbilder stehen im zentralen Pool zur Verfügung.</span>
               </div>
             </div>
             <div className="form-grid three">
-              <Field label="Projektname" value={activeProject.name} onChange={(value) => updateProject({ name: value })} />
-              <Field label="Straße" value={activeProject.street} onChange={(value) => updateProject({ street: value })} />
-              <Field label="Hausnummer" value={activeProject.houseNumber} onChange={(value) => updateProject({ houseNumber: value })} />
-              <Field label="PLZ" value={activeProject.zip} onChange={(value) => updateProject({ zip: value })} />
-              <Field label="Ort" value={activeProject.city} onChange={(value) => updateProject({ city: value })} />
-              <Field label="Ortsteil" value={activeProject.district} onChange={(value) => updateProject({ district: value })} />
-              <Field label="Grundstücksfläche" type="number" min={0} suffix="m²" value={activeProject.plotArea} onChange={(value) => updateProject({ plotArea: Number(value) })} />
-              <Field label="Grundstückspreis" type="number" min={0} suffix="€" value={activeProject.plotPrice} onChange={(value) => updateProject({ plotPrice: Number(value) })} />
-              <Field label="Berücksichtigte Nebenkosten" type="number" min={0} suffix="€" value={activeProject.additionalCosts} onChange={(value) => updateProject({ additionalCosts: Number(value) })} />
-              <TextField label="Geprüfte Lagefakten" value={activeProject.locationFacts} placeholder="z. B. gewachsenes Wohngebiet, ruhige Seitenstraße …" onChange={(value) => updateProject({ locationFacts: value })} />
-              <TextField label="Verkehr & Erreichbarkeit" value={activeProject.transportFacts} placeholder="Nur bestätigte Angaben eintragen." onChange={(value) => updateProject({ transportFacts: value })} />
-              <TextField label="Familie & Versorgung" value={activeProject.familyFacts} placeholder="Schulen, Kitas, Einkauf – nur geprüfte Fakten." onChange={(value) => updateProject({ familyFacts: value })} />
-              <TextField label="Natur & Freizeit" value={activeProject.natureFacts} placeholder="Wald, Seen, Wege oder Freizeitangebote." onChange={(value) => updateProject({ natureFacts: value })} />
-              <TextField label="Zusätzliche Hinweise" value={activeProject.notes} onChange={(value) => updateProject({ notes: value })} />
+              <Field disabled={addressEditingLocked} label="Projektname" value={activeProject.name} onChange={(value) => updateProject({ name: value })} />
+              <Field disabled={addressEditingLocked} label="Straße" value={activeProject.street} onChange={(value) => updateProject({ street: value })} />
+              <Field disabled={addressEditingLocked} label="Hausnummer" value={activeProject.houseNumber} onChange={(value) => updateProject({ houseNumber: value })} />
+              <Field disabled={addressEditingLocked} label="PLZ" value={activeProject.zip} onChange={(value) => updateProject({ zip: value })} />
+              <Field disabled={addressEditingLocked} label="Ort" value={activeProject.city} onChange={(value) => updateProject({ city: value })} />
+              <Field disabled={addressEditingLocked} label="Ortsteil" value={activeProject.district} onChange={(value) => updateProject({ district: value })} />
+              <Field disabled={addressEditingLocked} label="Grundstücksfläche" type="number" min={0} suffix="m²" value={activeProject.plotArea} onChange={(value) => updateProject({ plotArea: Number(value) })} />
+              <Field disabled={addressEditingLocked} label="Grundstückspreis" type="number" min={0} suffix="€" value={activeProject.plotPrice} onChange={(value) => updateProject({ plotPrice: Number(value) })} />
+              <Field disabled={addressEditingLocked} label="Berücksichtigte Nebenkosten" type="number" min={0} suffix="€" value={activeProject.additionalCosts} onChange={(value) => updateProject({ additionalCosts: Number(value) })} />
+              <TextField disabled={addressEditingLocked} label="Geprüfte Lagefakten" value={activeProject.locationFacts} placeholder="z. B. gewachsenes Wohngebiet, ruhige Seitenstraße …" onChange={(value) => updateProject({ locationFacts: value })} />
+              <TextField disabled={addressEditingLocked} label="Verkehr & Erreichbarkeit" value={activeProject.transportFacts} placeholder="Nur bestätigte Angaben eintragen." onChange={(value) => updateProject({ transportFacts: value })} />
+              <TextField disabled={addressEditingLocked} label="Familie & Versorgung" value={activeProject.familyFacts} placeholder="Schulen, Kitas, Einkauf – nur geprüfte Fakten." onChange={(value) => updateProject({ familyFacts: value })} />
+              <TextField disabled={addressEditingLocked} label="Natur & Freizeit" value={activeProject.natureFacts} placeholder="Wald, Seen, Wege oder Freizeitangebote." onChange={(value) => updateProject({ natureFacts: value })} />
+              <TextField disabled={addressEditingLocked} label="Zusätzliche Hinweise" value={activeProject.notes} onChange={(value) => updateProject({ notes: value })} />
             </div>
 
             <div className="selection-section">
@@ -3087,7 +5144,7 @@ export default function InseratStudio() {
                   const selected = activeProject.selectedHouseIds.includes(house.id);
                   const displayImage = house.images[0];
                   return (
-                    <button key={house.id} className={selected ? "select-card selected" : "select-card"} onClick={() => toggleHouse(house.id)}>
+                    <button disabled={addressEditingLocked} key={house.id} className={selected ? "select-card selected" : "select-card"} onClick={() => toggleHouse(house.id)}>
                       <span className="selection-check">{selected ? "✓" : "+"}</span>
                       {displayImage ? <img src={displayImage.dataUrl} alt={displayImage.caption} /> : <div className="image-placeholder">F&amp;P</div>}
                       <div><strong>{house.name}</strong><small>{house.livingArea} m² · {house.rooms} Zimmer</small><b>{euro(totalPrice(house, activeProject))}</b></div>
@@ -3098,39 +5155,25 @@ export default function InseratStudio() {
             </div>
             <div className="promotion-assignment-panel">
               <div className="promotion-assignment-copy">
-                <span className="eyebrow">Aktionsbilder für diese Adresse</span>
-                <h3>Bei wie vielen Häusern einsetzen?</h3>
-                <p>Das Studio wählt zufällig die Häuser und möglichst unterschiedliche Aktionsbilder. Die Zuordnung bleibt gespeichert, bis du neu auslost.</p>
+                <span className="eyebrow">Gespeicherte Zuordnung</span>
+                <h3>Welche Häuser erhalten die Aktionsbilder?</h3>
+                <p>{activePromotionCount === 0
+                  ? "Für diese Adresse sind derzeit keine Aktionsbilder ausgewählt."
+                  : `Das Studio ordnet ${activePromotionCount} Aktionsbild${activePromotionCount === 1 ? "" : "er"} zufällig den ausgewählten Häusern zu.`
+                }</p>
               </div>
               <div className="promotion-assignment-controls">
-                <label>
-                  <span>Anzahl der Inserate</span>
-                  <select
-                    value={projectPromotionCount(activeProject)}
-                    onChange={(event) => setProjectPromotionCount(Number(event.target.value))}
-                  >
-                    {Array.from({ length: MAX_PROMOTED_LISTINGS + 1 }, (_, count) => (
-                      <option
-                        key={count}
-                        value={count}
-                        disabled={count > promotionPool(state).length}
-                      >
-                        {count === 0 ? "0 · keine Aktionsbilder" : `${count} von 4 Häusern`}
-                      </option>
-                    ))}
-                  </select>
-                </label>
                 <button
                   className="secondary"
-                  disabled={!projectPromotionCount(activeProject) || !activeSelectedHouseIds.length}
+                  disabled={addressEditingLocked || !activePromotionCount || !activeSelectedHouseIds.length}
                   onClick={rerollProjectPromotions}
                 >
-                  Neu auslosen
+                  Aktionsbilder neu auslosen
                 </button>
               </div>
-              {projectPromotionCount(activeProject) > promotionPool(state).length ? (
+              {activePromotionCount > promotionPool(state).length ? (
                 <div className="promotion-assignment-warning">
-                  Bitte noch {projectPromotionCount(activeProject) - promotionPool(state).length} Aktionsbild{projectPromotionCount(activeProject) - promotionPool(state).length === 1 ? "" : "er"} im Bereich Haustypen ergänzen.
+                  Bitte noch {activePromotionCount - promotionPool(state).length} Aktionsbild{activePromotionCount - promotionPool(state).length === 1 ? "" : "er"} im Bereich Haustypen ergänzen.
                 </div>
               ) : null}
               <div className="promotion-assignment-list">
@@ -3155,7 +5198,7 @@ export default function InseratStudio() {
             <div className="action-bar">
               <div><b>Bereit für neue KI-Texte?</b><span>Die KI erzeugt jedes Mal eine andere, moderne Überschrift und vier lebendige Textblöcke mit interessanten Einstiegen, klarer Struktur und einer eigenen Erzählrichtung je Inserat. Als Ortsbezug sind nur Ort und Ortsteil erlaubt.</span></div>
               <div className="button-row action-buttons">
-                <button className="primary" disabled={generatingAi || totalSyncBusy} onClick={generateAiListings}>{generatingAi ? "KI schreibt und prüft …" : "KI-Überschrift & Texte erzeugen"}</button>
+                <button className="primary" disabled={generatingAi || addressEditingLocked} onClick={generateAiListings}>{generatingAi ? "KI schreibt und prüft …" : "KI-Überschrift & Texte erzeugen"}</button>
               </div>
             </div>
           </div>
@@ -3168,7 +5211,7 @@ export default function InseratStudio() {
               <div className="section-heading">
                 <div><span className="eyebrow">Prüfen und bearbeiten</span><h2>{activeProject.listings.length || "Keine"} Inseratentwürfe</h2></div>
                 <div className="button-row">
-                  <button className="primary" disabled={generatingAi || totalSyncBusy} onClick={generateAiListings}>{generatingAi ? "KI schreibt und prüft …" : "KI-Überschrift & Texte neu schreiben"}</button>
+                  <button className="primary" disabled={generatingAi || addressEditingLocked} onClick={generateAiListings}>{generatingAi ? "KI schreibt und prüft …" : "KI-Überschrift & Texte neu schreiben"}</button>
               </div>
             </div>
             {activeProject.listings.length ? (
@@ -3193,7 +5236,10 @@ export default function InseratStudio() {
                         <TextField label="3 · Lage" rows={7} value={listing.texts.location} onChange={(value) => updateListingText(listing.id, "location", value)} />
                         <TextField label="4 · Sonstiges" rows={7} value={listing.texts.other} onChange={(value) => updateListingText(listing.id, "other", value)} />
                       </div>
-                      <footer><span>{displayImages.length} Bilder automatisch zugeordnet{listing.promotionImageId ? " · Aktionsbild an Position 1" : ""}</span><span>Weitergabe an Portale: <b>deaktiviert</b></span></footer>
+                      <footer>
+                        <span>{displayImages.length} Bilder automatisch zugeordnet{listing.promotionImageId ? " · Aktionsbild an Position 1" : ""}</span>
+                        <span>Weitergabe an Portale: <b>{portalPublicationEnabled ? "automatisch nach Import" : "deaktiviert"}</b></span>
+                      </footer>
                     </article>
                   );
                 })}
@@ -3205,8 +5251,67 @@ export default function InseratStudio() {
         </section>
       ) : null}
 
+      {tab === "renewal" ? (
+        <SevenDayWorkCenter
+          entries={renewalEntries}
+          incompleteProjectCount={renewalIncompleteProjectCount}
+          ownerScope={renewalScope}
+          selectedProjectIds={selectedRenewalProjectIds}
+          previousExternalIdsByProject={renewalPreviousExternalIds}
+          promotionImageCount={renewalEffectivePromotionCount}
+          availablePromotionImages={Math.min(
+            TOTAL_SYNC_LISTINGS_PER_ADDRESS,
+            promotionPool(state).length,
+          )}
+          portalPublicationEnabled={
+            resumableTotalSync && activeRunIsSevenDay && state.totalSyncRun
+              ? state.totalSyncRun.portalPublicationEnabled === true
+              : portalPublicationEnabled
+          }
+          activeRunKind={state.totalSyncRun?.kind}
+          runResumable={resumableTotalSync}
+          busy={totalSyncBusy}
+          stopping={totalSyncStopping}
+          progress={totalSyncRunProgress}
+          runStatus={totalSyncStatus}
+          runError={state.totalSyncRun?.tasks.find((task) => task.lastError)?.lastError}
+          preflightReport={renewalPreflightReport}
+          onOwnerScopeChange={changeRenewalScope}
+          onPromotionImageCountChange={setRenewalPromotionCount}
+          onToggleProject={toggleRenewalProject}
+          onSelectProjects={selectRenewalProjects}
+          onClearSelection={clearRenewalSelection}
+          onOpenProject={openRenewalProject}
+          onRenewOne={handleRenewalOne}
+          onPrimaryAction={handleRenewalPrimaryAction}
+          onDiscardRun={handleDiscardRenewalRun}
+        />
+      ) : null}
+
+      {tab === "jobs" ? (
+        <UploadJobCenter
+          run={state.totalSyncRun}
+          history={state.uploadRunHistory ?? []}
+          projects={state.projects}
+          houses={state.houses}
+          fallbackAiModel={aiModel}
+          busy={totalSyncBusy}
+          stopping={totalSyncStopping}
+          statusText={totalSyncStatus}
+          onRetryFailed={() => void retryFailedJobs()}
+          onContinue={() => void continueOpenJobs()}
+          onStop={stopTotalSync}
+          onDiscard={() => void discardTotalSyncRun()}
+          onOpenProject={openJobProject}
+          onMarkUnknownFailed={(projectId, externalId) => (
+            void markUnknownJobFailed(projectId, externalId)
+          )}
+        />
+      ) : null}
+
       {tab === "settings" ? (
-        <section className="workspace two-column settings-layout">
+        <>
+          <section className="workspace two-column settings-layout">
           <div className="content-card">
             <div className="section-heading"><div><span className="eyebrow">OpenImmo-Absender</span><h2>Anbieterdaten</h2></div></div>
             <div className="form-grid two">
@@ -3246,7 +5351,13 @@ export default function InseratStudio() {
               </label>
               <label className="field">
                 <span>Qualitätsprofil</span>
-                <select value={aiModel} onChange={(event) => setAiModel(event.target.value as AiModel)}>
+                <select
+                  value={aiModel}
+                  disabled={totalSyncBusy || Boolean(
+                    resumableTotalSync && state.totalSyncRun?.aiModel,
+                  )}
+                  onChange={(event) => setAiModel(event.target.value as AiModelId)}
+                >
                   <option value="gpt-5.6-luna">Günstige Empfehlung · GPT-5.6 Luna</option>
                   <option value="gpt-5.6-terra">Mehr Qualitätsreserve · GPT-5.6 Terra</option>
                   <option value="gpt-5.6-sol">Maximale Textqualität · GPT-5.6 Sol</option>
@@ -3273,16 +5384,109 @@ export default function InseratStudio() {
               </div>
             </div>
 
+            <div className={`portal-publication-card${portalPublicationEnabled ? " enabled" : ""}`}>
+              <div>
+                <span className="eyebrow">Portalveröffentlichung</span>
+                <h3>{portalPublicationEnabled ? "Automatisch online stellen ist aktiv" : "Nur in Immoprofessional importieren"}</h3>
+                <p>
+                  Bei aktivierter Veröffentlichung dürfen neue OpenImmo-Importe automatisch an alle in Immoprofessional für das Objekt verbundenen Portale weitergegeben werden.
+                  Die genaue Objektadresse bleibt unabhängig davon verborgen.
+                </p>
+                <small>
+                  {resumableTotalSync
+                    ? `Der gespeicherte ${activeRunIsSevenDay ? "7-Tage-Lauf" : "Totalabgleich"} bleibt fest auf „${totalSyncEffectivePortalPublication ? "automatisch online" : "nur Import"}“.`
+                    : "Immoprofessional entscheidet anhand seiner dort gespeicherten Portalzuordnung über ImmoScout24, Immowelt, Kleinanzeigen und weitere Ziele."}
+                </small>
+              </div>
+              <div className="publication-mode-buttons" role="group" aria-label="Portalveröffentlichung wählen">
+                <button
+                  type="button"
+                  className={!portalPublicationEnabled ? "selected" : ""}
+                  aria-pressed={!portalPublicationEnabled}
+                  disabled={totalSyncBusy || uploading || resumableTotalSync}
+                  onClick={() => changePortalPublication(false)}
+                >
+                  <b>Nur Import</b>
+                  <span>nicht automatisch online</span>
+                </button>
+                <button
+                  type="button"
+                  className={portalPublicationEnabled ? "selected publish" : "publish"}
+                  aria-pressed={portalPublicationEnabled}
+                  disabled={totalSyncBusy || uploading || resumableTotalSync}
+                  onClick={() => changePortalPublication(true)}
+                >
+                  <b>Automatisch online</b>
+                  <span>alle verbundenen Portale</span>
+                </button>
+              </div>
+            </div>
+
             <div className="total-sync-card">
               <div className="section-heading compact">
                 <div>
-                  <span className="eyebrow">Totalabgleich · einzeln und fortsetzbar</span>
-                  <h2>Alle Adressen neu bestücken</h2>
-                  <p>Vier zufällige Haustypen pro vollständiger Adresse, jedes Mal neue KI-Texte und neue Überschriften. Jedes Inserat wird einzeln und streng nacheinander an Immoprofessional übertragen.</p>
+                  <span className="eyebrow">{activeRunIsSevenDay && resumableTotalSync ? "7-Tage-Erneuerung · einzeln und fortsetzbar" : "Totalabgleich · einzeln und fortsetzbar"}</span>
+                  <h2>{activeRunIsSevenDay && resumableTotalSync ? "Ausgewählte fällige Adressen erneuern" : "Alle Adressen neu bestücken"}</h2>
+                  <p>
+                    {activeRunIsSevenDay && resumableTotalSync
+                      ? "Dieser gespeicherte Lauf erneuert nur die in der 7-Tage-Zentrale ausgewählten Adressen. Die echten Grundstücksdaten bleiben geschützt."
+                      : "Pro vollständiger Adresse werden ein Einfamilienhaus, ein Bungalow, ein Zweifamilienhaus und ein vierter zufälliger Haustyp ausgelost. Dazu entstehen jedes Mal neue KI-Texte und Überschriften. Jedes Inserat wird einzeln und streng nacheinander an Immoprofessional übertragen."}
+                  </p>
                 </div>
                 <span className={totalSyncBusy ? "status online" : resumableTotalSync ? "status offline" : "status"}>
                   {totalSyncBusy ? "Läuft" : resumableTotalSync ? "Fortsetzung bereit" : state.totalSyncRun?.status === "completed" ? "Letzter Lauf fertig" : "Bereit"}
                 </span>
+              </div>
+
+              <div className="total-sync-promotion-panel">
+                <div>
+                  <span className="eyebrow">Aktionsbilder im Totalabgleich</span>
+                  <h3>Wie viele der vier Inserate pro Adresse bekommen ein Aktionsbild?</h3>
+                  <p>Diese Auswahl gilt einheitlich für alle vollständigen Adressen des neuen Totalabgleichs und bleibt bei Pause oder Fortsetzen fest gespeichert.</p>
+                </div>
+                <div
+                  className="promotion-count-buttons"
+                  role="group"
+                  aria-label="Aktionsbilder je Adresse im Totalabgleich"
+                >
+                  {Array.from({ length: TOTAL_SYNC_LISTINGS_PER_ADDRESS + 1 }, (_, count) => {
+                    const selected = totalSyncEffectivePromotionCount === count;
+                    const disabled = totalSyncBusy
+                      || resumableTotalSync
+                      || count > promotionPool(state).length;
+                    return (
+                      <button
+                        type="button"
+                        key={count}
+                        className={selected ? "selected" : ""}
+                        aria-pressed={selected}
+                        aria-label={count === 0
+                          ? "Keine Aktionsbilder je Adresse im Totalabgleich"
+                          : `${count} Aktionsbild${count === 1 ? "" : "er"} je Adresse im Totalabgleich`}
+                        disabled={disabled}
+                        title={count > promotionPool(state).length
+                          ? `Dafür werden mindestens ${count} Bilder im Aktionspool benötigt.`
+                          : resumableTotalSync ? "Die Auswahl ist im gespeicherten Lauf fest hinterlegt." : undefined}
+                        onClick={() => setTotalSyncPromotionCount(count)}
+                      >
+                        <span>{count}</span>
+                        <b>{count === 0 ? "Keine" : count === 4 ? "Alle vier" : `${count} von 4`}</b>
+                        {selected ? <small>Ausgewählt</small> : null}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="promotion-count-summary">
+                  <strong>
+                    {totalSyncEffectivePromotionCount === 0
+                      ? "Totalabgleich ohne Aktionsbilder"
+                      : `${totalSyncEffectivePromotionCount} von 4 Inseraten je Adresse mit Aktionsbild`}
+                  </strong>
+                  <span>{resumableTotalSync
+                    ? "Diese Einstellung gehört fest zum gespeicherten Lauf."
+                    : `${promotionPool(state).length} Aktionsbilder stehen im Pool bereit.`}
+                  </span>
+                </div>
               </div>
 
               <div className="total-sync-controls">
@@ -3302,9 +5506,19 @@ export default function InseratStudio() {
                   <div><span>Vollständige Adressen</span><b>{totalSyncReadyProjects.length}</b></div>
                   <div><span>Geeignete Haustypen</span><b>{totalSyncEligibleHouses.length}</b></div>
                   <div><span>Geplant</span><b>{totalSyncReadyProjects.length * TOTAL_SYNC_LISTINGS_PER_ADDRESS} Inserate</b></div>
+                  <div><span>Aktionsbilder</span><b>{totalSyncEffectivePromotionCount} je Adresse</b></div>
+                  <div><span>Portalstatus</span><b>{totalSyncEffectivePortalPublication ? "automatisch online" : "nur Import"}</b></div>
                   <div><span>Aktueller Lauf</span><b>{totalSyncRunProgress.uploaded}/{totalSyncRunProgress.total || 0} übertragen</b></div>
                 </div>
               </div>
+
+              <PreflightPanel
+                report={totalSyncPreflightReport}
+                title={resumableTotalSync && activeRunIsSevenDay
+                  ? "Vorabprüfung der gespeicherten 7-Tage-Erneuerung"
+                  : "Vorabprüfung des Totalabgleichs"}
+                description="Flächen, Preise, Hausnummern, Haus- und Aktionsbilder, Zugangsdaten sowie Dubletten werden gemeinsam geprüft."
+              />
 
               {state.totalSyncRun ? (
                 <div className="total-sync-progress" role="status" aria-live="polite">
@@ -3326,13 +5540,20 @@ export default function InseratStudio() {
                   className="primary"
                   disabled={totalSyncBusy
                     ? totalSyncStopping
-                    : uploading || generatingAi || savingCredentials}
+                    : uploading
+                      || generatingAi
+                      || savingCredentials
+                      || !totalSyncPreflightReport.canStart}
                   onClick={totalSyncBusy ? stopTotalSync : startOrResumeTotalSync}
                 >
                   {totalSyncBusy
                     ? "Nach aktuellem Schritt anhalten"
+                    : !totalSyncPreflightReport.canStart
+                      ? totalSyncPreflightReport.targetCount
+                        ? `Start gesperrt · ${totalSyncPreflightReport.blockerCount} Blocker`
+                        : "Start gesperrt · keine Zieladresse"
                     : resumableTotalSync
-                      ? "Totalabgleich fortsetzen"
+                      ? activeRunIsSevenDay ? "7-Tage-Erneuerung fortsetzen" : "Totalabgleich fortsetzen"
                       : `Totalabgleich starten · ${totalSyncReadyProjects.length * TOTAL_SYNC_LISTINGS_PER_ADDRESS} Inserate`}
                 </button>
                 {state.totalSyncRun && !totalSyncBusy ? (
@@ -3340,33 +5561,68 @@ export default function InseratStudio() {
                 ) : null}
               </div>
               <p className="total-sync-warning">
-                Vor dem Start die bisherigen Anzeigen in Immoprofessional löschen. Der Lauf erzeugt kostenpflichtige KI-Texte und kann bei sehr vielen Inseraten mehrere Stunden dauern. Die Portalveröffentlichung bleibt ausgeschaltet.
+                Vor dem Start die bisherigen Anzeigen in Immoprofessional löschen. Der Lauf erzeugt kostenpflichtige KI-Texte und kann bei sehr vielen Inseraten mehrere Stunden dauern.
+                {totalSyncEffectivePortalPublication
+                  ? " Die automatische Portalveröffentlichung ist für diesen Lauf aktiv."
+                  : " Die Portalveröffentlichung bleibt ausgeschaltet."}
                 {totalSyncSkippedProjects ? ` ${totalSyncSkippedProjects} unvollständige Adressentwürfe werden übersprungen.` : ""}
               </p>
             </div>
           </div>
 
           <aside className="upload-card">
-            <span className="eyebrow">Kontrollierter Entwurfsimport</span>
+            <span className="eyebrow">{portalPublicationEnabled ? "Direkte Portalveröffentlichung" : "Kontrollierter Entwurfsimport"}</span>
             <h2>{activeProject.listings.length} Inserate bereit</h2>
-            <p>Jedes Inserat wird als eigenes OpenImmo-Paket mit den automatisch zugeordneten Bildern übertragen. Adressfreigabe und Weitergabe an Immobilienportale sind deaktiviert.</p>
+            <p>
+              Jedes Inserat wird als eigenes OpenImmo-Paket mit den automatisch zugeordneten Bildern übertragen.
+              Die genaue Adresse bleibt verborgen; die Portalweitergabe ist {portalPublicationEnabled ? "freigegeben" : "deaktiviert"}.
+            </p>
             <div className="upload-facts">
               <div><span>Projekt</span><b>{activeProject.name}</b></div>
               <div><span>Ziel</span><b>{ftpHost}</b></div>
               <div><span>Format</span><b>OpenImmo 1.2.7 · ZIP</b></div>
               <div><span>Automatik</span><b>Wohngebiet · Gäste-WC · Nutzfläche</b></div>
-              <div><span>Veröffentlichung</span><b>manuell in Immoprofessional</b></div>
+              <div><span>Veröffentlichung</span><b>{portalPublicationEnabled ? "automatisch über Immoprofessional" : "manuell in Immoprofessional"}</b></div>
             </div>
-            <button className="primary full" disabled={uploading || totalSyncBusy || !activeProject.listings.length} onClick={uploadPackage}>{uploading ? uploadStatus || "Wird übertragen …" : "Entwürfe zu Immoprofessional laden"}</button>
+            <PreflightPanel
+              report={manualPreflightReport}
+              title="Vorabprüfung Einzelupload"
+              description="Geprüft werden dieses Grundstück, seine fertigen Inserate, Bilder, Preise, Zugangsdaten und Dubletten."
+              compact
+            />
+            <button
+              className="primary full"
+              disabled={
+                uploading
+                || totalSyncBusy
+                || !activeProject.listings.length
+                || !manualPreflightReport.canStart
+              }
+              onClick={uploadPackage}
+            >
+              {uploading
+                ? uploadStatus || "Wird übertragen …"
+                : !manualPreflightReport.canStart
+                  ? manualPreflightReport.targetCount
+                    ? `Start gesperrt · ${manualPreflightReport.blockerCount} Blocker`
+                    : "Start gesperrt · keine Zieladresse"
+                : portalPublicationEnabled ? "Inserate automatisch online stellen" : "Entwürfe zu Immoprofessional laden"}
+            </button>
             <button className="secondary full" disabled={totalSyncBusy || !activeProject.listings.length} onClick={downloadPackage}>Importpaket nur herunterladen</button>
-            <p className="first-test">Der erste Upload sollte mit einem einzelnen, nicht veröffentlichten Testobjekt geprüft werden. Immoprofessional kann eigene Importregeln anwenden.</p>
+            <p className="first-test">
+              {portalPublicationEnabled
+                ? "Bitte zuerst genau ein Testinserat übertragen und anschließend Importbericht, Portalzuordnung, Onlinestatus und verborgene Adresse prüfen."
+                : "Der erste Upload sollte mit einem einzelnen, nicht veröffentlichten Testobjekt geprüft werden. Immoprofessional kann eigene Importregeln anwenden."}
+            </p>
           </aside>
 
-          <div className="content-card backup-card">
+          </section>
+
+          <section className="workspace content-card backup-card settings-backup-card">
             <div><span className="eyebrow">Strikt getrennte Speicherung</span><h3>Fabian&amp;Pascal-Sicherung</h3><p>Haustypen, Bilder und Adressprojekte werden doppelt lokal gespeichert: im Speicher <code>{STORAGE_ID}</code> und als automatische Gerätesicherung. Zugangsdaten sind separat verschlüsselt. deviq und Plotverium werden weder gelesen noch beschrieben.</p></div>
             <div className="button-row"><button className="secondary" onClick={exportCatalog}>Sicherung herunterladen</button><label className="secondary file-label">Sicherung einlesen<input type="file" accept="application/json" onChange={importCatalog} /></label></div>
-          </div>
-        </section>
+          </section>
+        </>
       ) : null}
     </main>
   );

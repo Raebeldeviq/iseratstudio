@@ -27,6 +27,14 @@ export type AddressImportResult = {
   duplicateCount: number;
 };
 
+export type AddressReplacementResult = {
+  projects: ProjectInput[];
+  errors: string[];
+  preservedProjectCount: number;
+  newProjectCount: number;
+  removedProjectCount: number;
+};
+
 const HEADER_ALIASES: Record<AddressColumn, string[]> = {
   owner: ["benutzer", "bearbeiter", "eigentumer", "owner"],
   name: ["projektname", "projekt", "bezeichnung", "name"],
@@ -96,6 +104,18 @@ function addressKey(project: Pick<ProjectInput, "owner" | "street" | "houseNumbe
   return [project.owner, project.street, project.houseNumber, project.zip, project.city]
     .map(normalize)
     .join("|");
+}
+
+function locationKey(
+  project: Pick<ProjectInput, "owner" | "street" | "zip" | "city">,
+): string {
+  return [project.owner, project.street, project.zip, project.city]
+    .map(normalize)
+    .join("|");
+}
+
+function projectNameKey(project: Pick<ProjectInput, "owner" | "name">): string {
+  return [project.owner, project.name].map(normalize).join("|");
 }
 
 function columnMap(row: readonly unknown[]): Partial<Record<AddressColumn, number>> {
@@ -229,5 +249,123 @@ export function parseAddressWorkbookRows(
     })),
     errors,
     duplicateCount,
+  };
+}
+
+export function replaceAddressWorkbookRows(
+  rows: readonly (readonly unknown[])[],
+  existingProjects: readonly ProjectInput[],
+  createId: () => string,
+): AddressReplacementResult {
+  const headerIndex = rows.findIndex((row) => hasRequiredColumns(columnMap(row)));
+  if (headerIndex < 0) {
+    return {
+      projects: [],
+      errors: ["Keine passende Kopfzeile gefunden. Benötigt werden Benutzer, Straße, PLZ und Ort."],
+      preservedProjectCount: 0,
+      newProjectCount: 0,
+      removedProjectCount: existingProjects.length,
+    };
+  }
+
+  const columns = columnMap(rows[headerIndex]);
+  const cell = (row: readonly unknown[], column: AddressColumn): unknown => {
+    const index = columns[column];
+    return index === undefined ? "" : row[index];
+  };
+  const unusedExistingIds = new Set(existingProjects.map((project) => project.id));
+  const existingByName = new Map<string, ProjectInput[]>();
+  const existingByAddress = new Map<string, ProjectInput[]>();
+  const existingByLocation = new Map<string, ProjectInput[]>();
+  const append = (
+    map: Map<string, ProjectInput[]>,
+    key: string,
+    project: ProjectInput,
+  ) => map.set(key, [...(map.get(key) ?? []), project]);
+  existingProjects.forEach((project) => {
+    append(existingByName, projectNameKey(project), project);
+    append(existingByAddress, addressKey(project), project);
+    append(existingByLocation, locationKey(project), project);
+  });
+
+  const errors: string[] = [];
+  const projects: ProjectInput[] = [];
+  let preservedProjectCount = 0;
+  let newProjectCount = 0;
+  const uniqueUnusedMatch = (
+    candidates: readonly ProjectInput[] | undefined,
+  ): ProjectInput | null => {
+    const unused = (candidates ?? []).filter((project) => unusedExistingIds.has(project.id));
+    return unused.length === 1 ? unused[0] : null;
+  };
+
+  rows.slice(headerIndex + 1).forEach((row, relativeIndex) => {
+    const excelRow = headerIndex + relativeIndex + 2;
+    if (row.every((value) => text(value) === "")) return;
+
+    const owner = ownerFromCell(cell(row, "owner"));
+    if (!owner) {
+      errors.push(`Zeile ${excelRow}: Benutzer muss Fabian oder Pascal sein.`);
+      return;
+    }
+
+    const street = text(cell(row, "street"));
+    const houseNumber = text(cell(row, "houseNumber"));
+    const zip = postalCode(cell(row, "zip"));
+    const city = text(cell(row, "city"));
+    const suppliedName = text(cell(row, "name"));
+    const defaultName = [[street, houseNumber].filter(Boolean).join(" "), [zip, city].filter(Boolean).join(" ")]
+      .filter(Boolean)
+      .join(", ");
+    const name = suppliedName || defaultName || `Neues Adressprojekt ${excelRow}`;
+    const incoming: ProjectInput = {
+      id: createId(),
+      owner,
+      name,
+      street,
+      houseNumber,
+      zip,
+      city,
+      district: text(cell(row, "district")),
+      plotArea: parseGermanNumber(cell(row, "plotArea")),
+      plotPrice: parseGermanNumber(cell(row, "plotPrice")),
+      additionalCosts: parseGermanNumber(cell(row, "additionalCosts")),
+      locationFacts: text(cell(row, "locationFacts")),
+      transportFacts: text(cell(row, "transportFacts")),
+      familyFacts: text(cell(row, "familyFacts")),
+      natureFacts: text(cell(row, "natureFacts")),
+      notes: text(cell(row, "notes")),
+      selectedHouseIds: [],
+      listings: [],
+      createdAt: new Date().toISOString(),
+    };
+
+    const existing = uniqueUnusedMatch(existingByName.get(projectNameKey(incoming)))
+      ?? uniqueUnusedMatch(existingByAddress.get(addressKey(incoming)))
+      ?? uniqueUnusedMatch(existingByLocation.get(locationKey(incoming)));
+    if (existing) {
+      unusedExistingIds.delete(existing.id);
+      projects.push({
+        ...existing,
+        ...incoming,
+        id: existing.id,
+        selectedHouseIds: existing.selectedHouseIds,
+        listings: existing.listings,
+        createdAt: existing.createdAt,
+      });
+      preservedProjectCount += 1;
+      return;
+    }
+
+    projects.push(incoming);
+    newProjectCount += 1;
+  });
+
+  return {
+    projects,
+    errors,
+    preservedProjectCount,
+    newProjectCount,
+    removedProjectCount: unusedExistingIds.size,
   };
 }
