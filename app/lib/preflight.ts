@@ -5,6 +5,7 @@ import type {
   ProjectInput,
   ProviderSettings,
 } from "../types";
+import { findAddressDuplicateGroups } from "./address-duplicates";
 import { missingRequiredTotalSyncHouseTypes } from "./total-sync";
 
 export type PreflightMode = "manual-upload" | "total-sync" | "seven-day";
@@ -189,42 +190,6 @@ export function houseIsReadyForUpload(
     && house.images.length >= minHouseImages
     && house.images.length <= maxHouseImages
     && house.images.every(imageLooksUsable);
-}
-
-function normalizedAddressPart(value: string): string {
-  return value
-    .trim()
-    .toLocaleLowerCase("de-DE")
-    .replace(/ä/g, "ae")
-    .replace(/ö/g, "oe")
-    .replace(/ü/g, "ue")
-    .replace(/ß/g, "ss")
-    .replace(/str(?:asse)?\.?(?=$|\s)/g, "strasse")
-    .replace(/[^a-z0-9]/g, "");
-}
-
-function normalizedHouseNumber(value: string): string {
-  return value
-    .trim()
-    .toLocaleLowerCase("de-DE")
-    .replace(/[–—−]/g, "-")
-    .replace(/\s/g, "")
-    .replace(/[^a-z0-9/-]/g, "");
-}
-
-function duplicateAddressKey(project: ProjectInput): string | undefined {
-  if (
-    !project.street.trim()
-    || !project.houseNumber.trim()
-    || !project.zip.trim()
-    || !project.city.trim()
-  ) return undefined;
-  return [
-    normalizedAddressPart(project.street),
-    normalizedHouseNumber(project.houseNumber),
-    normalizedAddressPart(project.zip),
-    normalizedAddressPart(project.city),
-  ].join("|");
 }
 
 function duplicateGroups<T>(
@@ -653,7 +618,11 @@ export function buildPreflightReport(input: PreflightInput): PreflightReport {
     }
   }
 
-  duplicateGroups(input.allProjects, duplicateAddressKey).forEach((group, index) => {
+  findAddressDuplicateGroups(input.allProjects).forEach((duplicateGroup, index) => {
+    const group = duplicateGroup.projectIds
+      .map((projectId) => input.allProjects.find((project) => project.id === projectId))
+      .filter((project): project is ProjectInput => Boolean(project));
+    if (group.length < 2) return;
     const touchesTarget = group.some((project) => targetProjectIds.has(project.id));
     add("duplicates", makeItem(
       "duplicates",

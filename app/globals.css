@@ -585,6 +585,148 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
 }
 .address-catalog-count b { font-size: 1.25rem; line-height: 1; }
 .address-catalog-count span { color: var(--muted); font-size: 0.65rem; }
+.address-duplicate-check { margin: 0 0 1rem; }
+.address-duplicate-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 0.9rem;
+  border: 1px solid #d9e2d2;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #f8fbf5 0%, #fff 75%);
+}
+.address-duplicate-tools > div { min-width: 0; display: flex; flex-direction: column; gap: 0.2rem; }
+.address-duplicate-tools b { color: var(--ink); font-size: 0.82rem; }
+.address-duplicate-tools small { max-width: 690px; color: var(--muted); font-size: 0.67rem; line-height: 1.45; }
+.address-duplicate-tools button { flex: 0 0 auto; min-height: 42px; white-space: nowrap; }
+.address-duplicate-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+  margin-top: 0.65rem;
+  padding: 0.8rem 0.9rem;
+  color: #486f2f;
+  border: 1px solid #bad59d;
+  border-radius: 12px;
+  background: #f3f9ec;
+}
+.address-duplicate-empty b { font-size: 0.78rem; }
+.address-duplicate-empty span { color: #607553; font-size: 0.65rem; }
+.address-duplicate-panel {
+  margin-top: 0.65rem;
+  overflow: hidden;
+  border: 1px solid #d9c17e;
+  border-radius: 14px;
+  background: #fffdf8;
+  box-shadow: 0 8px 24px rgba(83, 64, 22, 0.08);
+}
+.address-duplicate-panel > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem;
+  border-bottom: 1px solid #eadfbd;
+  background: #fff8e8;
+}
+.address-duplicate-panel > header > div { min-width: 0; display: flex; flex-direction: column; gap: 0.18rem; }
+.address-duplicate-panel > header span { color: #8b6b24; font-size: 0.57rem; font-weight: 850; letter-spacing: 0.09em; text-transform: uppercase; }
+.address-duplicate-panel > header strong { color: #3e3522; font-size: 0.84rem; }
+.address-duplicate-panel > header small { color: #756a50; font-size: 0.65rem; line-height: 1.4; }
+.address-duplicate-delete-button {
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 0.65rem 0.85rem;
+  color: #fff;
+  border: 1px solid #a13b32;
+  border-radius: 10px;
+  background: #a13b32;
+  font-size: 0.7rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.address-duplicate-delete-button:hover:not(:disabled) { border-color: #842d27; background: #842d27; }
+.address-duplicate-delete-button:focus-visible { outline: 3px solid rgba(161, 59, 50, 0.25); outline-offset: 2px; }
+.address-duplicate-locked {
+  padding: 0.65rem 0.9rem;
+  color: #6f5621;
+  border-bottom: 1px solid #eadfbd;
+  background: #fff4d8;
+  font-size: 0.65rem;
+  line-height: 1.45;
+}
+.address-duplicate-groups {
+  max-height: 520px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.85rem;
+  overflow: auto;
+}
+.address-duplicate-group {
+  min-width: 0;
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px solid #e6dfcb;
+  border-radius: 11px;
+  background: #fff;
+}
+.address-duplicate-group legend {
+  max-width: calc(100% - 1rem);
+  padding: 0 0.35rem;
+  color: #4d4638;
+  font-size: 0.68rem;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+.address-duplicate-warning {
+  margin-bottom: 0.55rem;
+  padding: 0.5rem 0.6rem;
+  color: #76581c;
+  border: 1px solid #ead7a4;
+  border-radius: 8px;
+  background: #fff7dd;
+  font-size: 0.62rem;
+  font-weight: 700;
+}
+.address-duplicate-choices { display: flex; flex-direction: column; gap: 0.45rem; }
+.address-duplicate-choice {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.55rem;
+  align-items: stretch;
+  padding: 0.55rem 0.62rem;
+  border: 1px solid #ead7d2;
+  border-radius: 9px;
+  background: #fff8f6;
+}
+.address-duplicate-choice.kept { border-color: #bad399; background: #f3f9eb; }
+.address-duplicate-choice > label {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  gap: 0.55rem;
+  align-items: center;
+  cursor: pointer;
+}
+.address-duplicate-choice input { width: 18px; height: 18px; margin: 0; accent-color: #78a33d; }
+.address-duplicate-choice label > span { min-width: 0; display: flex; flex-direction: column; gap: 0.2rem; }
+.address-duplicate-choice label > span > b { min-width: 0; display: flex; align-items: center; gap: 0.45rem; color: var(--ink); font-size: 0.68rem; }
+.address-duplicate-choice label > span > small { color: var(--muted); font-size: 0.59rem; line-height: 1.4; overflow-wrap: anywhere; }
+.address-duplicate-choice em {
+  padding: 0.24rem 0.4rem;
+  color: #973a32;
+  border-radius: 999px;
+  background: #fbe5e1;
+  font-size: 0.56rem;
+  font-style: normal;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.address-duplicate-choice.kept em { color: #496b25; background: #deedc9; }
+.address-duplicate-open { align-self: center; min-height: 36px; padding: 0.45rem 0.62rem; font-size: 0.62rem; white-space: nowrap; }
 .address-catalog-filters {
   display: grid;
   grid-template-columns: minmax(220px, 1.5fr) repeat(4, minmax(120px, 1fr));
@@ -1301,6 +1443,12 @@ input:focus, textarea:focus, select:focus { border-color: #91bc47; box-shadow: 0
   .address-import-bar .button-row, .address-import-bar .button-row > * { width: 100%; }
   .address-catalog-head, .address-catalog-footer { align-items: stretch; flex-direction: column; }
   .address-catalog-count { width: fit-content; justify-content: flex-start; }
+  .address-duplicate-tools, .address-duplicate-panel > header { align-items: stretch; flex-direction: column; }
+  .address-duplicate-tools button, .address-duplicate-panel > header button { width: 100%; }
+  .address-duplicate-choice { grid-template-columns: 1fr; }
+  .address-duplicate-choice > label { grid-template-columns: 20px minmax(0, 1fr); }
+  .address-duplicate-choice em { grid-column: 2; justify-self: start; }
+  .address-duplicate-open { width: 100%; }
   .address-catalog-filters { grid-template-columns: 1fr; }
   .address-search { grid-column: auto; }
   .address-filter-reset { width: 100%; }

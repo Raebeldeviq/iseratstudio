@@ -10,6 +10,12 @@ registerHooks({
     ) {
       return nextResolve("./total-sync.ts", context);
     }
+    if (
+      specifier === "./address-duplicates"
+      && context.parentURL?.endsWith("/app/lib/preflight.ts")
+    ) {
+      return nextResolve("./address-duplicates.ts", context);
+    }
     return nextResolve(specifier, context);
   },
 });

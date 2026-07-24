@@ -30,7 +30,11 @@ einzelne Bilddateien gesichert; Textänderungen übertragen die Fotos nicht erne
 2. Unter **Adresse & Auswahl** die Grundstücksdaten erfassen und bis zu vier
    Haustypen auswählen. Dort außerdem festlegen, ob 0 bis 4 dieser Inserate ein
    Aktionsbild erhalten sollen. Die zufällige Zuordnung bleibt gespeichert und
-   kann mit **Neu auslosen** bewusst geändert werden.
+   kann mit **Neu auslosen** bewusst geändert werden. In der aufklappbaren
+   **Adresszentrale** findet **Adressdubletten prüfen** gleiche echte Adressen
+   auch gemeinsam über Fabian und Pascal. Pro Gruppe wird ein Original
+   ausgewählt; nur die überzähligen lokalen Adressprojekte werden nach einer
+   Sicherheitsabfrage gelöscht.
 3. Unter **Export & Upload** einen vollständigen OpenAI-API-Schlüssel eintragen,
    der mit `sk-` beginnt, und **Zugangsdaten prüfen & speichern** drücken. Danach
    unter **Adresse & Auswahl** die hochwertige KI-Überschrift und alle vier

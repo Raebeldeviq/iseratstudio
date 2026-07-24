@@ -18,14 +18,19 @@ import {
   type AddressOwnerFilter,
   type AddressUploadFilter,
 } from "../lib/address-catalog";
+import type { AddressDuplicateGroup } from "../lib/address-duplicates";
 import type { ProjectInput } from "../types";
+import { AddressDuplicatePanel } from "./AddressDuplicatePanel";
 
 const DEFAULT_PAGE_SIZE = 25;
 
 type AddressBookTableProps = {
   projects: ProjectInput[];
   activeProjectId: string;
+  duplicateGroups: AddressDuplicateGroup[];
+  duplicateMutationLocked: boolean;
   onOpenProject: (projectId: string) => void;
+  onDeleteDuplicates: (keepIdsByGroup: Record<string, string>) => void;
 };
 
 function ownerLabel(project: ProjectInput): string {
@@ -58,7 +63,10 @@ function formatUploadDate(value: string | undefined): string {
 export function AddressBookTable({
   projects,
   activeProjectId,
+  duplicateGroups,
+  duplicateMutationLocked,
   onOpenProject,
+  onDeleteDuplicates,
 }: AddressBookTableProps) {
   const [query, setQuery] = useState("");
   const [city, setCity] = useState("");
@@ -133,6 +141,14 @@ export function AddressBookTable({
           <span>von {projects.length} Adressen</span>
         </div>
       </div>
+
+      <AddressDuplicatePanel
+        projects={projects}
+        groups={duplicateGroups}
+        mutationLocked={duplicateMutationLocked}
+        onOpenProject={onOpenProject}
+        onDeleteDuplicates={onDeleteDuplicates}
+      />
 
       <div className="address-catalog-filters">
         <label className="address-search">

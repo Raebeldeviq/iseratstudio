@@ -26,6 +26,7 @@ import {
   parseAddressWorkbookRows,
   replaceAddressWorkbookRows,
 } from "./lib/address-import";
+import { findAddressDuplicateGroups } from "./lib/address-duplicates";
 import { APP_VERSION } from "./lib/app-version.mjs";
 import {
   headlinesAreTooSimilar,
@@ -1029,6 +1030,15 @@ export default function InseratStudio() {
     ]),
   );
   const addressEditingLocked = totalSyncBusy || resumableTotalSync;
+  const addressDuplicateGroups = findAddressDuplicateGroups(state.projects);
+  const addressDuplicateMutationLocked = (
+    addressEditingLocked
+    || uploading
+    || generatingAi
+    || importingAddresses
+    || replacingAddresses
+    || savingAddress
+  );
   const preflightCredentials = {
     credentialsReady,
     ftpHost,
@@ -2043,6 +2053,76 @@ export default function InseratStudio() {
     window.requestAnimationFrame(() => {
       addressEditorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
+  };
+
+  const deleteAddressDuplicates = (keepIdsByGroup: Record<string, string>) => {
+    if (addressDuplicateMutationLocked) {
+      setNotice("Adressdubletten können erst nach dem laufenden Upload- oder Speichervorgang gelöscht werden.");
+      return;
+    }
+
+    const currentGroups = findAddressDuplicateGroups(state.projects);
+    const deleteIds = new Set<string>();
+    let keptProjectForActiveDuplicate: ProjectInput | undefined;
+
+    for (const group of currentGroups) {
+      const requestedKeepId = keepIdsByGroup[group.id] || group.recommendedKeepId;
+      if (!group.projectIds.includes(requestedKeepId)) {
+        setNotice("Die Adressdubletten haben sich geändert. Bitte die Prüfung erneut starten.");
+        return;
+      }
+      if (group.projectIds.includes(activeProjectId)) {
+        keptProjectForActiveDuplicate = state.projects.find(
+          (project) => project.id === requestedKeepId,
+        );
+      }
+      group.projectIds.forEach((projectId) => {
+        if (projectId !== requestedKeepId) deleteIds.add(projectId);
+      });
+    }
+
+    if (!deleteIds.size) {
+      setNotice("Es sind keine doppelten Grundstücksadressen zum Löschen vorhanden.");
+      return;
+    }
+
+    const remainingProjects = state.projects.filter((project) => !deleteIds.has(project.id));
+    if (!remainingProjects.length) {
+      setNotice("Die Bereinigung wurde abgebrochen, weil mindestens eine Adresse erhalten bleiben muss.");
+      return;
+    }
+
+    const nextState = {
+      ...state,
+      projects: remainingProjects,
+    };
+    setState(nextState);
+    setSelectedRenewalProjectIds((current) => (
+      current.filter((projectId) => !deleteIds.has(projectId))
+    ));
+
+    if (deleteIds.has(activeProjectId)) {
+      const nextActiveProject = keptProjectForActiveDuplicate ?? remainingProjects[0];
+      setActiveProjectId(nextActiveProject.id);
+      setActiveOwner(projectOwner(nextActiveProject));
+      if (!resumableTotalSync && !totalSyncBusy) {
+        setTotalSyncScope(projectOwner(nextActiveProject));
+      }
+    }
+
+    const savedAt = new Date().toISOString();
+    const saves: Promise<unknown>[] = [saveStudioState(nextState, savedAt)];
+    if (helperOnline) saves.push(queueWindowsCatalogSnapshot(nextState, savedAt));
+    setSaveLabel("Bereinigter Adressbestand wird doppelt gespeichert …");
+    void Promise.all(saves)
+      .then(() => setSaveLabel(
+        helperOnline ? "Browser + Gerätesicherung aktuell" : "Lokal im Browser gespeichert",
+      ))
+      .catch(() => setSaveLabel("Speichern fehlgeschlagen"));
+    setNotice(
+      `${deleteIds.size} Adressdublette${deleteIds.size === 1 ? "" : "n"} wurde${deleteIds.size === 1 ? "" : "n"} gelöscht. `
+      + `${currentGroups.length} Original${currentGroups.length === 1 ? "" : "e"} blieb${currentGroups.length === 1 ? "" : "en"} vollständig erhalten.`,
+    );
   };
 
   const importAddressesFromExcel = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -4982,6 +5062,12 @@ export default function InseratStudio() {
                 </span>
                 <span className="address-center-summary-meta">
                   {addressEditingLocked ? <em>Daten geschützt</em> : null}
+                  {addressDuplicateGroups.length ? (
+                    <em>
+                      {addressDuplicateGroups.length} Adressdublette
+                      {addressDuplicateGroups.length === 1 ? "" : "n"}
+                    </em>
+                  ) : null}
                   <b>{addressCenterOpen ? "Zuklappen" : "Aufklappen"}</b>
                   <span className="address-center-chevron" aria-hidden="true">⌄</span>
                 </span>
@@ -5060,7 +5146,10 @@ export default function InseratStudio() {
                 <AddressBookTable
                   projects={state.projects}
                   activeProjectId={activeProject.id}
+                  duplicateGroups={addressDuplicateGroups}
+                  duplicateMutationLocked={addressDuplicateMutationLocked}
                   onOpenProject={openAddressProject}
+                  onDeleteDuplicates={deleteAddressDuplicates}
                 />
               </div>
             </details>

@@ -1,5 +1,23 @@
 # Änderungsprotokoll
 
+## Adressdubletten sicher bereinigen – 25. Juli 2026
+
+- Die **Adresszentrale** besitzt jetzt einen eigenen, gut sichtbaren Knopf
+  **Adressdubletten prüfen**.
+- Gleiche Grundstücksadressen werden anhand von Straße, Hausnummer, PLZ und Ort
+  auch gemeinsam über die Adressbücher von Fabian und Pascal erkannt.
+- Pro Dublettengruppe kann bewusst ein vollständiges Original ausgewählt
+  werden. Nur die übrigen lokalen Adressprojekte werden nach einer eindeutigen
+  Sicherheitsabfrage gelöscht.
+- Fläche, Preis, Inseratanzahl, letzter Upload und abweichende Grundstücksdaten
+  sind vor der Auswahl sichtbar. Die Empfehlung bevorzugt den vollständigeren
+  beziehungsweise aktuelleren Datensatz.
+- Während Upload-, KI-, Import- oder Speicherläufen bleibt die Prüfung
+  verfügbar, die Löschung ist jedoch gesperrt. Wird die geöffnete Dublette
+  entfernt, öffnet das Studio automatisch das gewählte Original.
+- Vorabprüfung und Adresszentrale verwenden jetzt dieselbe Normalisierung,
+  sodass an beiden Stellen identische Adressdubletten gemeldet werden.
+
 ## Schnellere Produktionspipeline – 24. Juli 2026
 
 - Neue Totalabgleiche losen pro Adresse garantiert mindestens ein
