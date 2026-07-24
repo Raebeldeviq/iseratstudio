@@ -144,6 +144,8 @@ export type ProviderSettings = {
 
 export type StudioState = {
   version: 1;
+  houseCatalogVersion?: string;
+  houseCatalogUpdatedAt?: string;
   houses: HouseTemplate[];
   projects: ProjectInput[];
   provider: ProviderSettings;

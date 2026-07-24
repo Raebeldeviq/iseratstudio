@@ -5,6 +5,8 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  BUNDLED_INTERIOR_LIBRARY_ROOT,
+  BUNDLED_MEDIA_LIBRARY_ROOT,
   clearMediaLibraryCache,
   DEFAULT_INTERIOR_LIBRARY_ROOT,
   DEFAULT_MEDIA_LIBRARY_ROOT,
@@ -13,16 +15,14 @@ import {
   recommendedMediaSequence,
 } from "../media-library.mjs";
 
-test("keeps Pascal's two configured iCloud media roots", () => {
+test("uses the integrated media roots while retaining optional overrides", () => {
   assert.equal(
     DEFAULT_MEDIA_LIBRARY_ROOT,
-    process.env.FPI_MEDIA_LIBRARY_ROOT
-      || "/Users/pascalfrohlich/Library/Mobile Documents/com~apple~CloudDocs/Life Business-System/01_HANDELSVERTRETUNG/03_MARKETING/04_ANZEIGEN",
+    process.env.FPI_MEDIA_LIBRARY_ROOT || BUNDLED_MEDIA_LIBRARY_ROOT,
   );
   assert.equal(
     DEFAULT_INTERIOR_LIBRARY_ROOT,
-    process.env.FPI_INTERIOR_LIBRARY_ROOT
-      || "/Users/pascalfrohlich/Library/Mobile Documents/com~apple~CloudDocs/Life Business-System/01_HANDELSVERTRETUNG/03_MARKETING/01_RENDERING/Inneneinrichtung",
+    process.env.FPI_INTERIOR_LIBRARY_ROOT || BUNDLED_INTERIOR_LIBRARY_ROOT,
   );
 });
 

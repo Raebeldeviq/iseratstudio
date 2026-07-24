@@ -35,7 +35,7 @@ export const IMAGE_ROLE_LABELS = {
   kids: "Kinderzimmer",
   living: "Wohnzimmer",
   office: "Büro",
-  emotion: "Emotionaler Abschluss",
+  emotion: "Emotionaler Catch",
   floorplan_ground: "Grundriss Erdgeschoss",
   floorplan_upper: "Grundriss Ober-/Dachgeschoss",
   floorplan_third: "Grundriss dritte Etage",
@@ -52,19 +52,19 @@ export const TITLE_IMAGE_CAPTIONS = [
 ];
 
 const FIXED_CAPTIONS = {
-  kitchen: "Deine 5-Sterne-Küche",
-  bathroom: "Dein persönlicher Spa-Bereich",
+  kitchen: "Deine 5* Küche",
+  bathroom: "Dein Spa",
   bedroom: "Deine Ruhezone",
-  kids: "Raum zum Wachsen",
-  living: "Ankommen und gemeinsam genießen",
-  office: "Work-Life-Balance zu Hause",
+  kids: "Der Entwicklungsraum",
+  living: "Setz dich und ruh dich aus",
+  office: "Work-Life Balance",
   emotion: "Hier beginnt dein Zuhause",
   floorplan_ground: "Dein Erdgeschoss",
   floorplan_upper: "Dein Obergeschoss",
   floorplan_third: "Dein Dachgeschoss",
   awards: "Ausgezeichnet gebaut",
-  trust: "Persönlich und bestens beraten",
-  qr: "Jetzt den nächsten Schritt starten",
+  trust: "Bestens beraten",
+  qr: "Jetzt starten!",
 };
 
 const ROLE_RANK = {

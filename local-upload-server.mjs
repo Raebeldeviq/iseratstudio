@@ -55,6 +55,11 @@ function send(response, status, payload, origin = "") {
   response.end(JSON.stringify(payload));
 }
 
+function isGitLfsPointer(data) {
+  return data.length < 1024
+    && data.subarray(0, 100).toString("utf8").startsWith("version https://git-lfs.github.com/spec/v1");
+}
+
 function publicMediaItem(item) {
   return {
     id: item.id,
@@ -250,10 +255,14 @@ const server = createServer(async (request, response) => {
         throw new Error("Das Bild ist ungültig oder größer als 100 MB.");
       }
       const data = await readFile(item.absolutePath);
+      if (isGitLfsPointer(data)) {
+        throw new Error("Die Bildoriginale wurden noch nicht geladen. Bitte im App-Ordner zuerst „git lfs pull“ ausführen.");
+      }
       response.writeHead(200, {
         ...headers(origin),
         "Content-Type": item.mimeType,
         "Content-Length": String(data.length),
+        "X-Content-Type-Options": "nosniff",
       });
       response.end(data);
       return;

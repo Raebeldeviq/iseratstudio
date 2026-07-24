@@ -179,6 +179,17 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
 .notice button { background: transparent; border: 0; font-size: 1.2rem; color: var(--ink); }
 
 .workspace { width: min(1180px, 92vw); margin: 0 auto; }
+.integrated-catalog-card { margin-bottom: 1rem; padding: 1rem 1.2rem; border: 1px solid var(--line); border-radius: 18px; background: rgba(255,255,255,0.92); box-shadow: 0 10px 36px rgba(29, 61, 52, 0.05); }
+.integrated-catalog-card details { width: 100%; }
+.integrated-catalog-card summary { display: flex; align-items: center; justify-content: space-between; gap: 1rem; cursor: pointer; list-style: none; }
+.integrated-catalog-card summary::-webkit-details-marker { display: none; }
+.integrated-catalog-card summary > span { display: flex; flex-direction: column; }
+.integrated-catalog-card summary > strong { color: var(--muted); font-size: 0.82rem; }
+.integrated-price-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); gap: 0.65rem; margin-top: 1.25rem; }
+.integrated-price-grid > div { display: grid; grid-template-columns: 1fr auto; gap: 0.16rem 0.8rem; padding: 0.75rem 0.85rem; border: 1px solid var(--line); border-radius: 12px; background: #f8faf6; }
+.integrated-price-grid span { grid-column: 1 / -1; color: var(--muted); font-size: 0.68rem; }
+.integrated-price-grid b, .integrated-price-grid strong { font-size: 0.84rem; }
+.integrated-price-grid strong { color: var(--ink); }
 .two-column { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 1rem; align-items: start; }
 .settings-layout { grid-template-columns: minmax(0, 1.45fr) minmax(300px, 0.55fr); }
 .settings-layout .backup-card { grid-column: 1 / -1; }

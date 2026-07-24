@@ -1,9 +1,14 @@
 import { resolveHousePrice } from "./house-price-catalog.mjs";
+import { buildRecommendedMediaSequence } from "./image-sequence.mjs";
 
 export const DEFAULT_HOUSE_ARCHITECTURE =
   "Ein klar gegliederter Grundriss verbindet offene Gemeinschaftsbereiche mit gut nutzbaren privaten Rückzugsräumen";
 export const DEFAULT_HOUSE_EQUIPMENT =
   "individuelle Grundrissplanung, moderne Haustechnik, hochwertige Sanitärausstattung und persönliche Bemusterung";
+
+export const CONFIRMED_HOUSE_MODEL_DETAILS = Object.freeze({
+  SUN113: Object.freeze({ livingArea: 106.15, rooms: 4, bedrooms: 3 }),
+});
 
 export const HOUSE_TEMPLATE_PRESETS = Object.freeze([
   { key: "sun126-v2", name: "SUN 126 V2", coverFilename: "SUN 126 V2.png", livingArea: 121.74, rooms: 4, bedrooms: 2, bathrooms: 2, floors: 2 },
@@ -23,8 +28,19 @@ export const HOUSE_TEMPLATE_PRESETS = Object.freeze([
   { key: "sol101-v2", name: "SOL 101 V2", coverFilename: "SOL 101 V2.png", livingArea: 100.72, rooms: 3, bedrooms: 2, bathrooms: 1, floors: 1, houseType: "Bungalow" },
   { key: "sol107-v2", name: "SOL 107 V2", coverFilename: "Sol 107 SD.png", livingArea: 106.85, rooms: 4, bedrooms: 3, bathrooms: 1, floors: 1, houseType: "Bungalow" },
   { key: "sol110-v2", name: "SOL 110 V2", coverFilename: "SOL 110 V2.png", livingArea: 110.45, rooms: 4, bedrooms: 3, bathrooms: 1, floors: 1, houseType: "Bungalow" },
-  { key: "sun113-v6", name: "SUN 113 V6", coverFilename: "SUN 113 V6.png", livingArea: 113, rooms: 4, bedrooms: 2, bathrooms: 1, floors: 2, priceOpen: true },
+  { key: "sun113-v6", name: "SUN 113 V6", coverFilename: "SUN 113 V6.png", ...CONFIRMED_HOUSE_MODEL_DETAILS.SUN113, bathrooms: 1, floors: 2 },
 ]);
+
+export function applyConfirmedHouseModelDetails(house) {
+  const priceMatch = resolveHousePrice(house?.name);
+  const modelDetails = priceMatch && CONFIRMED_HOUSE_MODEL_DETAILS[priceMatch.key];
+  if (!modelDetails) return house;
+  return {
+    ...house,
+    ...modelDetails,
+    housePrice: priceMatch.price,
+  };
+}
 
 export function houseTemplateFromPreset(definition, images, {
   constructionYear = new Date().getFullYear() + 1,
@@ -33,7 +49,7 @@ export function houseTemplateFromPreset(definition, images, {
     definition.name,
     ...images.map((image) => image.name),
   ]);
-  if (!definition.priceOpen && !priceMatch) {
+  if (!priceMatch) {
     throw new Error(`${definition.name}: Kein eindeutiger Hauspreis gefunden.`);
   }
   return {
@@ -46,7 +62,7 @@ export function houseTemplateFromPreset(definition, images, {
     bedrooms: definition.bedrooms,
     bathrooms: definition.bathrooms,
     floors: definition.floors,
-    housePrice: definition.priceOpen ? 0 : priceMatch.price,
+    housePrice: priceMatch.price,
     constructionYear,
     energyDemand: 18,
     energyClass: "A++",
@@ -57,4 +73,54 @@ export function houseTemplateFromPreset(definition, images, {
     useStandardPackage: true,
     images,
   };
+}
+
+function presetCover(definition, mediaItems) {
+  return mediaItems.find(
+    (item) => item.relativePath === `Haustypen/${definition.coverFilename}`,
+  ) || null;
+}
+
+function presetImage(item) {
+  return {
+    id: `preset_media_${item.id}`,
+    sourceId: item.id,
+    name: item.filename,
+    mimeType: item.mimeType,
+    dataUrl: "",
+    caption: item.caption,
+    isFloorplan: item.kind === "floorplan",
+    role: item.role,
+    captionLocked: item.captionLocked,
+  };
+}
+
+export function buildHouseTemplatePresets(mediaItems, {
+  constructionYear = new Date().getFullYear() + 1,
+} = {}) {
+  if (!Array.isArray(mediaItems) || !mediaItems.length) {
+    throw new Error("Die Medienbibliothek ist leer.");
+  }
+
+  return HOUSE_TEMPLATE_PRESETS.map((definition) => {
+    const cover = presetCover(definition, mediaItems);
+    if (!cover) throw new Error(`Titelbild ${definition.coverFilename} fehlt.`);
+    const sequence = buildRecommendedMediaSequence(cover.id, mediaItems);
+    if (sequence.warnings.length) {
+      throw new Error(`${definition.name}: ${sequence.warnings.join(" ")}`);
+    }
+    return houseTemplateFromPreset(
+      definition,
+      sequence.items.map(presetImage),
+      { constructionYear },
+    );
+  });
+}
+
+export function isEmptyHousePlaceholder(house) {
+  const name = String(house?.name || "").trim();
+  return Array.isArray(house?.images)
+    && house.images.length === 0
+    && Number(house?.housePrice || 0) === 0
+    && (name === "Zweifamilienhaus – Muster" || /^Haustyp \d+$/.test(name));
 }

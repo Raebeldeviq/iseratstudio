@@ -6,9 +6,10 @@ import {
   resolveHousePrice,
 } from "../house-price-catalog.mjs";
 
-test("contains every supplied Pascal price", () => {
+test("contains every supplied house price", () => {
   const entries = housePriceCatalogEntries();
-  assert.equal(entries.length, 29);
+  assert.equal(entries.length, 30);
+  assert.equal(resolveHousePrice("SUN 113 V6.png").price, 355_122);
   assert.equal(resolveHousePrice("SUN 126 V2.png").price, 365_073);
   assert.equal(resolveHousePrice("SUN_165_V7_KAT_OG.jpg").price, 426_931);
   assert.equal(resolveHousePrice("SOL_082_B_SD").price, 325_931);

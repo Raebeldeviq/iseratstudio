@@ -1,6 +1,6 @@
 {
   "name": "fabian-pascal-inseratestudio",
-  "version": "0.9.6",
+  "version": "0.10.0",
   "private": true,
   "packageManager": "pnpm@11.9.0",
   "engines": {
@@ -11,6 +11,8 @@
     "build": "vinext build",
     "start": "vinext start --port 43181",
     "upload-server": "node local-upload-server.mjs",
+    "media:prepare": "node scripts/prepare-bundled-house-assets.mjs",
+    "catalog:install": "node scripts/install-bundled-house-catalog.mjs --replace-active",
     "test": "vinext build && node --test tests/*.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
   },

@@ -30,8 +30,10 @@ test("sorts fixed image roles while preserving interior order", () => {
   );
 });
 
-test("uses Pascal image captions without locking the cover caption", () => {
-  assert.equal(captionForImageRole("kitchen"), "Deine 5-Sterne-Küche");
+test("uses the integrated image captions without locking the cover caption", () => {
+  assert.equal(captionForImageRole("kitchen"), "Deine 5* Küche");
+  assert.equal(captionForImageRole("bathroom"), "Dein Spa");
+  assert.equal(captionForImageRole("kids"), "Der Entwicklungsraum");
   assert.equal(isFixedCaptionRole("kitchen"), true);
   assert.equal(captionForImageRole("cover"), "Dein wundervolles Zuhause");
   assert.equal(isFixedCaptionRole("cover"), false);

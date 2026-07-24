@@ -108,19 +108,19 @@ ersten 13 Hausbilder; Bild 14 bleibt vollständig in der Hausvorlage erhalten.
 Der Aktionsbild-Pool wird separat und ohne Bildduplikate in der lokalen Browser-
 und Gerätesicherung gespeichert.
 
-## Pascal-Hauskatalog
+## Integrierter Haus- und Medienkatalog
 
-Version 0.9.6 enthält Pascals vollständigen operativen Katalog mit 18
-Haustypen, den zugehörigen Preislisteneinträgen und 139 für Windows und Git
-optimierten WebP-Bildern. Jeder aktive Haustyp besitzt zwischen 4 und 14
-Bildern. Die ursprünglichen Bilddateien bleiben außerhalb des Programms
-unverändert; der eingebundene Satz liegt unter
-`assets/pascal-house-catalog`.
+Version 0.10.0 enthält den vollständigen operativen Katalog mit 18
+Haustypen, 30 Preislisteneinträgen und 665 Originalbildern. Jeder aktive
+Haustyp besitzt eine geprüfte Bildfolge mit 12 oder 13 Bildern. Die
+Originaldateien liegen unter `bundled-media` und werden über Git LFS
+versioniert; der für schnelle Browser-Ladezeiten optimierte Satz liegt unter
+`assets/bundled-house-catalog`.
 
 Beim Katalogabgleich werden bisherige Haustypen unsichtbar archiviert. Dadurch
 bleiben ältere Inserate, Upload-Historie und ihre Bildbezüge vollständig
 auflösbar, während Hausauswahl, Totalabgleich und Bildtext-Erneuerung nur noch
-die 18 aktiven Pascal-Haustypen verwenden. Adressprojekte, Zugangsdaten,
+die 18 aktiven Haustypen verwenden. Adressprojekte, Zugangsdaten,
 Aktionsbilder und Uploadprotokolle werden vom Abgleich nicht ersetzt.
 
 Das Inseratestudio darf nur in einem Browser-Tab gleichzeitig geöffnet sein.

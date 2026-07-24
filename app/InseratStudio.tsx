@@ -4,7 +4,11 @@
 import { ChangeEvent, useEffect, useRef, useState } from "react";
 import { readSheet } from "read-excel-file/browser";
 import appPackage from "../package.json";
-import { resolveHousePrice } from "../house-price-catalog.mjs";
+import {
+  housePriceCatalogEntries,
+  resolveHousePrice,
+} from "../house-price-catalog.mjs";
+import { applyConfirmedHouseModelDetails } from "../house-template-presets.mjs";
 import { fillMissingProjectingDefaults } from "../listing-copy.mjs";
 import {
   captionForImageRole,
@@ -81,6 +85,7 @@ type MediaLibraryGroup = { name: string; count: number };
 const MIN_HOUSE_IMAGES = 4;
 const MAX_HOUSE_IMAGES = 14;
 const MAX_HOUSE_TEMPLATES = 25;
+const HOUSE_PRICE_ENTRIES = housePriceCatalogEntries();
 const MEDIA_KIND_LABELS: Record<MediaLibraryKind, string> = {
   house: "Hausansicht",
   floorplan: "Grundriss",
@@ -449,10 +454,12 @@ async function loadWindowsCatalogSnapshot(): Promise<{
       state?: StudioState;
     };
     if (manifestResponse.ok && manifestData.ok && manifestData.stored && manifestData.state && manifestData.savedAt) {
-      const imageIds = [
-        ...manifestData.state.houses.flatMap((house) => house.images.map((image) => image.id)),
+      const imageIds = [...new Set([
+        ...manifestData.state.houses
+          .filter((house) => house.archived !== true)
+          .flatMap((house) => house.images.map((image) => image.id)),
         ...promotionPool(manifestData.state).map((image) => image.id),
-      ];
+      ])];
       const dataUrlById = new Map<string, string>();
       await runWithConcurrency(imageIds, async (imageId) => {
         const imageResponse = await fetch(`http://127.0.0.1:43182/catalog-v2/image?imageId=${encodeURIComponent(imageId)}`);
@@ -475,7 +482,9 @@ async function loadWindowsCatalogSnapshot(): Promise<{
           ...house,
           images: house.images.map((image) => ({
             ...image,
-            dataUrl: dataUrlById.get(image.id) ?? "",
+            dataUrl: house.archived === true
+              ? ""
+              : dataUrlById.get(image.id) ?? "",
           })),
         })),
       };
@@ -616,7 +625,26 @@ export default function InseratStudio() {
         }
         candidates.sort((left, right) => snapshotTime(right.savedAt) - snapshotTime(left.savedAt));
         const selected = candidates[0];
-        const loaded = normalizeProjectOwners(selected?.state ?? initialState());
+        const houseCatalog = candidates
+          .filter((candidate) => Boolean(candidate.state.houseCatalogVersion))
+          .sort((left, right) => (
+            snapshotTime(right.state.houseCatalogUpdatedAt ?? right.savedAt)
+            - snapshotTime(left.state.houseCatalogUpdatedAt ?? left.savedAt)
+          ))[0];
+        const selectedState = selected?.state ?? initialState();
+        const stateWithCurrentHouseCatalog = houseCatalog
+          ? {
+              ...selectedState,
+              houseCatalogVersion: houseCatalog.state.houseCatalogVersion,
+              houseCatalogUpdatedAt: houseCatalog.state.houseCatalogUpdatedAt,
+              houses: houseCatalog.state.houses,
+            }
+          : selectedState;
+        const normalized = normalizeProjectOwners(stateWithCurrentHouseCatalog);
+        const loaded = {
+          ...normalized,
+          houses: normalized.houses.map(applyConfirmedHouseModelDetails),
+        };
         const next = loaded.projects.length
           ? loaded
           : { ...loaded, projects: [newProject("fabian")] };
@@ -906,7 +934,7 @@ export default function InseratStudio() {
     const editableImages = images.filter((image) => !image.captionLocked);
     if (!editableImages.length) {
       if (announce && images.length) {
-        setNotice(`${images.length} feste Bildüberschrift${images.length === 1 ? "" : "en"} aus Pascals Bildfolge wurde${images.length === 1 ? "" : "n"} übernommen.`);
+        setNotice(`${images.length} feste Bildüberschrift${images.length === 1 ? "" : "en"} aus der hinterlegten Bildfolge wurde${images.length === 1 ? "" : "n"} übernommen.`);
       }
       return "local";
     }
@@ -1389,7 +1417,7 @@ export default function InseratStudio() {
   const normalizeImageSequence = () => {
     if (!activeHouse) return;
     updateHouse({ images: orderHouseImages(activeHouse.images) as HouseImage[] });
-    setNotice("Die Bilder wurden nach Pascals Bildrollen sortiert. Innerhalb der Innenräume bleibt deine gewählte Reihenfolge erhalten.");
+    setNotice("Die Bilder wurden nach den hinterlegten Bildrollen sortiert. Innerhalb der Innenräume bleibt deine gewählte Reihenfolge erhalten.");
   };
 
   const classifyExistingImages = () => {
@@ -1417,7 +1445,7 @@ export default function InseratStudio() {
         }),
       })),
     }));
-    setNotice(`${classified} vorhandene Bilder aus allen Haustypen wurden ohne erneuten Upload mit Pascals Bildrollen ergänzt.`);
+    setNotice(`${classified} vorhandene Bilder aus allen Haustypen wurden ohne erneuten Upload mit den hinterlegten Bildrollen ergänzt.`);
   };
 
   const moveImage = (id: string, targetIndex: number) => {
@@ -2614,6 +2642,26 @@ export default function InseratStudio() {
             </div>
           ) : null}
         </section>
+        <section className="workspace integrated-catalog-card">
+          <details>
+            <summary>
+              <span>
+                <span className="eyebrow">Direkt in der App</span>
+                <b>Vollständige hinterlegte Preisliste</b>
+              </span>
+              <strong>{HOUSE_PRICE_ENTRIES.length} Hauspreise</strong>
+            </summary>
+            <div className="integrated-price-grid">
+              {HOUSE_PRICE_ENTRIES.map((entry) => (
+                <div key={entry.key}>
+                  <span>{entry.houseType}</span>
+                  <b>{entry.label}</b>
+                  <strong>{euro(entry.price)}</strong>
+                </div>
+              ))}
+            </div>
+          </details>
+        </section>
         <section className="workspace two-column">
           <aside className="rail-card">
             <div className="section-heading compact">
@@ -2704,11 +2752,11 @@ export default function InseratStudio() {
                 <div>
                   <span className="eyebrow">Bildrollen &amp; Reihenfolge</span>
                   <h3>{MIN_HOUSE_IMAGES} bis {MAX_HOUSE_IMAGES} Bilder je Haustyp</h3>
-                  <small className="section-note">Pascals Bildrollen und feste Bildüberschriften sind integriert. Die Position lässt sich weiterhin jederzeit ändern.</small>
+                  <small className="section-note">Die hinterlegten Bildrollen und festen Bildüberschriften sind integriert. Die Position lässt sich weiterhin jederzeit ändern.</small>
                 </div>
                 <div className="button-row image-heading-actions">
                   <button className="secondary" onClick={toggleMediaLibrary}>
-                    {mediaLibraryOpen ? "Medienbibliothek schließen" : "iCloud-Medienbibliothek"}
+                    {mediaLibraryOpen ? "Medienbibliothek schließen" : "Integrierte Medienbibliothek"}
                   </button>
                   <button
                     className="secondary"
@@ -2738,14 +2786,11 @@ export default function InseratStudio() {
                 </div>
               </div>
               {mediaLibraryOpen ? (
-                <section className="media-library" aria-label="iCloud-Medienbibliothek">
+                <section className="media-library" aria-label="Integrierte Medienbibliothek">
                   <div className="media-library-intro">
                     <div>
                       <b>Haus-, Innenraum-, Grundriss- und Vertrauensbilder</b>
-                      <span>
-                        Pascals feste iCloud-Ordner sind verbunden. Eine passende SUN-/SOL-Hausansicht
-                        kann die komplette Bildfolge automatisch zusammenstellen.
-                      </span>
+                        <span>Alle hinterlegten Haus-, Innenraum-, Grundriss-, Standort- und Vertrauensbilder sind direkt in der App verfügbar. Eine passende SUN-/SOL-Hausansicht kann die komplette Bildfolge automatisch zusammenstellen.</span>
                     </div>
                     <strong>{mediaLibraryTotal} Treffer</strong>
                   </div>
@@ -2795,9 +2840,7 @@ export default function InseratStudio() {
 
                   {!mediaLibraryAvailable ? (
                     <div className="media-library-message">
-                      Der konfigurierte iCloud-Ordner ist auf diesem Gerät nicht erreichbar. Auf Pascals
-                      Mac wird der feste Pfad automatisch verwendet; alternativ lässt er sich über
-                      <code>FPI_MEDIA_LIBRARY_ROOT</code> konfigurieren.
+                      Die integrierten Medien sind nicht erreichbar. Bitte im App-Ordner <code>git lfs pull</code> ausführen oder einen externen Pfad über <code>FPI_MEDIA_LIBRARY_ROOT</code> konfigurieren.
                     </div>
                   ) : mediaLibraryError ? (
                     <div className="media-library-message error">{mediaLibraryError}</div>
