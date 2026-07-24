@@ -60,7 +60,9 @@ test("uses the Responses API quality settings and a strict text schema", () => {
   assert.equal(request.reasoning.effort, "medium");
   assert.equal(request.text.verbosity, "high");
   assert.equal(request.text.format.type, "json_schema");
-  assert.deepEqual(request.text.format.schema.required, ["title", "description", "equipment", "location", "other"]);
+  assert.deepEqual(request.text.format.schema.required, ["title", "description", "location"]);
+  assert.equal("equipment" in request.text.format.schema.properties, false);
+  assert.equal("other" in request.text.format.schema.properties, false);
   assert.match(request.text.format.schema.properties.title.description, /3 bis 8 Wörtern/);
   assert.match(request.input[0].content[0].text, /niemals die gelieferte Haus- oder Modellbezeichnung/);
   assert.match(request.input[0].content[0].text, /modern und leicht humorvoll/);

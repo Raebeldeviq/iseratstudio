@@ -1,4 +1,5 @@
 import JSZip from "jszip";
+import { orderHouseImages } from "../../image-sequence.mjs";
 import type {
   GeneratedListing,
   HouseImage,
@@ -12,6 +13,8 @@ type PackageInput = {
   listings: GeneratedListing[];
   houses: HouseTemplate[];
   provider: ProviderSettings;
+  promotionImages?: HouseImage[];
+  // Legacy fields keep older local backups importable.
   promotionImage?: HouseImage | null;
   promotionImageEnabled?: boolean;
 };
@@ -85,11 +88,26 @@ function imageXml(
     .join("");
 }
 
-function listingImages(input: PackageInput, house: HouseTemplate): HouseImage[] {
-  if (!input.promotionImageEnabled || !input.promotionImage) return house.images;
+function listingImages(
+  input: PackageInput,
+  house: HouseTemplate,
+  listing: GeneratedListing,
+): HouseImage[] {
+  const usesImageRoles = house.images.some((image) => (
+    image.role && !["promotion", "other"].includes(image.role)
+  ));
+  const images = usesImageRoles
+    ? orderHouseImages(house.images) as HouseImage[]
+    : house.images;
+  const assignedPromotionImage = listing.promotionImageId
+    ? input.promotionImages?.find((image) => image.id === listing.promotionImageId)
+    : undefined;
+  const promotionImage = assignedPromotionImage
+    ?? (input.promotionImageEnabled ? input.promotionImage : undefined);
+  if (!promotionImage) return images;
   return [
-    input.promotionImage,
-    ...house.images.filter((image) => image.id !== input.promotionImage?.id),
+    { ...promotionImage, role: "promotion" as const },
+    ...images.filter((image) => image.id !== promotionImage.id),
   ].slice(0, MAX_EXPORTED_IMAGES);
 }
 
@@ -189,7 +207,7 @@ export function buildOpenImmoXml(input: PackageInput): string {
     .map((listing) => {
       const house = houses.find((item) => item.id === listing.templateId);
       if (!house) throw new Error(`Haustyp ${listing.templateName} fehlt.`);
-      return listingXml(project, listing, house, listingImages(input, house), provider, timestamp);
+      return listingXml(project, listing, house, listingImages(input, house, listing), provider, timestamp);
     })
     .join("");
 
@@ -231,7 +249,7 @@ export async function buildImportPackage(input: PackageInput): Promise<{
   input.listings.forEach((listing) => {
     const house = input.houses.find((item) => item.id === listing.templateId);
     if (!house) return;
-    listingImages(input, house).forEach((image, index) => {
+    listingImages(input, house, listing).forEach((image, index) => {
       zip.file(imageFilename(listing, image, index), imageBytes(image.dataUrl));
     });
   });

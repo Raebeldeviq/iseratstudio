@@ -1,10 +1,31 @@
+export type ImageRole =
+  | "promotion"
+  | "cover"
+  | "kitchen"
+  | "bathroom"
+  | "bedroom"
+  | "kids"
+  | "living"
+  | "office"
+  | "emotion"
+  | "floorplan_ground"
+  | "floorplan_upper"
+  | "floorplan_third"
+  | "awards"
+  | "trust"
+  | "qr"
+  | "other";
+
 export type HouseImage = {
   id: string;
+  sourceId?: string;
   name: string;
   mimeType: string;
   dataUrl: string;
   caption: string;
   isFloorplan: boolean;
+  role?: ImageRole;
+  captionLocked?: boolean;
 };
 
 export type HouseTemplate = {
@@ -48,6 +69,8 @@ export type ProjectInput = {
   natureFacts: string;
   notes: string;
   selectedHouseIds: string[];
+  promotionImageCount?: number;
+  promotionAssignments?: Record<string, string>;
   listings: GeneratedListing[];
   createdAt: string;
   lastTotalSyncAt?: string;
@@ -72,6 +95,7 @@ export type GeneratedListing = {
   writingProfile?: string;
   totalSyncRunId?: string;
   uploadedAt?: string;
+  promotionImageId?: string;
   version: number;
 };
 
@@ -109,7 +133,8 @@ export type StudioState = {
   houses: HouseTemplate[];
   projects: ProjectInput[];
   provider: ProviderSettings;
-  promotionImage: HouseImage | null;
-  promotionImageEnabled: boolean;
+  promotionImages: HouseImage[];
+  promotionImage?: HouseImage | null;
+  promotionImageEnabled?: boolean;
   totalSyncRun?: TotalSyncRun;
 };

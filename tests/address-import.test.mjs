@@ -58,9 +58,35 @@ test("skips duplicates and reports invalid rows", () => {
   ], existing, () => "new-id");
 
   assert.equal(result.projects.length, 0);
+  assert.equal(result.projectUpdates.length, 0);
   assert.equal(result.duplicateCount, 1);
   assert.equal(result.errors.length, 1);
   assert.match(result.errors[0], /Zeile 3/);
+});
+
+test("updates supplied plot data without clearing blank price fields", () => {
+  const existing = [{
+    id: "existing-address",
+    owner: "fabian",
+    street: "Bergstraße",
+    houseNumber: "12",
+    zip: "15732",
+    city: "Schulzendorf",
+    plotArea: 0,
+    plotPrice: 185000,
+    additionalCosts: 25000,
+  }];
+  const result = parseAddressWorkbookRows([
+    headers,
+    ["Fabian", "", "Bergstraße", "12", "15732", "Schulzendorf", "", 625, "", ""],
+  ], existing, () => "unused-id");
+
+  assert.equal(result.projects.length, 0);
+  assert.equal(result.duplicateCount, 0);
+  assert.deepEqual(result.projectUpdates, [{
+    id: "existing-address",
+    changes: { plotArea: 625 },
+  }]);
 });
 
 test("parses German-formatted numbers", () => {

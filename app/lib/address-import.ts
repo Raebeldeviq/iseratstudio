@@ -19,6 +19,10 @@ type AddressColumn =
 
 export type AddressImportResult = {
   projects: ProjectInput[];
+  projectUpdates: Array<{
+    id: string;
+    changes: Partial<Pick<ProjectInput, "plotArea" | "plotPrice" | "additionalCosts">>;
+  }>;
   errors: string[];
   duplicateCount: number;
 };
@@ -31,7 +35,13 @@ const HEADER_ALIASES: Record<AddressColumn, string[]> = {
   zip: ["plz", "postleitzahl"],
   city: ["ort", "stadt"],
   district: ["ortsteil", "stadtteil"],
-  plotArea: ["grundstucksflachem2", "grundstucksflache", "grundstuecksflaeche", "flache"],
+  plotArea: [
+    "grundstucksflachem2",
+    "grundstucksflachem",
+    "grundstucksflache",
+    "grundstuecksflaeche",
+    "flache",
+  ],
   plotPrice: ["grundstuckspreis", "grundstueckspreis", "kaufpreisgrundstuck"],
   additionalCosts: ["nebenkosten", "zusatzkosten"],
   locationFacts: ["lagefakten", "lage"],
@@ -115,13 +125,20 @@ export function parseAddressWorkbookRows(
   if (headerIndex < 0) {
     return {
       projects: [],
+      projectUpdates: [],
       duplicateCount: 0,
       errors: ["Keine passende Kopfzeile gefunden. Benötigt werden Benutzer, Straße, PLZ und Ort."],
     };
   }
 
   const columns = columnMap(rows[headerIndex]);
-  const existingKeys = new Set(existingProjects.map(addressKey));
+  const existingProjectsByKey = new Map(
+    existingProjects.map((project) => [addressKey(project), { ...project }]),
+  );
+  const projectUpdatesById = new Map<
+    string,
+    Partial<Pick<ProjectInput, "plotArea" | "plotPrice" | "additionalCosts">>
+  >();
   const projects: ProjectInput[] = [];
   const errors: string[] = [];
   let duplicateCount = 0;
@@ -147,6 +164,9 @@ export function parseAddressWorkbookRows(
     const defaultName = [[street, houseNumber].filter(Boolean).join(" "), [zip, city].join(" ")]
       .filter(Boolean)
       .join(", ");
+    const plotAreaCell = cell(row, "plotArea");
+    const plotPriceCell = cell(row, "plotPrice");
+    const additionalCostsCell = cell(row, "additionalCosts");
     const project: ProjectInput = {
       id: createId(),
       owner,
@@ -156,9 +176,9 @@ export function parseAddressWorkbookRows(
       zip,
       city,
       district: text(cell(row, "district")),
-      plotArea: parseGermanNumber(cell(row, "plotArea")),
-      plotPrice: parseGermanNumber(cell(row, "plotPrice")),
-      additionalCosts: parseGermanNumber(cell(row, "additionalCosts")),
+      plotArea: parseGermanNumber(plotAreaCell),
+      plotPrice: parseGermanNumber(plotPriceCell),
+      additionalCosts: parseGermanNumber(additionalCostsCell),
       locationFacts: text(cell(row, "locationFacts")),
       transportFacts: text(cell(row, "transportFacts")),
       familyFacts: text(cell(row, "familyFacts")),
@@ -169,13 +189,45 @@ export function parseAddressWorkbookRows(
       createdAt: new Date().toISOString(),
     };
     const key = addressKey(project);
-    if (existingKeys.has(key)) {
-      duplicateCount += 1;
+    const existingProject = existingProjectsByKey.get(key);
+    if (existingProject) {
+      const changes: Partial<
+        Pick<ProjectInput, "plotArea" | "plotPrice" | "additionalCosts">
+      > = {};
+      if (text(plotAreaCell) !== "" && project.plotArea !== existingProject.plotArea) {
+        changes.plotArea = project.plotArea;
+      }
+      if (text(plotPriceCell) !== "" && project.plotPrice !== existingProject.plotPrice) {
+        changes.plotPrice = project.plotPrice;
+      }
+      if (
+        text(additionalCostsCell) !== ""
+        && project.additionalCosts !== existingProject.additionalCosts
+      ) {
+        changes.additionalCosts = project.additionalCosts;
+      }
+      if (Object.keys(changes).length) {
+        projectUpdatesById.set(existingProject.id, {
+          ...projectUpdatesById.get(existingProject.id),
+          ...changes,
+        });
+        Object.assign(existingProject, changes);
+      } else {
+        duplicateCount += 1;
+      }
       return;
     }
-    existingKeys.add(key);
+    existingProjectsByKey.set(key, project);
     projects.push(project);
   });
 
-  return { projects, errors, duplicateCount };
+  return {
+    projects,
+    projectUpdates: [...projectUpdatesById.entries()].map(([id, changes]) => ({
+      id,
+      changes,
+    })),
+    errors,
+    duplicateCount,
+  };
 }

@@ -4,12 +4,28 @@
 import { ChangeEvent, useEffect, useRef, useState } from "react";
 import { readSheet } from "read-excel-file/browser";
 import appPackage from "../package.json";
+import { resolveHousePrice } from "../house-price-catalog.mjs";
+import {
+  captionForImageRole,
+  IMAGE_ROLE_LABELS,
+  IMAGE_ROLE_VALUES,
+  inferImageRole,
+  isFixedCaptionRole,
+  orderHouseImages,
+} from "../image-sequence.mjs";
 import { parseAddressWorkbookRows } from "./lib/address-import";
 import {
   headlinesAreTooSimilar,
   removePrivateAddressFromHeadline,
 } from "./lib/headline-diversity.js";
 import { buildImportPackage } from "./lib/openimmo";
+import {
+  MAX_PROMOTED_LISTINGS,
+  MAX_PROMOTION_IMAGES,
+  projectPromotionCount,
+  randomPromotionAssignments,
+  reconcilePromotionAssignments,
+} from "./lib/promotion-images.js";
 import { ADDRESS_OWNERS, normalizeProjectOwners, projectOwner } from "./lib/project-owners";
 import { totalPrice } from "./lib/text-generator";
 import {
@@ -27,6 +43,7 @@ import type {
   GeneratedListing,
   HouseImage,
   HouseTemplate,
+  ImageRole,
   ListingTexts,
   ProjectInput,
   ProviderSettings,
@@ -38,10 +55,37 @@ import type {
 
 type Tab = "houses" | "project" | "preview" | "settings";
 type AiModel = "gpt-5.6-luna" | "gpt-5.6-terra" | "gpt-5.6-sol";
+type MediaLibraryKind = "house" | "floorplan" | "interior" | "location" | "marketing";
+
+type MediaLibraryItem = {
+  id: string;
+  relativePath: string;
+  filename: string;
+  caption: string;
+  mimeType: string;
+  collection: string;
+  family: string;
+  houseModel: string;
+  group: string;
+  kind: MediaLibraryKind;
+  role?: ImageRole;
+  captionLocked?: boolean;
+  brandedCover?: boolean;
+  imageUrl: string;
+};
+
+type MediaLibraryGroup = { name: string; count: number };
 
 const MIN_HOUSE_IMAGES = 4;
 const MAX_HOUSE_IMAGES = 14;
-const MAX_HOUSE_TEMPLATES = 18;
+const MAX_HOUSE_TEMPLATES = 25;
+const MEDIA_KIND_LABELS: Record<MediaLibraryKind, string> = {
+  house: "Hausansicht",
+  floorplan: "Grundriss",
+  interior: "Innenraum",
+  location: "Standort",
+  marketing: "Anzeige",
+};
 
 function looksLikeOpenAiApiKey(value: string): boolean {
   return /^sk-[a-zA-Z0-9_-]{20,}$/.test(value.trim());
@@ -90,6 +134,8 @@ const newProject = (owner: AddressOwner): ProjectInput => ({
   natureFacts: "",
   notes: "",
   selectedHouseIds: [],
+  promotionImageCount: 0,
+  promotionAssignments: {},
   listings: [],
   createdAt: new Date().toISOString(),
 });
@@ -108,15 +154,28 @@ const initialState = (): StudioState => ({
   houses: [newHouse(1)],
   projects: [newProject("fabian")],
   provider: defaultProvider,
+  promotionImages: [],
   promotionImage: null,
   promotionImageEnabled: false,
 });
 
-function effectiveHouseImages(state: StudioState, house: HouseTemplate): HouseImage[] {
-  if (!state.promotionImageEnabled || !state.promotionImage) return house.images;
+function promotionPool(state: StudioState): HouseImage[] {
+  if (Array.isArray(state.promotionImages)) return state.promotionImages;
+  return state.promotionImage ? [state.promotionImage] : [];
+}
+
+function effectiveListingImages(
+  state: StudioState,
+  house: HouseTemplate,
+  listing?: GeneratedListing,
+): HouseImage[] {
+  const promotionImage = listing?.promotionImageId
+    ? promotionPool(state).find((image) => image.id === listing.promotionImageId)
+    : undefined;
+  if (!promotionImage) return house.images;
   return [
-    state.promotionImage,
-    ...house.images.filter((image) => image.id !== state.promotionImage?.id),
+    { ...promotionImage, role: "promotion" as const },
+    ...house.images.filter((image) => image.id !== promotionImage.id),
   ].slice(0, MAX_HOUSE_IMAGES);
 }
 
@@ -291,6 +350,7 @@ async function runWithConcurrency<T>(
 function catalogWithoutImageData(state: StudioState): StudioState {
   return {
     ...state,
+    promotionImages: promotionPool(state).map((image) => ({ ...image, dataUrl: "" })),
     promotionImage: state.promotionImage
       ? { ...state.promotionImage, dataUrl: "" }
       : null,
@@ -305,7 +365,7 @@ async function saveWindowsCatalogSnapshot(state: StudioState, savedAt: string): 
   const sessionId = uid();
   const allImages = [
     ...state.houses.flatMap((house) => house.images),
-    ...(state.promotionImage ? [state.promotionImage] : []),
+    ...promotionPool(state),
   ];
   const imageById = new Map(allImages.map((image) => [image.id, image]));
   const startResponse = await fetch("http://127.0.0.1:43182/catalog-v2/start", {
@@ -319,12 +379,12 @@ async function saveWindowsCatalogSnapshot(state: StudioState, savedAt: string): 
     missingImageIds?: string[];
   };
   if (!startResponse.ok || !startData.ok || !Array.isArray(startData.missingImageIds)) {
-    throw new Error(startData.message || "Windows-Sicherung konnte nicht vorbereitet werden.");
+    throw new Error(startData.message || "Gerätesicherung konnte nicht vorbereitet werden.");
   }
 
   await runWithConcurrency(startData.missingImageIds, async (imageId) => {
     const image = imageById.get(imageId);
-    if (!image) throw new Error("Ein Bild der Windows-Sicherung wurde nicht gefunden.");
+    if (!image) throw new Error("Ein Bild der Gerätesicherung wurde nicht gefunden.");
     const imageBlob = await fetch(image.dataUrl).then((response) => response.blob());
     const uploadResponse = await fetch(
       `http://127.0.0.1:43182/catalog-v2/image?sessionId=${encodeURIComponent(sessionId)}&imageId=${encodeURIComponent(image.id)}`,
@@ -347,7 +407,7 @@ async function saveWindowsCatalogSnapshot(state: StudioState, savedAt: string): 
   });
   const commitData = (await commitResponse.json()) as { ok?: boolean; message?: string };
   if (!commitResponse.ok || !commitData.ok) {
-    throw new Error(commitData.message || "Windows-Sicherung konnte nicht abgeschlossen werden.");
+    throw new Error(commitData.message || "Gerätesicherung konnte nicht abgeschlossen werden.");
   }
 }
 
@@ -377,16 +437,20 @@ async function loadWindowsCatalogSnapshot(): Promise<{
     if (manifestResponse.ok && manifestData.ok && manifestData.stored && manifestData.state && manifestData.savedAt) {
       const imageIds = [
         ...manifestData.state.houses.flatMap((house) => house.images.map((image) => image.id)),
-        ...(manifestData.state.promotionImage ? [manifestData.state.promotionImage.id] : []),
+        ...promotionPool(manifestData.state).map((image) => image.id),
       ];
       const dataUrlById = new Map<string, string>();
       await runWithConcurrency(imageIds, async (imageId) => {
         const imageResponse = await fetch(`http://127.0.0.1:43182/catalog-v2/image?imageId=${encodeURIComponent(imageId)}`);
-        if (!imageResponse.ok) throw new Error("Ein Bild der Windows-Sicherung konnte nicht geladen werden.");
+        if (!imageResponse.ok) throw new Error("Ein Bild der Gerätesicherung konnte nicht geladen werden.");
         dataUrlById.set(imageId, await blobDataUrl(await imageResponse.blob()));
       });
       const state: StudioState = {
         ...manifestData.state,
+        promotionImages: promotionPool(manifestData.state).map((image) => ({
+          ...image,
+          dataUrl: dataUrlById.get(image.id) ?? "",
+        })),
         promotionImage: manifestData.state.promotionImage
           ? {
               ...manifestData.state.promotionImage,
@@ -454,11 +518,29 @@ export default function InseratStudio() {
   const [replacingAllImageCaptions, setReplacingAllImageCaptions] = useState(false);
   const [openAiKeyVerified, setOpenAiKeyVerified] = useState(false);
   const [isPrimaryTab, setIsPrimaryTab] = useState<boolean | null>(null);
+  const [mediaLibraryOpen, setMediaLibraryOpen] = useState(false);
+  const [mediaLibraryItems, setMediaLibraryItems] = useState<MediaLibraryItem[]>([]);
+  const [mediaLibraryGroups, setMediaLibraryGroups] = useState<MediaLibraryGroup[]>([]);
+  const [mediaLibraryQuery, setMediaLibraryQuery] = useState("");
+  const [mediaLibraryGroup, setMediaLibraryGroup] = useState("");
+  const [mediaLibraryKind, setMediaLibraryKind] = useState<"" | MediaLibraryKind>("");
+  const [mediaLibraryPage, setMediaLibraryPage] = useState(1);
+  const [mediaLibraryPages, setMediaLibraryPages] = useState(1);
+  const [mediaLibraryTotal, setMediaLibraryTotal] = useState(0);
+  const [mediaLibraryAvailable, setMediaLibraryAvailable] = useState(true);
+  const [mediaLibraryLoading, setMediaLibraryLoading] = useState(false);
+  const [mediaLibraryError, setMediaLibraryError] = useState("");
+  const [selectedMediaItems, setSelectedMediaItems] = useState<MediaLibraryItem[]>([]);
+  const [importingMedia, setImportingMedia] = useState(false);
   const [totalSyncScope, setTotalSyncScope] = useState<TotalSyncScope>("fabian");
   const [totalSyncBusy, setTotalSyncBusy] = useState(false);
   const [totalSyncStopping, setTotalSyncStopping] = useState(false);
   const [totalSyncStatus, setTotalSyncStatus] = useState("");
   const totalSyncStopRequested = useRef(false);
+
+  useEffect(() => {
+    setSelectedMediaItems([]);
+  }, [activeHouseId]);
 
   useEffect(() => {
     let releaseLock: (() => void) | undefined;
@@ -531,7 +613,7 @@ export default function InseratStudio() {
             ? next.totalSyncRun.scope
             : projectOwner(next.projects[0]),
         );
-        setSaveLabel(selected?.source === "windows" ? "Aus lokaler Windows-Sicherung geladen" : "Doppelt lokal gespeichert");
+        setSaveLabel(selected?.source === "windows" ? "Aus lokaler Gerätesicherung geladen" : "Doppelt lokal gespeichert");
       })
       .catch(() => setSaveLabel("Lokaler Speicher nicht verfügbar"))
       .finally(() => setReady(true));
@@ -647,7 +729,7 @@ export default function InseratStudio() {
         saves.push(queueWindowsCatalogSnapshot(state, savedAt));
       }
       Promise.all(saves)
-        .then(() => setSaveLabel(helperOnline ? "Browser + Windows-Sicherung aktuell" : "Lokal im Browser gespeichert"))
+        .then(() => setSaveLabel(helperOnline ? "Browser + Gerätesicherung aktuell" : "Lokal im Browser gespeichert"))
         .catch(() => setSaveLabel("Speichern fehlgeschlagen"));
     }, 450);
     return () => window.clearTimeout(timer);
@@ -655,6 +737,10 @@ export default function InseratStudio() {
 
   const activeHouse =
     state.houses.find((house) => house.id === activeHouseId) ?? state.houses[0];
+  const activeHousePriceMatch = resolveHousePrice([
+    activeHouse.name,
+    ...activeHouse.images.map((image) => image.name),
+  ]);
   const ownerProjects = state.projects.filter(
     (project) => projectOwner(project) === activeOwner,
   );
@@ -673,7 +759,7 @@ export default function InseratStudio() {
   const totalSyncReadyProjects = totalSyncScopedProjects.filter(projectIsReadyForTotalSync);
   const totalSyncSkippedProjects = totalSyncScopedProjects.length - totalSyncReadyProjects.length;
   const totalSyncEligibleHouses = state.houses.filter((house) => {
-    const imageCount = effectiveHouseImages(state, house).length;
+    const imageCount = house.images.length;
     return imageCount >= MIN_HOUSE_IMAGES && imageCount <= MAX_HOUSE_IMAGES;
   });
   const totalSyncRunProgress = totalSyncProgress(state.totalSyncRun);
@@ -681,17 +767,17 @@ export default function InseratStudio() {
   const saveHousesNow = async () => {
     const savedAt = new Date().toISOString();
     const imageCount = state.houses.reduce((sum, house) => sum + house.images.length, 0)
-      + (state.promotionImage ? 1 : 0);
+      + promotionPool(state).length;
     setSavingHouses(true);
     try {
       await saveStudioState(state, savedAt);
       if (helperOnline) {
         await queueWindowsCatalogSnapshot(state, savedAt);
-        setSaveLabel("Browser + Windows-Sicherung aktuell");
+        setSaveLabel("Browser + Gerätesicherung aktuell");
         setNotice(`${state.houses.length} Haustypen mit ${imageCount} Bildern wurden sicher gespeichert.`);
       } else {
         setSaveLabel("Lokal im Browser gespeichert");
-        setNotice(`${state.houses.length} Haustypen mit ${imageCount} Bildern wurden im Browser gespeichert. Die Windows-Sicherung wird ergänzt, sobald der lokale Helfer erreichbar ist.`);
+        setNotice(`${state.houses.length} Haustypen mit ${imageCount} Bildern wurden im Browser gespeichert. Die Gerätesicherung wird ergänzt, sobald der lokale Helfer erreichbar ist.`);
       }
     } catch (error) {
       setSaveLabel("Speichern fehlgeschlagen");
@@ -709,7 +795,7 @@ export default function InseratStudio() {
       await saveStudioState(state, savedAt);
       if (helperOnline) {
         await queueWindowsCatalogSnapshot(state, savedAt);
-        setSaveLabel("Browser + Windows-Sicherung aktuell");
+        setSaveLabel("Browser + Gerätesicherung aktuell");
       } else {
         setSaveLabel("Lokal im Browser gespeichert");
       }
@@ -765,6 +851,11 @@ export default function InseratStudio() {
         selectedHouseIds: project.selectedHouseIds.filter(
           (id) => id !== activeHouse.id,
         ),
+        promotionAssignments: Object.fromEntries(
+          Object.entries(project.promotionAssignments ?? {}).filter(
+            ([houseId]) => houseId !== activeHouse.id,
+          ),
+        ),
         listings: project.listings.filter(
           (listing) => listing.templateId !== activeHouse.id,
         ),
@@ -779,6 +870,7 @@ export default function InseratStudio() {
       houses: current.houses.map((house) => house.id === houseId ? {
         ...house,
         images: house.images.map((image) => captionById.has(image.id)
+          && !image.captionLocked
           ? { ...image, caption: captionById.get(image.id) ?? image.caption }
           : image),
       } : house),
@@ -790,11 +882,17 @@ export default function InseratStudio() {
     images: HouseImage[],
     announce = true,
   ): Promise<"ai" | "local"> => {
-    if (!images.length) return "local";
-    const imageIds = images.map((image) => image.id);
+    const editableImages = images.filter((image) => !image.captionLocked);
+    if (!editableImages.length) {
+      if (announce && images.length) {
+        setNotice(`${images.length} feste Bildüberschrift${images.length === 1 ? "" : "en"} aus Pascals Bildfolge wurde${images.length === 1 ? "" : "n"} übernommen.`);
+      }
+      return "local";
+    }
+    const imageIds = editableImages.map((image) => image.id);
     replaceHouseImageCaptions(
       house.id,
-      new Map(images.map((image, index) => [
+      new Map(editableImages.map((image, index) => [
         image.id,
         localImageCaption(image.name, image.isFloorplan, index),
       ])),
@@ -802,14 +900,14 @@ export default function InseratStudio() {
 
     if (!helperOnline || !looksLikeOpenAiApiKey(openAiKey)) {
       if (announce) setNotice(looksLikeOpenAiApiKey(openAiKey)
-        ? `${images.length} kurze Bildtexte wurden automatisch lokal erstellt und können bearbeitet werden.`
-        : `${images.length} lokale Bildtexte wurden erstellt. Für die KI-Bildanalyse bitte einen gültigen OpenAI-Schlüssel einfügen.`);
+        ? `${editableImages.length} variable Bildtexte wurden automatisch lokal erstellt und können bearbeitet werden.`
+        : `${editableImages.length} variable Bildtexte wurden lokal erstellt. Für die KI-Bildanalyse bitte einen gültigen OpenAI-Schlüssel einfügen.`);
       return "local";
     }
 
     setCaptioningImageIds((current) => [...new Set([...current, ...imageIds])]);
     try {
-      const preparedImages = await Promise.all(images.map(async (image) => ({
+      const preparedImages = await Promise.all(editableImages.map(async (image) => ({
         id: image.id,
         name: image.name,
         isFloorplan: image.isFloorplan,
@@ -835,10 +933,10 @@ export default function InseratStudio() {
       }
       const captionById = new Map(data.captions.map((item) => [item.id, item.caption]));
       replaceHouseImageCaptions(house.id, captionById);
-      if (announce) setNotice(`${images.length} kurze, passende Bildtexte wurden automatisch erstellt.`);
+      if (announce) setNotice(`${editableImages.length} kurze, passende Bildtexte wurden automatisch erstellt.`);
       return "ai";
     } catch (error) {
-      if (announce) setNotice(`${images.length} lokale Bildtexte wurden erstellt. ${error instanceof Error ? error.message : "Die KI-Verfeinerung war nicht verfügbar."}`);
+      if (announce) setNotice(`${editableImages.length} lokale Bildtexte wurden erstellt. ${error instanceof Error ? error.message : "Die KI-Verfeinerung war nicht verfügbar."}`);
       return "local";
     } finally {
       setCaptioningImageIds((current) => current.filter((id) => !imageIds.includes(id)));
@@ -851,7 +949,9 @@ export default function InseratStudio() {
       setNotice("Bitte zuerst einen gültigen OpenAI API-Schlüssel einfügen und über „Zugangsdaten prüfen & speichern“ bestätigen.");
       return;
     }
-    const housesWithImages = state.houses.filter((house) => house.images.length > 0);
+    const housesWithImages = state.houses
+      .map((house) => ({ ...house, images: house.images.filter((image) => !image.captionLocked) }))
+      .filter((house) => house.images.length > 0);
     const totalImages = housesWithImages.reduce((sum, house) => sum + house.images.length, 0);
     if (!totalImages) {
       setNotice("Es sind noch keine vorhandenen Bilder gespeichert.");
@@ -878,38 +978,321 @@ export default function InseratStudio() {
     }
   };
 
-  const addPromotionImage = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const promotionImage: HouseImage = {
-        id: uid(),
-        name: file.name,
-        mimeType: file.type || "image/jpeg",
-        dataUrl: String(reader.result),
-        caption: "Aktuelles Angebot für dein neues Zuhause",
-        isFloorplan: false,
+  const loadMediaLibrary = async (targetPage = 1) => {
+    setMediaLibraryLoading(true);
+    setMediaLibraryError("");
+    try {
+      const parameters = new URLSearchParams({
+        page: String(targetPage),
+        pageSize: "36",
+      });
+      if (mediaLibraryQuery.trim()) parameters.set("query", mediaLibraryQuery.trim());
+      if (mediaLibraryGroup) parameters.set("group", mediaLibraryGroup);
+      if (mediaLibraryKind) parameters.set("kind", mediaLibraryKind);
+      const response = await fetch(
+        `http://127.0.0.1:43182/media-library?${parameters.toString()}`,
+      );
+      const data = (await response.json()) as {
+        ok?: boolean;
+        available?: boolean;
+        message?: string;
+        total?: number;
+        page?: number;
+        pages?: number;
+        groups?: MediaLibraryGroup[];
+        items?: MediaLibraryItem[];
       };
-      setState((current) => ({
-        ...current,
-        promotionImage,
-        promotionImageEnabled: true,
-      }));
-      setNotice("Das Aktionsbild wurde eingefügt und als Anzeigebild für alle Haustypen aktiviert.");
-    };
-    reader.onerror = () => setNotice("Das Aktionsbild konnte nicht gelesen werden.");
-    reader.readAsDataURL(file);
-    event.target.value = "";
+      if (!response.ok || !data.ok) {
+        throw new Error(data.message || "Die Medienbibliothek konnte nicht geladen werden.");
+      }
+      setMediaLibraryAvailable(data.available !== false);
+      setMediaLibraryItems(Array.isArray(data.items) ? data.items : []);
+      setMediaLibraryGroups(Array.isArray(data.groups) ? data.groups : []);
+      setMediaLibraryTotal(Number(data.total) || 0);
+      setMediaLibraryPage(Number(data.page) || 1);
+      setMediaLibraryPages(Number(data.pages) || 1);
+    } catch (error) {
+      setMediaLibraryItems([]);
+      setMediaLibraryError(
+        error instanceof Error
+          ? error.message
+          : "Die Medienbibliothek konnte nicht geladen werden.",
+      );
+    } finally {
+      setMediaLibraryLoading(false);
+    }
   };
 
-  const removePromotionImage = () => {
+  const toggleMediaLibrary = async () => {
+    if (mediaLibraryOpen) {
+      setMediaLibraryOpen(false);
+      return;
+    }
+    if (!helperOnline) {
+      setNotice("Die iCloud-Medienbibliothek ist verfügbar, sobald der lokale Helfer läuft.");
+      return;
+    }
+    setMediaLibraryOpen(true);
+    await loadMediaLibrary(1);
+  };
+
+  const toggleMediaSelection = (item: MediaLibraryItem) => {
+    if (!activeHouse) return;
+    if (selectedMediaItems.some((selected) => selected.id === item.id)) {
+      setSelectedMediaItems((current) => current.filter((selected) => selected.id !== item.id));
+      return;
+    }
+    if (item.kind !== "house" && activeHouse.images.some((image) => image.sourceId === item.id)) {
+      setNotice("Dieses Bild ist dem Haustyp bereits zugeordnet.");
+      return;
+    }
+    const remaining = MAX_HOUSE_IMAGES - activeHouse.images.length;
+    if (item.kind !== "house" && selectedMediaItems.length >= remaining) {
+      setNotice(`Für diesen Haustyp können noch ${Math.max(0, remaining)} Bilder übernommen werden.`);
+      return;
+    }
+    setSelectedMediaItems((current) => [...current, item]);
+  };
+
+  const downloadMediaItems = async (items: MediaLibraryItem[]) => {
+    const results = await Promise.allSettled(items.map(async (item): Promise<HouseImage> => {
+      const response = await fetch(item.imageUrl, {
+        cache: "no-store",
+        signal: AbortSignal.timeout(50_000),
+      });
+      if (!response.ok) throw new Error(`${item.filename} konnte nicht aus iCloud geladen werden.`);
+      const blob = await response.blob();
+      const role = (item.role || inferImageRole(item)) as ImageRole;
+      return {
+        id: uid(),
+        sourceId: item.id,
+        name: item.filename,
+        mimeType: item.mimeType || blob.type || "image/jpeg",
+        dataUrl: await blobDataUrl(blob),
+        caption: captionForImageRole(role, item.filename, item.caption),
+        captionLocked: item.captionLocked === true || isFixedCaptionRole(role),
+        isFloorplan: role.startsWith("floorplan"),
+        role,
+      };
+    }));
+    const successful = results.filter(
+      (result): result is PromiseFulfilledResult<HouseImage> => result.status === "fulfilled",
+    );
+    return {
+      images: successful.map((result) => result.value),
+      failed: results.length - successful.length,
+    };
+  };
+
+  const importSelectedMedia = async () => {
+    if (!activeHouse || !selectedMediaItems.length) return;
+    const houseId = activeHouse.id;
+    const existingSourceIds = new Set(
+      activeHouse.images.map((image) => image.sourceId).filter(Boolean),
+    );
+    const candidates = selectedMediaItems
+      .filter((item) => !existingSourceIds.has(item.id))
+      .slice(0, MAX_HOUSE_IMAGES - activeHouse.images.length);
+    if (!candidates.length) {
+      setNotice("Die ausgewählten Bilder sind bereits zugeordnet oder das Bilderlimit ist erreicht.");
+      return;
+    }
+
+    setImportingMedia(true);
+    try {
+      const { images: imported, failed } = await downloadMediaItems(candidates);
+      if (imported.length) {
+        setState((current) => ({
+          ...current,
+          houses: current.houses.map((house) => {
+            if (house.id !== houseId) return house;
+            const sourceIds = new Set(
+              house.images.map((image) => image.sourceId).filter(Boolean),
+            );
+            const additions = imported
+              .filter((image) => !sourceIds.has(image.sourceId))
+              .slice(0, MAX_HOUSE_IMAGES - house.images.length);
+            return {
+              ...house,
+              images: orderHouseImages([...house.images, ...additions]) as HouseImage[],
+            };
+          }),
+        }));
+      }
+      setSelectedMediaItems([]);
+      setNotice(
+        failed
+          ? `${imported.length} Bilder wurden übernommen; ${failed} iCloud-Dateien konnten noch nicht geladen werden.`
+          : `${imported.length} beschriftete Bilder wurden aus der iCloud-Medienbibliothek übernommen.`,
+      );
+    } finally {
+      setImportingMedia(false);
+    }
+  };
+
+  const buildAutomaticImageSequence = async () => {
+    if (!activeHouse) return;
+    const cover = selectedMediaItems.length === 1 && selectedMediaItems[0].kind === "house"
+      ? selectedMediaItems[0]
+      : null;
+    if (!cover) {
+      setNotice("Bitte genau eine versionsbezeichnete SUN- oder SOL-Hausansicht auswählen.");
+      return;
+    }
+    if (
+      activeHouse.images.length
+      && !window.confirm(
+        `Die bisherige Bildfolge für „${activeHouse.name}“ durch die automatisch zusammengestellte Folge ersetzen?`,
+      )
+    ) {
+      return;
+    }
+
+    setImportingMedia(true);
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:43182/media-library/sequence?coverId=${encodeURIComponent(cover.id)}`,
+      );
+      const data = (await response.json()) as {
+        ok?: boolean;
+        message?: string;
+        warnings?: string[];
+        items?: MediaLibraryItem[];
+      };
+      if (!response.ok || !data.ok || !Array.isArray(data.items)) {
+        throw new Error(data.message || "Die automatische Bildfolge konnte nicht erstellt werden.");
+      }
+      const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+      if (warnings.length) {
+        setNotice(`Bildfolge nicht übernommen: ${warnings.join(" ")}`);
+        return;
+      }
+      if (data.items.length > MAX_HOUSE_IMAGES) {
+        setNotice(
+          `Die vollständige Standardfolge enthält ${data.items.length} Bilder und überschreitet das Limit von ${MAX_HOUSE_IMAGES}.`,
+        );
+        return;
+      }
+      const { images, failed } = await downloadMediaItems(data.items);
+      if (failed || images.length !== data.items.length) {
+        setNotice(
+          `${failed || data.items.length - images.length} iCloud-Bilder konnten nicht geladen werden. Die vorhandene Bildfolge wurde nicht verändert.`,
+        );
+        return;
+      }
+      const houseId = activeHouse.id;
+      setState((current) => ({
+        ...current,
+        houses: current.houses.map((house) => (
+          house.id === houseId
+            ? { ...house, images: orderHouseImages(images) as HouseImage[] }
+            : house
+        )),
+      }));
+      setSelectedMediaItems([]);
+      setNotice(
+        `${images.length} iCloud-Bilder wurden versionsgenau zusammengestellt. Hausdaten, Preis und Adressen blieben unverändert.`,
+      );
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Die automatische Bildfolge konnte nicht erstellt werden.",
+      );
+    } finally {
+      setImportingMedia(false);
+    }
+  };
+
+  const addPromotionImages = async (event: ChangeEvent<HTMLInputElement>) => {
+    const input = event.target;
+    const availableSlots = MAX_PROMOTION_IMAGES - promotionPool(state).length;
+    const files = Array.from(input.files ?? [])
+      .filter((file) => ["image/jpeg", "image/png", "image/webp"].includes(file.type))
+      .slice(0, Math.max(0, availableSlots));
+    input.value = "";
+
+    if (!files.length) {
+      setNotice(
+        availableSlots <= 0
+          ? `Der Aktionsbild-Pool ist mit ${MAX_PROMOTION_IMAGES} Bildern vollständig.`
+          : "Bitte JPEG-, PNG- oder WebP-Bilder auswählen.",
+      );
+      return;
+    }
+
+    try {
+      const images = await Promise.all(
+        files.map((file) => new Promise<HouseImage>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve({
+            id: uid(),
+            name: file.name,
+            mimeType: file.type || "image/jpeg",
+            dataUrl: String(reader.result),
+            caption: "Aktuelles Angebot für dein neues Zuhause",
+            isFloorplan: false,
+            role: "promotion",
+            captionLocked: false,
+          });
+          reader.onerror = () => reject(new Error(`${file.name} konnte nicht gelesen werden.`));
+          reader.readAsDataURL(file);
+        })),
+      );
+      setState((current) => ({
+        ...current,
+        promotionImages: [...promotionPool(current), ...images].slice(0, MAX_PROMOTION_IMAGES),
+        promotionImage: null,
+        promotionImageEnabled: false,
+      }));
+      setNotice(`${images.length} Aktionsbild${images.length === 1 ? "" : "er"} wurden gespeichert.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Die Aktionsbilder konnten nicht gelesen werden.");
+    }
+  };
+
+  const updatePromotionImage = (imageId: string, patch: Partial<HouseImage>) => {
     setState((current) => ({
       ...current,
-      promotionImage: null,
-      promotionImageEnabled: false,
+      promotionImages: promotionPool(current).map((image) => (
+        image.id === imageId ? { ...image, ...patch } : image
+      )),
     }));
-    setNotice("Das Aktionsbild wurde entfernt. Jeder Haustyp verwendet wieder sein eigenes Titelbild.");
+  };
+
+  const removePromotionImage = (imageId: string) => {
+    setState((current) => {
+      const promotionImages = promotionPool(current).filter((image) => image.id !== imageId);
+      const promotionImageIds = promotionImages.map((image) => image.id);
+      return {
+        ...current,
+        promotionImages,
+        promotionImage: null,
+        promotionImageEnabled: false,
+        projects: current.projects.map((project) => {
+          const promotionImageCount = Math.min(
+            projectPromotionCount(project),
+            promotionImages.length,
+          );
+          const promotionAssignments = reconcilePromotionAssignments(
+            project.selectedHouseIds,
+            promotionImageIds,
+            promotionImageCount,
+            project.promotionAssignments,
+          );
+          return {
+            ...project,
+            promotionImageCount,
+            promotionAssignments,
+            listings: project.listings.map((listing) => ({
+              ...listing,
+              promotionImageId: promotionAssignments[listing.templateId],
+            })),
+          };
+        }),
+      };
+    });
+    setNotice("Das Aktionsbild wurde entfernt und betroffene Adressen wurden neu zugeordnet.");
   };
 
   const addImages = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -923,13 +1306,19 @@ export default function InseratStudio() {
             const reader = new FileReader();
             reader.onload = () => {
               const isFloorplan = /grundriss|floor/i.test(file.name);
+              const role = inferImageRole({ filename: file.name, isFloorplan }) as ImageRole;
+              const captionLocked = isFixedCaptionRole(role);
               resolve({
                 id: uid(),
                 name: file.name,
                 mimeType: file.type || "image/jpeg",
                 dataUrl: String(reader.result),
-                caption: localImageCaption(file.name, isFloorplan, index),
-                isFloorplan,
+                caption: captionLocked
+                  ? captionForImageRole(role, file.name)
+                  : localImageCaption(file.name, isFloorplan, index),
+                isFloorplan: role.startsWith("floorplan"),
+                role,
+                captionLocked,
               });
             };
             reader.onerror = () => reject(reader.error);
@@ -949,6 +1338,57 @@ export default function InseratStudio() {
         image.id === id ? { ...image, ...patch } : image,
       ),
     });
+  };
+
+  const updateImageRole = (id: string, role: ImageRole) => {
+    if (!activeHouse) return;
+    updateHouse({
+      images: activeHouse.images.map((image) => {
+        if (image.id !== id) return image;
+        const captionLocked = isFixedCaptionRole(role);
+        return {
+          ...image,
+          role,
+          isFloorplan: role.startsWith("floorplan"),
+          captionLocked,
+          caption: captionForImageRole(role, image.name, image.caption),
+        };
+      }),
+    });
+  };
+
+  const normalizeImageSequence = () => {
+    if (!activeHouse) return;
+    updateHouse({ images: orderHouseImages(activeHouse.images) as HouseImage[] });
+    setNotice("Die Bilder wurden nach Pascals Bildrollen sortiert. Innerhalb der Innenräume bleibt deine gewählte Reihenfolge erhalten.");
+  };
+
+  const classifyExistingImages = () => {
+    let classified = 0;
+    setState((current) => ({
+      ...current,
+      houses: current.houses.map((house) => ({
+        ...house,
+        images: house.images.map((image, index) => {
+          if (image.role) return image;
+          const inferred = inferImageRole({
+            filename: image.name,
+            isFloorplan: image.isFloorplan,
+          }) as ImageRole;
+          const role = inferred === "other" && index === 0 ? "cover" : inferred;
+          const captionLocked = isFixedCaptionRole(role);
+          classified += 1;
+          return {
+            ...image,
+            role,
+            isFloorplan: role.startsWith("floorplan"),
+            captionLocked,
+            caption: captionForImageRole(role, image.name, image.caption),
+          };
+        }),
+      })),
+    }));
+    setNotice(`${classified} vorhandene Bilder aus allen Haustypen wurden ohne erneuten Upload mit Pascals Bildrollen ergänzt.`);
   };
 
   const moveImage = (id: string, targetIndex: number) => {
@@ -1004,7 +1444,7 @@ export default function InseratStudio() {
       const rows = await readSheet(file);
       const result = parseAddressWorkbookRows(rows, state.projects, uid);
       setAddressImportReport(result.errors.slice(0, 8));
-      if (!result.projects.length) {
+      if (!result.projects.length && !result.projectUpdates.length) {
         const details = [
           result.duplicateCount ? `${result.duplicateCount} bereits gespeichert` : "",
           result.errors.length ? `${result.errors.length} fehlerhaft` : "",
@@ -1014,19 +1454,39 @@ export default function InseratStudio() {
           : "Die Excel-Datei enthält keine importierbaren Adressen.");
         return;
       }
+      const updatesById = new Map(
+        result.projectUpdates.map((update) => [update.id, update.changes]),
+      );
       setState((current) => ({
         ...current,
-        projects: [...result.projects, ...current.projects],
+        projects: [
+          ...result.projects,
+          ...current.projects.map((project) => ({
+            ...project,
+            ...updatesById.get(project.id),
+          })),
+        ],
       }));
-      const firstProject = result.projects[0];
-      setActiveOwner(firstProject.owner);
-      setActiveProjectId(firstProject.id);
-      if (!resumableTotalSync) setTotalSyncScope(firstProject.owner);
+      const firstProject = result.projects[0]
+        ?? state.projects.find((project) => project.id === result.projectUpdates[0]?.id);
+      if (firstProject) {
+        setActiveOwner(firstProject.owner);
+        setActiveProjectId(firstProject.id);
+        if (!resumableTotalSync) setTotalSyncScope(firstProject.owner);
+      }
       const details = [
         result.duplicateCount ? `${result.duplicateCount} Dubletten übersprungen` : "",
         result.errors.length ? `${result.errors.length} fehlerhafte Zeilen übersprungen` : "",
       ].filter(Boolean).join(" · ");
-      setNotice(`${result.projects.length} Adressen aus Excel importiert und lokal gespeichert${details ? ` · ${details}` : ""}.`);
+      const completedActions = [
+        result.projects.length
+          ? `${result.projects.length} Adressen aus Excel importiert`
+          : "",
+        result.projectUpdates.length
+          ? `${result.projectUpdates.length} gespeicherte Adressen aktualisiert`
+          : "",
+      ].filter(Boolean).join(" · ");
+      setNotice(`${completedActions} und lokal gespeichert${details ? ` · ${details}` : ""}.`);
     } catch (error) {
       setNotice(error instanceof Error
         ? `Excel-Import fehlgeschlagen: ${error.message}`
@@ -1044,14 +1504,64 @@ export default function InseratStudio() {
       setNotice("Pro Adresse können maximal vier Haustypen gewählt werden.");
       return;
     }
+    const selectedHouseIds = selected
+      ? activeProject.selectedHouseIds.filter((id) => id !== houseId)
+      : [...activeProject.selectedHouseIds, houseId];
+    const promotionAssignments = reconcilePromotionAssignments(
+      selectedHouseIds,
+      promotionPool(state).map((image) => image.id),
+      projectPromotionCount(activeProject),
+      activeProject.promotionAssignments,
+    );
     updateProject({
-      selectedHouseIds: selected
-        ? activeProject.selectedHouseIds.filter((id) => id !== houseId)
-        : [...activeProject.selectedHouseIds, houseId],
-      listings: activeProject.listings.filter((listing) =>
-        selected ? listing.templateId !== houseId : true,
-      ),
+      selectedHouseIds,
+      promotionAssignments,
+      listings: activeProject.listings
+        .filter((listing) => selected ? listing.templateId !== houseId : true)
+        .map((listing) => ({
+          ...listing,
+          promotionImageId: promotionAssignments[listing.templateId],
+        })),
     });
+  };
+
+  const setProjectPromotionCount = (requestedCount: number) => {
+    if (!activeProject) return;
+    const promotionImageCount = Math.max(
+      0,
+      Math.min(MAX_PROMOTED_LISTINGS, requestedCount, promotionPool(state).length),
+    );
+    const promotionAssignments = reconcilePromotionAssignments(
+      activeProject.selectedHouseIds,
+      promotionPool(state).map((image) => image.id),
+      promotionImageCount,
+      activeProject.promotionAssignments,
+    );
+    updateProject({
+      promotionImageCount,
+      promotionAssignments,
+      listings: activeProject.listings.map((listing) => ({
+        ...listing,
+        promotionImageId: promotionAssignments[listing.templateId],
+      })),
+    });
+  };
+
+  const rerollProjectPromotions = () => {
+    if (!activeProject) return;
+    const promotionAssignments = randomPromotionAssignments(
+      activeProject.selectedHouseIds,
+      promotionPool(state).map((image) => image.id),
+      projectPromotionCount(activeProject),
+    );
+    updateProject({
+      promotionAssignments,
+      listings: activeProject.listings.map((listing) => ({
+        ...listing,
+        promotionImageId: promotionAssignments[listing.templateId],
+      })),
+    });
+    setNotice("Die Aktionsbilder wurden für diese Adresse neu ausgelost und gespeichert.");
   };
 
   const requestListingTexts = async (input: {
@@ -1168,6 +1678,10 @@ export default function InseratStudio() {
 
   const generateAiListings = async () => {
     if (!generationInputIsValid() || !activeProject) return;
+    if (projectPromotionCount(activeProject) > promotionPool(state).length) {
+      setNotice("Für die gewählte Anzahl werden mehr unterschiedliche Aktionsbilder benötigt. Bitte den Aktionsbild-Pool ergänzen oder die Anzahl reduzieren.");
+      return;
+    }
     if (!looksLikeOpenAiApiKey(openAiKey)) {
       setTab("settings");
       setNotice("Bitte unter Export & Upload einen vollständigen OpenAI API-Schlüssel einfügen, der mit sk- beginnt, und anschließend prüfen und speichern.");
@@ -1242,6 +1756,12 @@ export default function InseratStudio() {
         acceptedTitles.push(generatedListing.texts.title);
       }
 
+      const promotionAssignments = reconcilePromotionAssignments(
+        houseSnapshots.map((house) => house.id),
+        promotionPool(state).map((image) => image.id),
+        projectPromotionCount(projectSnapshot),
+        projectSnapshot.promotionAssignments,
+      );
       const listings: GeneratedListing[] = generated.map(({
         house,
         index,
@@ -1255,6 +1775,7 @@ export default function InseratStudio() {
           `FPI-${projectSnapshot.id.slice(0, 8)}-${house.id.slice(0, 6)}-${index + 1}`.toUpperCase(),
         templateId: house.id,
         templateName: house.name,
+        promotionImageId: promotionAssignments[house.id],
         price: totalPrice(house, projectSnapshot),
         texts,
         writingProfile: writingProfile || previous?.writingProfile,
@@ -1268,7 +1789,9 @@ export default function InseratStudio() {
       setState((current) => ({
         ...current,
         projects: current.projects.map((project) =>
-          project.id === projectSnapshot.id ? { ...project, listings } : project,
+          project.id === projectSnapshot.id
+            ? { ...project, promotionAssignments, listings }
+            : project,
         ),
       }));
       setActiveProjectId(projectSnapshot.id);
@@ -1314,10 +1837,10 @@ export default function InseratStudio() {
       .filter(
         (house) =>
           !house
-          || effectiveHouseImages(state, house).length < MIN_HOUSE_IMAGES
-          || effectiveHouseImages(state, house).length > MAX_HOUSE_IMAGES,
+          || house.images.length < MIN_HOUSE_IMAGES
+          || house.images.length > MAX_HOUSE_IMAGES,
       )
-      .map((house) => house ? `${house.name} (${effectiveHouseImages(state, house).length} Bilder)` : "Unbekannter Haustyp");
+      .map((house) => house ? `${house.name} (${house.images.length} Bilder)` : "Unbekannter Haustyp");
     if (invalidImageCounts.length) {
       throw new Error(
         `Für den Import werden pro Haustyp mindestens ${MIN_HOUSE_IMAGES} und maximal ${MAX_HOUSE_IMAGES} Bilder benötigt: ${invalidImageCounts.join(", ")}.`,
@@ -1331,8 +1854,7 @@ export default function InseratStudio() {
       listings,
       houses: state.houses,
       provider: state.provider,
-      promotionImage: state.promotionImage,
-      promotionImageEnabled: state.promotionImageEnabled,
+      promotionImages: promotionPool(state),
     };
   };
 
@@ -1493,7 +2015,7 @@ export default function InseratStudio() {
     if (includeWindowsBackup && helperOnline) {
       try {
         await queueWindowsCatalogSnapshot(checkpoint, savedAt);
-        setSaveLabel("Browser + Windows-Sicherung aktuell");
+        setSaveLabel("Browser + Gerätesicherung aktuell");
       } catch {
         setSaveLabel("Fortschritt im Browser gespeichert");
       }
@@ -1562,6 +2084,11 @@ export default function InseratStudio() {
           const previousListings = [...project.listings];
           const generatedListings: GeneratedListing[] = [];
           const headlineCycleId = `${run.id}-${project.id}`;
+          const promotionAssignments = randomPromotionAssignments(
+            task.houseIds,
+            promotionPool(workingState).map((image) => image.id),
+            projectPromotionCount(project),
+          );
 
           for (let houseIndex = 0; houseIndex < selectedTaskHouses.length; houseIndex += 1) {
             if (await pauseAtCheckpoint("Der Totalabgleich wurde vor dem nächsten KI-Text sicher angehalten.")) return;
@@ -1601,6 +2128,7 @@ export default function InseratStudio() {
               externalId: totalSyncExternalId(run.id, project.id, houseIndex + 1),
               templateId: house.id,
               templateName: house.name,
+              promotionImageId: promotionAssignments[house.id],
               price: totalPrice(house, project),
               texts: result.texts,
               writingProfile: result.writingProfile || previous?.writingProfile,
@@ -1617,6 +2145,7 @@ export default function InseratStudio() {
           project = {
             ...project,
             selectedHouseIds: [...task.houseIds],
+            promotionAssignments,
             listings: generatedListings,
           };
           task = { ...task, generated: true, lastError: undefined };
@@ -1745,6 +2274,15 @@ export default function InseratStudio() {
       setNotice("Für den gewählten Benutzer wurde keine vollständige Grundstücksadresse gefunden.");
       return;
     }
+    const insufficientPromotionProject = totalSyncReadyProjects.find(
+      (project) => projectPromotionCount(project) > promotionPool(state).length,
+    );
+    if (insufficientPromotionProject) {
+      setNotice(
+        `Für „${insufficientPromotionProject.name}“ werden ${projectPromotionCount(insufficientPromotionProject)} unterschiedliche Aktionsbilder benötigt. Bitte den Pool ergänzen oder die Anzahl bei dieser Adresse reduzieren.`,
+      );
+      return;
+    }
 
     const totalListings = totalSyncReadyProjects.length * TOTAL_SYNC_LISTINGS_PER_ADDRESS;
     const scopeLabel = totalSyncScope === "all"
@@ -1804,7 +2342,7 @@ export default function InseratStudio() {
       setFtpUser("");
       setFtpPassword("");
       setCredentialSaveLabel("Gespeicherte Zugangsdaten wurden entfernt");
-      setNotice("OpenAI- und Immoprofessional-Zugangsdaten wurden aus dem verschlüsselten Windows-Tresor entfernt.");
+      setNotice("OpenAI- und Immoprofessional-Zugangsdaten wurden aus dem verschlüsselten Gerätetresor entfernt.");
     } catch (error) {
       setCredentialsReady(true);
       setNotice(error instanceof Error ? error.message : "Zugangsdaten konnten nicht gelöscht werden.");
@@ -1975,50 +2513,53 @@ export default function InseratStudio() {
         <>
         <section className="workspace promotion-card">
           <div className="promotion-copy">
-            <span className="eyebrow">Zentrales Anzeigebild</span>
-            <h2>Aktionsbild für alle Haustypen</h2>
-            <p>Einmal hochladen und bei Bedarf als erstes Bild in allen Inseraten verwenden. Die eigenen Bilder der Haustypen bleiben unverändert gespeichert.</p>
+            <span className="eyebrow">Zentraler Aktionsbild-Pool</span>
+            <h2>Bis zu {MAX_PROMOTION_IMAGES} Aktionsbilder</h2>
+            <p>Bei jeder Adresse entscheidest du, ob 0 bis 4 Inserate ein zufällig ausgewähltes Aktionsbild erhalten. Es steht im Export immer auf Position 1; die Hausvorlagen bleiben unverändert.</p>
           </div>
-          {state.promotionImage ? (
-            <div className="promotion-editor">
-              <img src={state.promotionImage.dataUrl} alt={state.promotionImage.caption} />
-              <div>
-                <label className="image-caption">
-                  <span>Bildtext im Inserat</span>
-                  <input
-                    value={state.promotionImage.caption}
-                    onChange={(event) => setState((current) => ({
-                      ...current,
-                      promotionImage: current.promotionImage
-                        ? { ...current.promotionImage, caption: event.target.value }
-                        : null,
-                    }))}
-                  />
-                </label>
-                <label className="promotion-toggle">
-                  <input
-                    type="checkbox"
-                    checked={state.promotionImageEnabled}
-                    onChange={(event) => setState((current) => ({
-                      ...current,
-                      promotionImageEnabled: event.target.checked,
-                    }))}
-                  />
-                  <span><b>Für alle Haustypen verwenden</b><small>Aktiviert wird dieses Bild im Export automatisch Bild 1. Bei 14 Hausbildern entfällt nur das letzte Bild im Export.</small></span>
-                </label>
-                <div className="button-row">
-                  <label className="secondary file-label">Aktionsbild ersetzen<input type="file" accept="image/*" onChange={addPromotionImage} /></label>
-                  <button className="primary" disabled={savingHouses} onClick={saveHousesNow}>{savingHouses ? "Wird gespeichert …" : "Aktionsbild speichern"}</button>
-                  <button className="text-danger" onClick={removePromotionImage}>Aktionsbild entfernen</button>
-                </div>
-              </div>
+          <div className="promotion-pool-header">
+            <b>{promotionPool(state).length}/{MAX_PROMOTION_IMAGES} gespeichert</b>
+            <div className="button-row">
+              <label className={`secondary file-label${promotionPool(state).length >= MAX_PROMOTION_IMAGES ? " disabled" : ""}`}>
+                Aktionsbilder hinzufügen
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  multiple
+                  disabled={promotionPool(state).length >= MAX_PROMOTION_IMAGES}
+                  onChange={addPromotionImages}
+                />
+              </label>
+              <button className="primary" disabled={savingHouses} onClick={saveHousesNow}>
+                {savingHouses ? "Wird gespeichert …" : "Aktionsbild-Pool speichern"}
+              </button>
+            </div>
+          </div>
+          {promotionPool(state).length ? (
+            <div className="promotion-pool-grid">
+              {promotionPool(state).map((image, index) => (
+                <article className="promotion-pool-item" key={image.id}>
+                  <div className="promotion-pool-image">
+                    <span>{index + 1}</span>
+                    <img src={image.dataUrl} alt={image.caption || image.name} />
+                  </div>
+                  <label className="image-caption">
+                    <span>Bildtext im Inserat</span>
+                    <input
+                      value={image.caption}
+                      onChange={(event) => updatePromotionImage(image.id, { caption: event.target.value })}
+                    />
+                  </label>
+                  <button className="text-danger" onClick={() => removePromotionImage(image.id)}>Entfernen</button>
+                </article>
+              ))}
             </div>
           ) : (
             <label className="promotion-upload">
               <span>+</span>
-              <b>Aktionsbild einfügen</b>
-              <small>JPG, PNG oder WebP auswählen</small>
-              <input type="file" accept="image/*" onChange={addPromotionImage} />
+              <b>Aktionsbilder einfügen</b>
+              <small>Mehrfachauswahl möglich · JPEG, PNG oder WebP</small>
+              <input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={addPromotionImages} />
             </label>
           )}
         </section>
@@ -2077,15 +2618,61 @@ export default function InseratStudio() {
                 </span>
               </label>
             </div>
+            {activeHousePriceMatch ? (
+              <div className="price-catalog-card">
+                <div>
+                  <span className="eyebrow">Pascals Preisliste</span>
+                  <b>{activeHousePriceMatch.label}: {euro(activeHousePriceMatch.price)}</b>
+                  <small>
+                    {activeHouse.housePrice === activeHousePriceMatch.price
+                      ? "Der gespeicherte Hauspreis entspricht der hinterlegten Preisliste."
+                      : `Der vorhandene Hauspreis ${euro(activeHouse.housePrice)} bleibt bestehen, bis du die Übernahme bestätigst.`}
+                  </small>
+                </div>
+                {activeHouse.housePrice !== activeHousePriceMatch.price ? (
+                  <button
+                    className="secondary"
+                    type="button"
+                    onClick={() => {
+                      updateHouse({ housePrice: activeHousePriceMatch.price });
+                      setNotice(
+                        `${activeHousePriceMatch.label}: ${euro(activeHousePriceMatch.price)} wurde bewusst aus Pascals Preisliste übernommen.`,
+                      );
+                    }}
+                  >
+                    Preis übernehmen
+                  </button>
+                ) : (
+                  <span className="status online">Preis aktuell</span>
+                )}
+              </div>
+            ) : null}
 
             <div className="image-section">
               <div className="section-heading compact">
                 <div>
-                  <span className="eyebrow">Automatische Bildauswahl</span>
+                  <span className="eyebrow">Bildrollen &amp; Reihenfolge</span>
                   <h3>{MIN_HOUSE_IMAGES} bis {MAX_HOUSE_IMAGES} Bilder je Haustyp</h3>
-                  <small className="section-note">Die Position lässt sich jederzeit ändern. Bild 1 wird als Titelbild exportiert.</small>
+                  <small className="section-note">Pascals Bildrollen und feste Bildüberschriften sind integriert. Die Position lässt sich weiterhin jederzeit ändern.</small>
                 </div>
                 <div className="button-row image-heading-actions">
+                  <button className="secondary" onClick={toggleMediaLibrary}>
+                    {mediaLibraryOpen ? "Medienbibliothek schließen" : "iCloud-Medienbibliothek"}
+                  </button>
+                  <button
+                    className="secondary"
+                    disabled={!activeHouse.images.some((image) => !image.role)}
+                    onClick={classifyExistingImages}
+                  >
+                    Vorhandene Bilder zuordnen
+                  </button>
+                  <button
+                    className="secondary"
+                    disabled={!activeHouse.images.some((image) => image.role && image.role !== "other")}
+                    onClick={normalizeImageSequence}
+                  >
+                    Nach Bildrollen sortieren
+                  </button>
                   <button
                     className="secondary"
                     disabled={replacingAllImageCaptions || captioningImageIds.length > 0 || !state.houses.some((house) => house.images.length > 0)}
@@ -2099,6 +2686,159 @@ export default function InseratStudio() {
                   </label>
                 </div>
               </div>
+              {mediaLibraryOpen ? (
+                <section className="media-library" aria-label="iCloud-Medienbibliothek">
+                  <div className="media-library-intro">
+                    <div>
+                      <b>Haus-, Innenraum-, Grundriss- und Vertrauensbilder</b>
+                      <span>
+                        Pascals feste iCloud-Ordner sind verbunden. Eine passende SUN-/SOL-Hausansicht
+                        kann die komplette Bildfolge automatisch zusammenstellen.
+                      </span>
+                    </div>
+                    <strong>{mediaLibraryTotal} Treffer</strong>
+                  </div>
+                  <form
+                    className="media-library-toolbar"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void loadMediaLibrary(1);
+                    }}
+                  >
+                    <input
+                      value={mediaLibraryQuery}
+                      onChange={(event) => setMediaLibraryQuery(event.target.value)}
+                      placeholder="Suche, z. B. Sun 144, Küche oder Borkheide"
+                      aria-label="Medien durchsuchen"
+                    />
+                    <select
+                      value={mediaLibraryGroup}
+                      onChange={(event) => setMediaLibraryGroup(event.target.value)}
+                      aria-label="Bildgruppe filtern"
+                    >
+                      <option value="">Alle Gruppen</option>
+                      {mediaLibraryGroups.map((group) => (
+                        <option key={group.name} value={group.name}>
+                          {group.name} ({group.count})
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={mediaLibraryKind}
+                      onChange={(event) => (
+                        setMediaLibraryKind(event.target.value as "" | MediaLibraryKind)
+                      )}
+                      aria-label="Bildart filtern"
+                    >
+                      <option value="">Alle Bildarten</option>
+                      <option value="house">Hausansichten</option>
+                      <option value="interior">Innenräume</option>
+                      <option value="floorplan">Grundrisse</option>
+                      <option value="location">Standortanzeigen</option>
+                      <option value="marketing">Allgemeine Anzeigen</option>
+                    </select>
+                    <button className="secondary" type="submit" disabled={mediaLibraryLoading}>
+                      Filtern
+                    </button>
+                  </form>
+
+                  {!mediaLibraryAvailable ? (
+                    <div className="media-library-message">
+                      Der konfigurierte iCloud-Ordner ist auf diesem Gerät nicht erreichbar. Auf Pascals
+                      Mac wird der feste Pfad automatisch verwendet; alternativ lässt er sich über
+                      <code>FPI_MEDIA_LIBRARY_ROOT</code> konfigurieren.
+                    </div>
+                  ) : mediaLibraryError ? (
+                    <div className="media-library-message error">{mediaLibraryError}</div>
+                  ) : mediaLibraryLoading ? (
+                    <div className="media-library-message">Medien werden indexiert …</div>
+                  ) : mediaLibraryItems.length ? (
+                    <div className="media-library-grid">
+                      {mediaLibraryItems.map((item) => {
+                        const selected = selectedMediaItems.some(
+                          (selectedItem) => selectedItem.id === item.id,
+                        );
+                        const alreadyImported = activeHouse.images.some(
+                          (image) => image.sourceId === item.id,
+                        );
+                        return (
+                          <button
+                            type="button"
+                            key={item.id}
+                            className={`media-library-card${selected ? " selected" : ""}${alreadyImported ? " imported" : ""}`}
+                            onClick={() => toggleMediaSelection(item)}
+                            disabled={alreadyImported && item.kind !== "house"}
+                            aria-pressed={selected}
+                            title={item.relativePath}
+                          >
+                            <img src={item.imageUrl} alt={item.caption} loading="lazy" />
+                            <span className="media-selection-mark">
+                              {alreadyImported || selected ? "✓" : "+"}
+                            </span>
+                            <span className="media-kind">{MEDIA_KIND_LABELS[item.kind]}</span>
+                            <strong>{item.caption}</strong>
+                            <small>{item.group}</small>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="media-library-message">
+                      Für diese Filter wurden keine Bilder gefunden.
+                    </div>
+                  )}
+
+                  <div className="media-library-footer">
+                    <div className="media-pagination">
+                      <button
+                        className="secondary"
+                        type="button"
+                        disabled={mediaLibraryLoading || mediaLibraryPage <= 1}
+                        onClick={() => void loadMediaLibrary(mediaLibraryPage - 1)}
+                      >
+                        Zurück
+                      </button>
+                      <span>Seite {mediaLibraryPage} von {mediaLibraryPages}</span>
+                      <button
+                        className="secondary"
+                        type="button"
+                        disabled={mediaLibraryLoading || mediaLibraryPage >= mediaLibraryPages}
+                        onClick={() => void loadMediaLibrary(mediaLibraryPage + 1)}
+                      >
+                        Weiter
+                      </button>
+                    </div>
+                    <div className="button-row">
+                      <button
+                        className="secondary"
+                        type="button"
+                        disabled={
+                          selectedMediaItems.length !== 1
+                          || selectedMediaItems[0]?.kind !== "house"
+                          || importingMedia
+                        }
+                        onClick={buildAutomaticImageSequence}
+                      >
+                        {importingMedia ? "Bildfolge wird geladen …" : "Komplette Bildfolge erstellen"}
+                      </button>
+                      <button
+                        className="primary"
+                        type="button"
+                        disabled={
+                          !selectedMediaItems.length
+                          || importingMedia
+                          || activeHouse.images.length >= MAX_HOUSE_IMAGES
+                        }
+                        onClick={importSelectedMedia}
+                      >
+                        {importingMedia
+                          ? "iCloud-Bilder werden übernommen …"
+                          : `${selectedMediaItems.length} ausgewählte Bilder übernehmen`}
+                      </button>
+                    </div>
+                  </div>
+                </section>
+              ) : null}
               {activeHouse.images.length ? (
                 <div className="image-grid">
                   {activeHouse.images.map((image, index) => (
@@ -2106,8 +2846,8 @@ export default function InseratStudio() {
                       <img src={image.dataUrl} alt={image.caption} />
                       <div className="image-order">{String(index + 1).padStart(2, "0")}</div>
                       <label className="image-caption">
-                        <span>{captioningImageIds.includes(image.id) ? "Passender Bildtext wird verfeinert …" : "Automatischer Bildtext"}</span>
-                        <input value={image.caption} onChange={(event) => updateImage(image.id, { caption: event.target.value })} aria-label={`Bildbeschreibung ${index + 1}`} />
+                        <span>{image.captionLocked ? "Feste Bildüberschrift" : captioningImageIds.includes(image.id) ? "Passender Bildtext wird verfeinert …" : "Variabler Bildtext"}</span>
+                        <input disabled={image.captionLocked} value={image.caption} onChange={(event) => updateImage(image.id, { caption: event.target.value })} aria-label={`Bildbeschreibung ${index + 1}`} />
                       </label>
                       <div className="image-position">
                         <label>
@@ -2124,7 +2864,37 @@ export default function InseratStudio() {
                         </label>
                         {index === 0 ? <b>Titelbild</b> : null}
                       </div>
-                      <label className="check-line"><input type="checkbox" checked={image.isFloorplan} onChange={(event) => updateImage(image.id, { isFloorplan: event.target.checked })} />Grundriss</label>
+                      <label className="image-role-select">
+                        <span>Bildrolle</span>
+                        <select
+                          value={inferImageRole({
+                            filename: image.name,
+                            role: image.role,
+                            isFloorplan: image.isFloorplan,
+                          })}
+                          onChange={(event) => updateImageRole(image.id, event.target.value as ImageRole)}
+                          aria-label={`Bildrolle für Bild ${index + 1}`}
+                        >
+                          {IMAGE_ROLE_VALUES.filter((role) => role !== "promotion").map((role) => (
+                            <option key={role} value={role}>{IMAGE_ROLE_LABELS[role as keyof typeof IMAGE_ROLE_LABELS]}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="check-line">
+                        <input
+                          type="checkbox"
+                          checked={image.isFloorplan}
+                          onChange={(event) => updateImageRole(
+                            image.id,
+                            event.target.checked
+                              ? "floorplan_ground"
+                              : image.role?.startsWith("floorplan")
+                                ? "other"
+                                : image.role ?? "other",
+                          )}
+                        />
+                        Grundriss
+                      </label>
                       <button className="text-danger" onClick={() => updateHouse({ images: activeHouse.images.filter((item) => item.id !== image.id) })}>Entfernen</button>
                     </article>
                   ))}
@@ -2221,7 +2991,7 @@ export default function InseratStudio() {
               <div className="selection-grid">
                 {state.houses.map((house) => {
                   const selected = activeProject.selectedHouseIds.includes(house.id);
-                  const displayImage = effectiveHouseImages(state, house)[0];
+                  const displayImage = house.images[0];
                   return (
                     <button key={house.id} className={selected ? "select-card selected" : "select-card"} onClick={() => toggleHouse(house.id)}>
                       <span className="selection-check">{selected ? "✓" : "+"}</span>
@@ -2230,6 +3000,62 @@ export default function InseratStudio() {
                     </button>
                   );
                 })}
+              </div>
+            </div>
+            <div className="promotion-assignment-panel">
+              <div className="promotion-assignment-copy">
+                <span className="eyebrow">Aktionsbilder für diese Adresse</span>
+                <h3>Bei wie vielen Häusern einsetzen?</h3>
+                <p>Das Studio wählt zufällig die Häuser und möglichst unterschiedliche Aktionsbilder. Die Zuordnung bleibt gespeichert, bis du neu auslost.</p>
+              </div>
+              <div className="promotion-assignment-controls">
+                <label>
+                  <span>Anzahl der Inserate</span>
+                  <select
+                    value={projectPromotionCount(activeProject)}
+                    onChange={(event) => setProjectPromotionCount(Number(event.target.value))}
+                  >
+                    {Array.from({ length: MAX_PROMOTED_LISTINGS + 1 }, (_, count) => (
+                      <option
+                        key={count}
+                        value={count}
+                        disabled={count > promotionPool(state).length}
+                      >
+                        {count === 0 ? "0 · keine Aktionsbilder" : `${count} von 4 Häusern`}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  className="secondary"
+                  disabled={!projectPromotionCount(activeProject) || !activeProject.selectedHouseIds.length}
+                  onClick={rerollProjectPromotions}
+                >
+                  Neu auslosen
+                </button>
+              </div>
+              {projectPromotionCount(activeProject) > promotionPool(state).length ? (
+                <div className="promotion-assignment-warning">
+                  Bitte noch {projectPromotionCount(activeProject) - promotionPool(state).length} Aktionsbild{projectPromotionCount(activeProject) - promotionPool(state).length === 1 ? "" : "er"} im Bereich Haustypen ergänzen.
+                </div>
+              ) : null}
+              <div className="promotion-assignment-list">
+                {selectedHouses.map((house) => {
+                  const imageId = activeProject.promotionAssignments?.[house.id];
+                  const image = promotionPool(state).find((item) => item.id === imageId);
+                  return (
+                    <div className={image ? "assigned" : ""} key={house.id}>
+                      {image
+                        ? <img src={image.dataUrl} alt={image.caption || image.name} />
+                        : <span className="promotion-none">–</span>}
+                      <span>
+                        <b>{house.name}</b>
+                        <small>{image ? `Aktionsbild: ${image.caption || image.name}` : "Eigenes Hausbild an Position 1"}</small>
+                      </span>
+                    </div>
+                  );
+                })}
+                {!selectedHouses.length ? <small>Nach der Hausauswahl erscheint hier die gespeicherte Zuordnung.</small> : null}
               </div>
             </div>
             <div className="action-bar">
@@ -2255,7 +3081,7 @@ export default function InseratStudio() {
               <div className="listing-stack">
                 {activeProject.listings.map((listing) => {
                   const house = state.houses.find((item) => item.id === listing.templateId);
-                  const displayImages = house ? effectiveHouseImages(state, house) : [];
+                  const displayImages = house ? effectiveListingImages(state, house, listing) : [];
                   const displayImage = displayImages[0];
                   return (
                     <article className="listing-card" key={listing.id}>
@@ -2273,7 +3099,7 @@ export default function InseratStudio() {
                         <TextField label="3 · Lage" rows={7} value={listing.texts.location} onChange={(value) => updateListingText(listing.id, "location", value)} />
                         <TextField label="4 · Sonstiges" rows={7} value={listing.texts.other} onChange={(value) => updateListingText(listing.id, "other", value)} />
                       </div>
-                      <footer><span>{displayImages.length} Bilder automatisch zugeordnet{state.promotionImageEnabled && state.promotionImage ? " · Aktionsbild an Position 1" : ""}</span><span>Weitergabe an Portale: <b>deaktiviert</b></span></footer>
+                      <footer><span>{displayImages.length} Bilder automatisch zugeordnet{listing.promotionImageId ? " · Aktionsbild an Position 1" : ""}</span><span>Weitergabe an Portale: <b>deaktiviert</b></span></footer>
                     </article>
                   );
                 })}
@@ -2333,7 +3159,7 @@ export default function InseratStudio() {
                 </select>
               </label>
             </div>
-            <p className="security-note">Der Schlüssel wird vor dem Speichern direkt bei OpenAI geprüft und anschließend für dein Windows-Benutzerkonto verschlüsselt. Die KI erzeugt eine moderne, gegenüber früheren Fassungen neue Überschrift sowie vier abwechslungsreiche Textblöcke mit eigenem Erzählprofil. An die Text-KI werden weder Straße, Hausnummer noch PLZ übergeben; in den Inserattexten sind nur Ort und Ortsteil als konkrete Ortsangaben erlaubt.</p>
+            <p className="security-note">Der Schlüssel wird vor dem Speichern direkt bei OpenAI geprüft und anschließend für dein Benutzerkonto verschlüsselt: unter Windows mit DPAPI, unter macOS im Apple-Schlüsselbund. Die KI erzeugt eine moderne, gegenüber früheren Fassungen neue Überschrift sowie vier abwechslungsreiche Textblöcke mit eigenem Erzählprofil. An die Text-KI werden weder Straße, Hausnummer noch PLZ übergeben; in den Inserattexten sind nur Ort und Ortsteil als konkrete Ortsangaben erlaubt.</p>
 
             <div className="divider" />
             <div className="section-heading"><div><span className="eyebrow">Verschlüsselt auf diesem Gerät</span><h2>Immoprofessional-Zugang</h2></div><span className={helperOnline ? "status online" : "status offline"}>{helperOnline ? "Upload bereit" : "Upload-Helfer offline"}</span></div>
@@ -2343,10 +3169,10 @@ export default function InseratStudio() {
               <Field label="FTP-Benutzername" value={ftpUser} onChange={setFtpUser} />
               <Field label="FTP-Passwort" type="password" value={ftpPassword} onChange={setFtpPassword} />
             </div>
-            <p className="security-note">FTP-Benutzername und Passwort bleiben nach einem Upload erhalten. Sie liegen getrennt von Haustypen und Projekten im Windows-verschlüsselten Zugangstresor und werden nicht in eine Inseratstudio-Sicherung aufgenommen.</p>
+            <p className="security-note">FTP-Benutzername und Passwort bleiben nach einem Upload erhalten. Sie liegen getrennt von Haustypen und Projekten im plattformgeschützten Zugangstresor und werden nicht in eine Inseratstudio-Sicherung aufgenommen.</p>
 
             <div className="credential-vault-card">
-              <div><span className="eyebrow">Lokaler Zugangstresor</span><b>{credentialSaveLabel}</b><small>Geschützt für das aktuell angemeldete Windows-Benutzerkonto.</small></div>
+              <div><span className="eyebrow">Lokaler Zugangstresor</span><b>{credentialSaveLabel}</b><small>Windows-DPAPI oder Apple-Schlüsselbund – nur für das angemeldete Benutzerkonto.</small></div>
               <div className="button-row">
                 <button className="primary" disabled={savingCredentials || totalSyncBusy} onClick={saveCredentialsNow}>{savingCredentials ? "Schlüssel wird geprüft …" : "Zugangsdaten prüfen & speichern"}</button>
                 <button className="secondary" disabled={savingCredentials || totalSyncBusy} onClick={clearSavedCredentials}>Zugangsdaten löschen</button>
@@ -2443,7 +3269,7 @@ export default function InseratStudio() {
           </aside>
 
           <div className="content-card backup-card">
-            <div><span className="eyebrow">Strikt getrennte Speicherung</span><h3>Fabian&amp;Pascal-Sicherung</h3><p>Haustypen, Bilder und Adressprojekte werden doppelt lokal gespeichert: im Speicher <code>{STORAGE_ID}</code> und als automatische Windows-Sicherung. Zugangsdaten sind separat verschlüsselt. deviq und Plotverium werden weder gelesen noch beschrieben.</p></div>
+            <div><span className="eyebrow">Strikt getrennte Speicherung</span><h3>Fabian&amp;Pascal-Sicherung</h3><p>Haustypen, Bilder und Adressprojekte werden doppelt lokal gespeichert: im Speicher <code>{STORAGE_ID}</code> und als automatische Gerätesicherung. Zugangsdaten sind separat verschlüsselt. deviq und Plotverium werden weder gelesen noch beschrieben.</p></div>
             <div className="button-row"><button className="secondary" onClick={exportCatalog}>Sicherung herunterladen</button><label className="secondary file-label">Sicherung einlesen<input type="file" accept="application/json" onChange={importCatalog} /></label></div>
           </div>
         </section>

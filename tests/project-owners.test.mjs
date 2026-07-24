@@ -23,5 +23,24 @@ test("assigns legacy address projects to Fabian and preserves Pascal", () => {
   assert.equal(normalized.projects[1].owner, "pascal");
   assert.equal(normalized.promotionImage, null);
   assert.equal(normalized.promotionImageEnabled, false);
+  assert.deepEqual(normalized.promotionImages, []);
+  assert.equal(normalized.projects[0].promotionImageCount, 0);
   assert.equal(projectOwner({ owner: "fabian" }), "fabian");
+});
+
+test("migrates one legacy global promotion image into the new saved pool", () => {
+  const normalized = normalizeProjectOwners({
+    ...baseState,
+    promotionImage: { id: "promo-1" },
+    promotionImageEnabled: true,
+    projects: [{
+      id: "project-1",
+      selectedHouseIds: ["house-1", "house-2"],
+      listings: [],
+    }],
+  });
+
+  assert.equal(normalized.promotionImages[0].id, "promo-1");
+  assert.equal(normalized.projects[0].promotionImageCount, 1);
+  assert.equal(Object.keys(normalized.projects[0].promotionAssignments).length, 1);
 });

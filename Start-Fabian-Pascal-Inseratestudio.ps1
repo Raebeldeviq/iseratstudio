@@ -1,3 +1,7 @@
+param(
+  [switch]$NoBrowser
+)
+
 $ErrorActionPreference = "Stop"
 
 $appRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -49,4 +53,6 @@ if (-not $studioPort) {
 }
 
 Start-Sleep -Seconds 3
-Start-Process "http://localhost:43181"
+if (-not $NoBrowser) {
+  Start-Process "http://localhost:43181"
+}

@@ -4,6 +4,7 @@ import type {
   ProjectInput,
   ProviderSettings,
 } from "../types";
+import { enforceListingCopy } from "../../listing-copy.mjs";
 
 function hash(value: string): number {
   let result = 2166136261;
@@ -269,7 +270,7 @@ export function generateListingTexts(
     ? `Haben wir dein Interesse geweckt? Dann vereinbare einen kostenlosen Beratungstermin${contactName ? ` mit ${contactName}` : ""} unter ${provider.phone}.`
     : "Haben wir dein Interesse geweckt? Dann vereinbare einen kostenlosen persönlichen Beratungstermin.";
 
-  return {
+  return enforceListingCopy({
     title,
     description: joinParagraphs([
       descriptionOpening,
@@ -301,5 +302,5 @@ export function generateListingTexts(
       "Gute Beratung ist entscheidend für den Erfolg. Gemeinsam analysieren wir Vorstellungen, Wünsche und Bedürfnisse, damit Haus, Grundstück und Finanzierung zueinander passen.",
       otherContact,
     ]),
-  };
+  }, { provider }) as ListingTexts;
 }

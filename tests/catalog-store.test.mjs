@@ -35,6 +35,7 @@ test("stores and restores the complete local catalog including images", async (c
     }],
     projects: [],
     provider: { company: "Fabian Raebel" },
+    promotionImages: [],
     promotionImage: null,
     promotionImageEnabled: false,
   };
@@ -75,15 +76,16 @@ test("stores large catalog images separately and reuses unchanged image files", 
     }],
     projects: [],
     provider: { company: "Fabian Raebel" },
-    promotionImage: {
+    promotionImages: [{
       id: "promotion-image-1",
       name: "aktion.jpg",
       mimeType: "image/jpeg",
       dataUrl: "data:image/jpeg;base64,YWt0aW9uc2JpbGQ=",
       caption: "Aktuelles Angebot für dein neues Zuhause",
       isFloorplan: false,
-    },
-    promotionImageEnabled: true,
+    }],
+    promotionImage: null,
+    promotionImageEnabled: false,
   };
 
   const first = await startCatalogSnapshot({ state, savedAt: "2026-07-22T13:00:00.000Z", sessionId: "session-1" }, directory);
@@ -94,7 +96,7 @@ test("stores large catalog images separately and reuses unchanged image files", 
 
   const manifest = await loadCatalogManifest(directory);
   assert.equal(manifest.state.houses[0].images[0].dataUrl, "");
-  assert.equal(manifest.state.promotionImage.dataUrl, "");
+  assert.equal(manifest.state.promotionImages[0].dataUrl, "");
   assert.equal((await loadCatalogImage("image-1", directory)).data.toString("utf8"), "image-bytes");
   assert.equal((await loadCatalogImage("promotion-image-1", directory)).data.toString("utf8"), "promotion-image-bytes");
 

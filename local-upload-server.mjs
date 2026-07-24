@@ -1,6 +1,6 @@
 import { Client } from "basic-ftp";
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, open, rm } from "node:fs/promises";
+import { appendFile, mkdir, open, readFile, rm, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { dirname, join, parse } from "node:path";
@@ -21,6 +21,12 @@ import {
   saveCatalogImage,
   startCatalogSnapshot,
 } from "./catalog-store.mjs";
+import {
+  getMediaLibraryItem,
+  queryMediaLibrary,
+  recommendedMediaSequence,
+} from "./media-library.mjs";
+import { APPLICATION_DATA_DIRECTORY } from "./platform-paths.mjs";
 
 const HOST = "127.0.0.1";
 const PORT = 43182;
@@ -28,11 +34,7 @@ const MAX_BODY_BYTES = 180 * 1024 * 1024;
 const MAX_CATALOG_BODY_BYTES = 500 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 100 * 1024 * 1024;
 const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
-const UPLOAD_LOG_PATH = join(
-  process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local"),
-  "Fabian-Pascal Inseratestudio",
-  "upload.log",
-);
+const UPLOAD_LOG_PATH = join(APPLICATION_DATA_DIRECTORY, "upload.log");
 const allowedOrigins = new Set([
   "http://localhost:43181",
   "http://127.0.0.1:43181",
@@ -51,6 +53,25 @@ function headers(origin) {
 function send(response, status, payload, origin = "") {
   response.writeHead(status, headers(origin));
   response.end(JSON.stringify(payload));
+}
+
+function publicMediaItem(item) {
+  return {
+    id: item.id,
+    relativePath: item.relativePath,
+    filename: item.filename,
+    caption: item.caption,
+    mimeType: item.mimeType,
+    collection: item.collection,
+    family: item.family,
+    houseModel: item.houseModel,
+    group: item.group,
+    kind: item.kind,
+    role: item.role,
+    captionLocked: item.captionLocked === true,
+    brandedCover: item.brandedCover === true,
+    imageUrl: `http://${HOST}:${PORT}/media-library/image?id=${encodeURIComponent(item.id)}`,
+  };
 }
 
 function safeFilename(value) {
@@ -166,7 +187,10 @@ const server = createServer(async (request, response) => {
   const isCatalogV2Commit = request.method === "POST" && pathname === "/catalog-v2/commit";
   const isCatalogV2ManifestLoad = request.method === "GET" && pathname === "/catalog-v2/manifest";
   const isCatalogV2ImageLoad = request.method === "GET" && pathname === "/catalog-v2/image";
-  if (!isUpload && !isBinaryUpload && !isLocalSave && !isTextGeneration && !isImageCaptionGeneration && !isOpenAiKeyValidation && !isCredentialLoad && !isCredentialSave && !isCatalogLoad && !isCatalogSave && !isCatalogV2Start && !isCatalogV2ImageSave && !isCatalogV2Commit && !isCatalogV2ManifestLoad && !isCatalogV2ImageLoad) {
+  const isMediaLibraryList = request.method === "GET" && pathname === "/media-library";
+  const isMediaLibrarySequence = request.method === "GET" && pathname === "/media-library/sequence";
+  const isMediaLibraryImage = request.method === "GET" && pathname === "/media-library/image";
+  if (!isUpload && !isBinaryUpload && !isLocalSave && !isTextGeneration && !isImageCaptionGeneration && !isOpenAiKeyValidation && !isCredentialLoad && !isCredentialSave && !isCatalogLoad && !isCatalogSave && !isCatalogV2Start && !isCatalogV2ImageSave && !isCatalogV2Commit && !isCatalogV2ManifestLoad && !isCatalogV2ImageLoad && !isMediaLibraryList && !isMediaLibrarySequence && !isMediaLibraryImage) {
     send(response, 404, { ok: false, message: "Nicht gefunden." }, origin);
     return;
   }
@@ -179,6 +203,62 @@ const server = createServer(async (request, response) => {
   let client;
   let temporaryUploadPath = "";
   try {
+    if (isMediaLibrarySequence) {
+      const result = await recommendedMediaSequence(requestUrl.searchParams.get("coverId"));
+      send(response, 200, {
+        ok: true,
+        warnings: result.warnings,
+        priceMatch: result.priceMatch,
+        items: result.items.map(publicMediaItem),
+      }, origin);
+      return;
+    }
+
+    if (isMediaLibraryList) {
+      const result = await queryMediaLibrary({
+        query: requestUrl.searchParams.get("query") || "",
+        group: requestUrl.searchParams.get("group") || "",
+        kind: requestUrl.searchParams.get("kind") || "",
+        page: requestUrl.searchParams.get("page") || 1,
+        pageSize: requestUrl.searchParams.get("pageSize") || 36,
+      });
+      send(response, 200, {
+        ok: true,
+        available: result.available,
+        total: result.total,
+        libraryTotal: result.libraryTotal,
+        page: result.page,
+        pages: result.pages,
+        pageSize: result.pageSize,
+        groups: result.groups,
+        items: result.items.map(publicMediaItem),
+      }, origin);
+      return;
+    }
+
+    if (isMediaLibraryImage) {
+      const item = await getMediaLibraryItem(requestUrl.searchParams.get("id"));
+      if (!item) {
+        send(response, 404, {
+          ok: false,
+          message: "Das Bild wurde in der Medienbibliothek nicht gefunden.",
+        }, origin);
+        return;
+      }
+      const fileStats = await stat(item.absolutePath);
+      if (!fileStats.isFile() || fileStats.size > MAX_IMAGE_BYTES) {
+        throw new Error("Das Bild ist ungültig oder größer als 100 MB.");
+      }
+      const data = await readFile(item.absolutePath);
+      response.writeHead(200, {
+        ...headers(origin),
+        "Content-Type": item.mimeType,
+        "Content-Length": String(data.length),
+      });
+      response.end(data);
+      return;
+    }
+
     if (isCatalogV2ManifestLoad) {
       const result = await loadCatalogManifest();
       send(response, 200, { ok: true, ...result }, origin);
@@ -340,7 +420,7 @@ const server = createServer(async (request, response) => {
         ok: true,
         filename: saved.filename,
         path: saved.path,
-        message: `Importpaket „${saved.filename}“ wurde im Windows-Downloadordner gespeichert.`,
+        message: `Importpaket „${saved.filename}“ wurde im Downloadordner gespeichert.`,
       }, origin);
       return;
     }

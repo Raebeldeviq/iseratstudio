@@ -90,6 +90,36 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
   assert.match(xml, /<openimmo_obid>FPI-TEST-1<\/openimmo_obid>/);
   assert.match(xml, /<aktion aktionart="CHANGE" timestamp="[^"]+" \/>/);
   assert.ok(xml.indexOf("Aktuelles Angebot für dein neues Zuhause") < xml.indexOf("Eigenes Hausbild"));
+
+  const assignedInput = {
+    ...input,
+    listings: [{
+      ...input.listings[0],
+      promotionImageId: "promotion-image-2",
+    }],
+    houses: [{
+      ...input.houses[0],
+      images: Array.from({ length: 14 }, (_, index) => ({
+        ...input.houses[0].images[0],
+        id: `house-image-${index + 1}`,
+        name: `haus-${index + 1}.jpg`,
+        caption: `Normales Hausbild ${index + 1}`,
+      })),
+    }],
+    promotionImages: [{
+      ...input.promotionImage,
+      id: "promotion-image-2",
+      caption: "Zufällig zugeordnetes Aktionsbild",
+    }],
+    promotionImage: null,
+    promotionImageEnabled: false,
+  };
+  const assignedXml = buildOpenImmoXml(assignedInput);
+  assert.equal((assignedXml.match(/<anhang location=/g) ?? []).length, 14);
+  assert.ok(assignedXml.indexOf("Zufällig zugeordnetes Aktionsbild") < assignedXml.indexOf("Normales Hausbild 1"));
+  assert.match(assignedXml, /Normales Hausbild 13/);
+  assert.doesNotMatch(assignedXml, /Normales Hausbild 14/);
+
   const packageResult = await buildImportPackage(input);
   assert.match(packageResult.filename, /testprojekt-testhaus-fpi-test-1-\d{4}-\d{2}-\d{2}\.zip/);
 });

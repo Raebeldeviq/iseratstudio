@@ -1,6 +1,6 @@
 # Fabian&Pascal Inseratestudio
 
-Lokale Anwendung für die Konfiguration von bis zu 18 Haustypen und die
+Lokale Anwendung für die Konfiguration von bis zu 25 Haustypen und die
 Erstellung von bis zu vier Inseratentwürfen je Adresse.
 
 ## Start
@@ -8,7 +8,12 @@ Erstellung von bis zu vier Inseratentwürfen je Adresse.
 Unter Windows `Start-Fabian-Pascal-Inseratestudio.cmd` doppelt anklicken. Die
 Anwendung öffnet sich anschließend unter `http://localhost:43181`.
 Der lokale Helfer speichert heruntergeladene Importpakete zuverlässig direkt
-im Windows-Ordner `Downloads`.
+im Ordner `Downloads`.
+
+Unter macOS `Start-Fabian-Pascal-Inseratestudio.command` doppelt anklicken. Beim
+ersten Start können die Apple Command Line Tools sowie die Freigabe für iCloud
+Drive erforderlich sein. Pascals Anzeigen- und Innenraumordner in iCloud Drive
+werden automatisch als Medienbibliothek eingebunden.
 Große Bildbestände werden speicherschonend als kleines Inhaltsverzeichnis plus
 einzelne Bilddateien gesichert; Textänderungen übertragen die Fotos nicht erneut.
 
@@ -23,7 +28,9 @@ einzelne Bilddateien gesichert; Textänderungen übertragen die Fotos nicht erne
    Bilder speichern** drücken. Die automatische Speicherung bleibt zusätzlich
    aktiv.
 2. Unter **Adresse & Auswahl** die Grundstücksdaten erfassen und bis zu vier
-   Haustypen auswählen.
+   Haustypen auswählen. Dort außerdem festlegen, ob 0 bis 4 dieser Inserate ein
+   Aktionsbild erhalten sollen. Die zufällige Zuordnung bleibt gespeichert und
+   kann mit **Neu auslosen** bewusst geändert werden.
 3. Unter **Export & Upload** einen vollständigen OpenAI-API-Schlüssel eintragen,
    der mit `sk-` beginnt, und **Zugangsdaten prüfen & speichern** drücken. Danach
    unter **Adresse & Auswahl** die hochwertige KI-Überschrift und alle vier
@@ -85,15 +92,21 @@ automatisch dem getrennten Adressbuch des angegebenen Benutzers zugeordnet und
 lokal gespeichert. Bereits vorhandene Adressen werden als Dubletten übersprungen;
 unvollständige Zeilen zeigt das Studio direkt unter dem Importbereich an.
 
-## Zentrales Aktionsbild
+## Aktionsbild-Pool
 
-Unter **Haustypen** kann ein Aktionsbild einmal zentral hochgeladen und mit
-**Für alle Haustypen verwenden** aktiviert werden. Es erscheint dann in der
-Auswahl, Vorschau und im OpenImmo-Export als Bild 1 jedes Inserats. Die normalen
-Hausbilder bleiben unverändert; bei bereits 14 Hausbildern wird nur das letzte
-Bild im Export weggelassen. Nach dem Ausschalten verwendet jeder Haustyp wieder
-sein eigenes Titelbild. Das Aktionsbild wird separat und ohne Bildduplikate in
-der lokalen Browser- und Windows-Sicherung gespeichert.
+Unter **Haustypen** können bis zu 25 Aktionsbilder zentral hochgeladen werden.
+Unter **Adresse & Auswahl** lässt sich anschließend pro Grundstück festlegen,
+ob 0, 1, 2, 3 oder 4 der ausgewählten Häuser ein Aktionsbild erhalten. Das
+Studio lost sowohl die Häuser als auch möglichst unterschiedliche Bilder
+zufällig aus. Die Zuordnung bleibt für die Adresse und ihre Inserate gespeichert,
+bis **Neu auslosen** gewählt wird. Dieselbe Regel gilt beim Totalabgleich.
+
+Ein zugeordnetes Aktionsbild steht in Vorschau und OpenImmo-Export immer auf
+Position 1. Die normalen Hausbilder bleiben unverändert gespeichert. Hat eine
+Hausvorlage bereits 14 Bilder, enthält nur der Export das Aktionsbild plus die
+ersten 13 Hausbilder; Bild 14 bleibt vollständig in der Hausvorlage erhalten.
+Der Aktionsbild-Pool wird separat und ohne Bildduplikate in der lokalen Browser-
+und Gerätesicherung gespeichert.
 
 Das Inseratestudio darf nur in einem Browser-Tab gleichzeitig geöffnet sein.
 Ein zweiter Tab wird automatisch gesperrt, damit ältere Datenstände keine
@@ -150,8 +163,9 @@ manuell wählbare Optionen verfügbar. Der Wechsel des Modells verändert die
 lokalen Qualitäts-, Vollständigkeits- und Adressprüfungen nicht.
 
 OpenAI- und Immoprofessional-Zugangsdaten werden automatisch in einem separaten
-lokalen Tresor gespeichert. Die Datei ist mit Windows DPAPI für das aktuell
-angemeldete Windows-Benutzerkonto verschlüsselt. Die Zugangsdaten stehen nach
+lokalen Tresor gespeichert. Unter Windows schützt DPAPI die Daten für das
+angemeldete Windows-Benutzerkonto; unter macOS liegen sie im Apple-Schlüsselbund.
+Die Zugangsdaten stehen nach
 einem Neustart wieder zur Verfügung, werden aber weder in IndexedDB noch in
 Inseratstudio-Sicherungen aufgenommen. Mit **Zugangsdaten speichern** kann die
 Speicherung sofort ausdrücklich bestätigt werden; die Automatik bleibt
@@ -171,7 +185,7 @@ KI erzeugt.
 Die App verwendet die eigene IndexedDB-Datenbank
 `fabian-pascal-inseratestudio-v1` am lokalen App-Ursprung. Zusätzlich wird der
 vollständige Katalog einschließlich aller Bilder automatisch komprimiert im
-lokalen Windows-Benutzerkonto gesichert. Beim Start wird die neueste intakte
+lokalen Benutzerkonto gesichert. Beim Start wird die neueste intakte
 Fassung geladen. Vorhandene Daten aus der früheren Datenbank werden einmalig
 übernommen. Die Daten werden nicht mit deviq, Plotverium oder anderen Projekten
-verbunden. Zugangsdaten liegen separat Windows-verschlüsselt.
+verbunden. Zugangsdaten liegen separat plattformgeschützt.
