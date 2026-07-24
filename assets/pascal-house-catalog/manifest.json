@@ -1,0 +1,1626 @@
+{
+  "format": 1,
+  "createdAt": "2026-07-24T11:57:21.139Z",
+  "source": "Pascal Google Drive / Haustypen",
+  "houses": [
+    {
+      "key": "sun126-v2",
+      "images": [
+        {
+          "id": "pascal_e68648b9dd72085d1e31a04a",
+          "file": "sun126-v2/01-e68648b9dd72.webp",
+          "sourceName": "SUN 126 V2.png",
+          "sourcePath": "Haustypen/SUN 126 V2.png",
+          "mimeType": "image/webp",
+          "caption": "Dein wundervolles Zuhause",
+          "isFloorplan": false,
+          "role": "cover",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_7994963ac320a3aba40791d2",
+          "file": "sun126-v2/02-7994963ac320.webp",
+          "sourceName": "3215_BZ_LivingHaus_Sommertraum3_V2_SD_02.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 126/3215_BZ_LivingHaus_Sommertraum3_V2_SD_02.jpg",
+          "mimeType": "image/webp",
+          "caption": "Architektur zum Ankommen",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_9c730c7f8b5d564b51e31d7f",
+          "file": "sun126-v2/03-9c730c7f8b5d.webp",
+          "sourceName": "3215_BZ_LivingHaus_Sommertraum3_V5_SD_03.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 126/3215_BZ_LivingHaus_Sommertraum3_V5_SD_03.jpg",
+          "mimeType": "image/webp",
+          "caption": "Ein Zuhause voller Lieblingsplätze",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_ea4677197cea3bf918ae670c",
+          "file": "sun126-v2/04-ea4677197cea.webp",
+          "sourceName": "3502_BienZenker_Solution_125_WD_V8b__Neu2021_cam_01_001.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 126/3502_BienZenker_Solution_125_WD_V8b__Neu2021_cam_01_001.jpg",
+          "mimeType": "image/webp",
+          "caption": "Freiraum für deine schönsten Pläne",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_6c7df185fbadf0451e314c8d",
+          "file": "sun126-v2/05-6c7df185fbad.webp",
+          "sourceName": "BienZenker_Solution119_V3_03_var.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 126/BienZenker_Solution119_V3_03_var.jpg",
+          "mimeType": "image/webp",
+          "caption": "Wohngefühl, das jeden Tag begeistert",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_ff94c038d68733867f29f4b9",
+          "file": "sun126-v2/06-ff94c038d687.webp",
+          "sourceName": "BienZenker_Solution119_V6_02.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 126/BienZenker_Solution119_V6_02.jpg",
+          "mimeType": "image/webp",
+          "caption": "So fühlt sich Zuhause an",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_ea7af767beaa38cb03171440",
+          "file": "sun126-v2/07-ea7af767beaa.webp",
+          "sourceName": "BZ_Solution_125_FD_10b_02.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 126/BZ_Solution_125_FD_10b_02.jpg",
+          "mimeType": "image/webp",
+          "caption": "Dein neuer Lieblingsort",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_e8b8514fb550c838f5870995",
+          "file": "sun126-v2/08-e8b8514fb550.webp",
+          "sourceName": "BZ_Solution_125_WD_V9_002.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 126/BZ_Solution_125_WD_V9_002.jpg",
+          "mimeType": "image/webp",
+          "caption": "Mehr Raum für das gute Leben",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_a397df68f9c0c63415f6a270",
+          "file": "sun126-v2/09-a397df68f9c0.webp",
+          "sourceName": "Sun 126 V FD.png",
+          "sourcePath": "Haustypen/Sunshine/Sun 126/Sun 126 V FD.png",
+          "mimeType": "image/webp",
+          "caption": "Hier wächst Zukunft",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_b494a654f80acfb7f99e973f",
+          "file": "sun126-v2/10-b494a654f80a.webp",
+          "sourceName": "SUN 126 V5.png",
+          "sourcePath": "Haustypen/Sunshine/Sun 126/SUN 126 V5.png",
+          "mimeType": "image/webp",
+          "caption": "Ein Haus mit Wohlfühlfaktor",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_af2fda14c66e68ee5025ead3",
+          "file": "sun126-v2/11-af2fda14c66e.webp",
+          "sourceName": "Sun 126 V8.png",
+          "sourcePath": "Haustypen/Sun 126 V8.png",
+          "mimeType": "image/webp",
+          "caption": "Platz für alles, was dir wichtig ist",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        }
+      ]
+    },
+    {
+      "key": "sun130-v2",
+      "images": [
+        {
+          "id": "pascal_e98978f10397701fa81a60c4",
+          "file": "sun130-v2/01-e98978f10397.webp",
+          "sourceName": "SUN 130 V2.png",
+          "sourcePath": "Haustypen/SUN 130 V2.png",
+          "mimeType": "image/webp",
+          "caption": "Dein wundervolles Zuhause",
+          "isFloorplan": false,
+          "role": "cover",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_ee45d9b2e0e77a679bff5966",
+          "file": "sun130-v2/02-ee45d9b2e0e7.webp",
+          "sourceName": "SUN 130 V3.png",
+          "sourcePath": "Haustypen/SUN 130 V3.png",
+          "mimeType": "image/webp",
+          "caption": "Architektur zum Ankommen",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_ce35b55710fdcd1683e839de",
+          "file": "sun130-v2/03-ce35b55710fd.webp",
+          "sourceName": "SUN 130 V4.png",
+          "sourcePath": "Haustypen/SUN 130 V4.png",
+          "mimeType": "image/webp",
+          "caption": "Ein Zuhause voller Lieblingsplätze",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_01bb6c40dd8f270d3fe83756",
+          "file": "sun130-v2/04-architekturdetail.webp",
+          "sourceName": "SUN 130 V2.png – Architekturdetail",
+          "sourcePath": "Haustypen/SUN 130 V2.png#architekturdetail-4",
+          "mimeType": "image/webp",
+          "caption": "Wohngefühl, das jeden Tag begeistert",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        }
+      ]
+    },
+    {
+      "key": "sun136-v4",
+      "images": [
+        {
+          "id": "pascal_e67d7a09ed4e58c500f88873",
+          "file": "sun136-v4/01-e67d7a09ed4e.webp",
+          "sourceName": "SUN 136 V4.png",
+          "sourcePath": "Haustypen/SUN 136 V4.png",
+          "mimeType": "image/webp",
+          "caption": "Dein wundervolles Zuhause",
+          "isFloorplan": false,
+          "role": "cover",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_e8a50364707f40ffa8bcc13b",
+          "file": "sun136-v4/02-e8a50364707f.webp",
+          "sourceName": "3215_BZ_LivingHaus_Sommertraum3_V4_SD_03.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 136/3215_BZ_LivingHaus_Sommertraum3_V4_SD_03.jpg",
+          "mimeType": "image/webp",
+          "caption": "Architektur zum Ankommen",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_d75bb1a8ef7b0431bf01b99c",
+          "file": "sun136-v4/03-d75bb1a8ef7b.webp",
+          "sourceName": "3215_BZ_LivingHaus_Sommertraum3_V2_SD_02.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 136/3215_BZ_LivingHaus_Sommertraum3_V2_SD_02.jpg",
+          "mimeType": "image/webp",
+          "caption": "Ein Zuhause voller Lieblingsplätze",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_435e876f6127a2b1d63fb0c8",
+          "file": "sun136-v4/04-435e876f6127.webp",
+          "sourceName": "3215_BZ_LivingHaus_Sommertraum3_V3_SD_02.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 136/3215_BZ_LivingHaus_Sommertraum3_V3_SD_02.jpg",
+          "mimeType": "image/webp",
+          "caption": "Freiraum für deine schönsten Pläne",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_1065ee233bdcb58d160b341e",
+          "file": "sun136-v4/05-1065ee233bdc.webp",
+          "sourceName": "3215_BZ_LivingHaus_Sommertraum3_V5_SD_03.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 136/3215_BZ_LivingHaus_Sommertraum3_V5_SD_03.jpg",
+          "mimeType": "image/webp",
+          "caption": "Wohngefühl, das jeden Tag begeistert",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_b41daa1d58b675e33b68f6bd",
+          "file": "sun136-v4/06-b41daa1d58b6.webp",
+          "sourceName": "BZ_Solution_134_FD_V10_03.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 136/BZ_Solution_134_FD_V10_03.jpg",
+          "mimeType": "image/webp",
+          "caption": "So fühlt sich Zuhause an",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_1eeeb38b96bf81605c1956ee",
+          "file": "sun136-v4/07-1eeeb38b96bf.webp",
+          "sourceName": "BZ_Solution_134_WD_V8_03.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 136/BZ_Solution_134_WD_V8_03.jpg",
+          "mimeType": "image/webp",
+          "caption": "Dein neuer Lieblingsort",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_034d2eda3c4364cddc0f6502",
+          "file": "sun136-v4/08-034d2eda3c43.webp",
+          "sourceName": "BZ_Solution_134_WD_V9_01.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 136/BZ_Solution_134_WD_V9_01.jpg",
+          "mimeType": "image/webp",
+          "caption": "Mehr Raum für das gute Leben",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        }
+      ]
+    },
+    {
+      "key": "sun142-v2",
+      "images": [
+        {
+          "id": "pascal_0b8749d7afbc6682158e6b63",
+          "file": "sun142-v2/01-0b8749d7afbc.webp",
+          "sourceName": "SUN 142 V2.png",
+          "sourcePath": "Haustypen/SUN 142 V2.png",
+          "mimeType": "image/webp",
+          "caption": "Dein wundervolles Zuhause",
+          "isFloorplan": false,
+          "role": "cover",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_cd1f0b3aa8489407ea798250",
+          "file": "sun142-v2/02-cd1f0b3aa848.webp",
+          "sourceName": "3450_LivingHaus_AT__SUN_141_V2_SD__02.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 142/3450_LivingHaus_AT__SUN_141_V2_SD__02.jpg",
+          "mimeType": "image/webp",
+          "caption": "Architektur zum Ankommen",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_3be96d9a602dc1781daabe64",
+          "file": "sun142-v2/03-3be96d9a602d.webp",
+          "sourceName": "3839_LivingHaus_Sunshine_142_V02_03.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 142/3839_LivingHaus_Sunshine_142_V02_03.jpg",
+          "mimeType": "image/webp",
+          "caption": "Ein Zuhause voller Lieblingsplätze",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_44b22b69f61035b8cb8c84b0",
+          "file": "sun142-v2/04-44b22b69f610.webp",
+          "sourceName": "SUN 142 V2_03.png",
+          "sourcePath": "Haustypen/Sunshine/Sun 142/SUN 142 V2_03.png",
+          "mimeType": "image/webp",
+          "caption": "Freiraum für deine schönsten Pläne",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_dd59bc071add8bb469e7a5e3",
+          "file": "sun142-v2/05-dd59bc071add.webp",
+          "sourceName": "3450_LivingHaus_AT__SUN_141_V3_WD__02.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 142/3450_LivingHaus_AT__SUN_141_V3_WD__02.jpg",
+          "mimeType": "image/webp",
+          "caption": "Wohngefühl, das jeden Tag begeistert",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_0ab82bd88cb85172a1420ad3",
+          "file": "sun142-v2/06-0ab82bd88cb8.webp",
+          "sourceName": "3450_LivingHaus_AT__SUN_166_V4_FD__02(1).jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 142/3450_LivingHaus_AT__SUN_166_V4_FD__02(1).jpg",
+          "mimeType": "image/webp",
+          "caption": "So fühlt sich Zuhause an",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_044475496e2c6dfc5569dbe3",
+          "file": "sun142-v2/07-044475496e2c.webp",
+          "sourceName": "3839_LivingHaus_Sunshine_142_V04_03.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 142/3839_LivingHaus_Sunshine_142_V04_03.jpg",
+          "mimeType": "image/webp",
+          "caption": "Dein neuer Lieblingsort",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_ec59ad287afb7b72f37f8109",
+          "file": "sun142-v2/08-ec59ad287afb.webp",
+          "sourceName": "SUN 142 V3.png",
+          "sourcePath": "Haustypen/Sunshine/Sun 142/SUN 142 V3.png",
+          "mimeType": "image/webp",
+          "caption": "Mehr Raum für das gute Leben",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_152a2403c1689927d84a791e",
+          "file": "sun142-v2/09-152a2403c168.webp",
+          "sourceName": "Sun 142 V4.png",
+          "sourcePath": "Haustypen/Sunshine/Sun 142/Sun 142 V4.png",
+          "mimeType": "image/webp",
+          "caption": "Hier wächst Zukunft",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        }
+      ]
+    },
+    {
+      "key": "sun143-v4",
+      "images": [
+        {
+          "id": "pascal_4030eb32870e900447304fb3",
+          "file": "sun143-v4/01-4030eb32870e.webp",
+          "sourceName": "SUN 143 V4 .png",
+          "sourcePath": "Haustypen/SUN 143 V4 .png",
+          "mimeType": "image/webp",
+          "caption": "Dein wundervolles Zuhause",
+          "isFloorplan": false,
+          "role": "cover",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_30abefd470281aa8da1c1e50",
+          "file": "sun143-v4/02-30abefd47028.webp",
+          "sourceName": "3122_BZ_Sunshine_143_SD_V2_PV_01.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 143/3122_BZ_Sunshine_143_SD_V2_PV_01.jpg",
+          "mimeType": "image/webp",
+          "caption": "Architektur zum Ankommen",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_5b466d70ac726beceb4bc21c",
+          "file": "sun143-v4/03-5b466d70ac72.webp",
+          "sourceName": "3880_LivingHaus_Sunshine_143_PD_V9_04.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 143/3880_LivingHaus_Sunshine_143_PD_V9_04.jpg",
+          "mimeType": "image/webp",
+          "caption": "Ein Zuhause voller Lieblingsplätze",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_1265d3fe7c3982c76d45c011",
+          "file": "sun143-v4/04-1265d3fe7c39.webp",
+          "sourceName": "BZ_Jubi_Sunshine_143_WD_SD_V6_02.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 143/BZ_Jubi_Sunshine_143_WD_SD_V6_02.jpg",
+          "mimeType": "image/webp",
+          "caption": "Freiraum für deine schönsten Pläne",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_f129838a41a088fb47729b26",
+          "file": "sun143-v4/05-f129838a41a0.webp",
+          "sourceName": "Sun 143 V3 mit Logo.png",
+          "sourcePath": "Haustypen/Sunshine/Sun 143/Sun 143 V3 mit Logo.png",
+          "mimeType": "image/webp",
+          "caption": "Wohngefühl, das jeden Tag begeistert",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_b89a8eb124d5a08bd1accb34",
+          "file": "sun143-v4/06-b89a8eb124d5.webp",
+          "sourceName": "SUN 143 V5.png",
+          "sourcePath": "Haustypen/Sunshine/Sun 143/SUN 143 V5.png",
+          "mimeType": "image/webp",
+          "caption": "So fühlt sich Zuhause an",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_7b946f10d34de0f9f16defe3",
+          "file": "sun143-v4/07-7b946f10d34d.webp",
+          "sourceName": "SUN 143 V8.png",
+          "sourcePath": "Haustypen/Sunshine/Sun 143/SUN 143 V8.png",
+          "mimeType": "image/webp",
+          "caption": "Dein neuer Lieblingsort",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_9ce783f1f8ae7786f943db8e",
+          "file": "sun143-v4/08-9ce783f1f8ae.webp",
+          "sourceName": "SUN 143 V9.png",
+          "sourcePath": "Haustypen/Sunshine/Sun 143/SUN 143 V9.png",
+          "mimeType": "image/webp",
+          "caption": "Mehr Raum für das gute Leben",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        }
+      ]
+    },
+    {
+      "key": "sun144-v4",
+      "images": [
+        {
+          "id": "pascal_18e5b0462fed4c0028f1f1ea",
+          "file": "sun144-v4/01-18e5b0462fed.webp",
+          "sourceName": "SUN 144 V4 Tag.png",
+          "sourcePath": "Haustypen/SUN 144 V4 Tag.png",
+          "mimeType": "image/webp",
+          "caption": "Dein wundervolles Zuhause",
+          "isFloorplan": false,
+          "role": "cover",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_fbdd4745424380eefaea67ea",
+          "file": "sun144-v4/02-fbdd47454243.webp",
+          "sourceName": "2879_BZ_Sunshine 144_V4_Abend_001.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 144/2879_BZ_Sunshine 144_V4_Abend_001.jpg",
+          "mimeType": "image/webp",
+          "caption": "Architektur zum Ankommen",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_3655ed16733842d596d856b5",
+          "file": "sun144-v4/03-3655ed167338.webp",
+          "sourceName": "3122_BZ_Sunshine_144_V4_PV_01.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 144/3122_BZ_Sunshine_144_V4_PV_01.jpg",
+          "mimeType": "image/webp",
+          "caption": "Ein Zuhause voller Lieblingsplätze",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_7daad0bee44273cfab36c528",
+          "file": "sun144-v4/04-7daad0bee442.webp",
+          "sourceName": "SUN 144 V4 Abend.png",
+          "sourcePath": "Haustypen/Sunshine/Sun 144/SUN 144 V4 Abend.png",
+          "mimeType": "image/webp",
+          "caption": "Freiraum für deine schönsten Pläne",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_777c30d3411d06b1a2ab1e96",
+          "file": "sun144-v4/05-777c30d3411d.webp",
+          "sourceName": "3122_BZ_Sunshine_144_V2_PV_01.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 144/3122_BZ_Sunshine_144_V2_PV_01.jpg",
+          "mimeType": "image/webp",
+          "caption": "Wohngefühl, das jeden Tag begeistert",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_0b330efec04a5088f5808eaf",
+          "file": "sun144-v4/06-0b330efec04a.webp",
+          "sourceName": "3122_BZ_Sunshine_144_V3_PV_01.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 144/3122_BZ_Sunshine_144_V3_PV_01.jpg",
+          "mimeType": "image/webp",
+          "caption": "So fühlt sich Zuhause an",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_cee37280921e8c14d005b7b5",
+          "file": "sun144-v4/07-cee37280921e.webp",
+          "sourceName": "3504_LivingHaus_Sunshine_144_V8_SD2__02.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 144/3504_LivingHaus_Sunshine_144_V8_SD2__02.jpg",
+          "mimeType": "image/webp",
+          "caption": "Dein neuer Lieblingsort",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_8c5ac13be5250d9deb70544d",
+          "file": "sun144-v4/08-8c5ac13be525.webp",
+          "sourceName": "BZ_Sunshine_144_V6_02.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 144/BZ_Sunshine_144_V6_02.jpg",
+          "mimeType": "image/webp",
+          "caption": "Mehr Raum für das gute Leben",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_06354e3b9f8e940ef34c4513",
+          "file": "sun144-v4/09-06354e3b9f8e.webp",
+          "sourceName": "SUN 144 V6.png",
+          "sourcePath": "Haustypen/Sunshine/Sun 144/SUN 144 V6.png",
+          "mimeType": "image/webp",
+          "caption": "Hier wächst Zukunft",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        }
+      ]
+    },
+    {
+      "key": "sun151-v8",
+      "images": [
+        {
+          "id": "pascal_5cd2c0113518d2e250da27b5",
+          "file": "sun151-v8/01-5cd2c0113518.webp",
+          "sourceName": "SUN 151 V8.png",
+          "sourcePath": "Haustypen/SUN 151 V8.png",
+          "mimeType": "image/webp",
+          "caption": "Dein wundervolles Zuhause",
+          "isFloorplan": false,
+          "role": "cover",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_70e60bdf1b6263b246e3f53d",
+          "file": "sun151-v8/02-70e60bdf1b62.webp",
+          "sourceName": "BZ_Solution_151_WD_V8_02.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 151/BZ_Solution_151_WD_V8_02.jpg",
+          "mimeType": "image/webp",
+          "caption": "Architektur zum Ankommen",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_9887d4fa546e05686745a704",
+          "file": "sun151-v8/03-9887d4fa546e.webp",
+          "sourceName": "BienZenker_Solution147_V3_04.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 151/BienZenker_Solution147_V3_04.jpg",
+          "mimeType": "image/webp",
+          "caption": "Ein Zuhause voller Lieblingsplätze",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_030535fcae882600116b2888",
+          "file": "sun151-v8/04-030535fcae88.webp",
+          "sourceName": "BienZenker_Solution147_V4_03.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 151/BienZenker_Solution147_V4_03.jpg",
+          "mimeType": "image/webp",
+          "caption": "Freiraum für deine schönsten Pläne",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_77055933377e129e5953b503",
+          "file": "sun151-v8/05-77055933377e.webp",
+          "sourceName": "BienZenker_Solution147_V5_03.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 151/BienZenker_Solution147_V5_03.jpg",
+          "mimeType": "image/webp",
+          "caption": "Wohngefühl, das jeden Tag begeistert",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_eb8b75454d2d35a29ee28342",
+          "file": "sun151-v8/06-eb8b75454d2d.webp",
+          "sourceName": "BienZenker_Solution147_V6_02.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 151/BienZenker_Solution147_V6_02.jpg",
+          "mimeType": "image/webp",
+          "caption": "So fühlt sich Zuhause an",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_f7de695f58e13251ce076f76",
+          "file": "sun151-v8/07-f7de695f58e1.webp",
+          "sourceName": "BZ_Solution_151_FD_V10_02.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 151/BZ_Solution_151_FD_V10_02.jpg",
+          "mimeType": "image/webp",
+          "caption": "Dein neuer Lieblingsort",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_d508157def05ca864a1f99c2",
+          "file": "sun151-v8/08-d508157def05.webp",
+          "sourceName": "BZ_Solution_151_WD_V9_03.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 151/BZ_Solution_151_WD_V9_03.jpg",
+          "mimeType": "image/webp",
+          "caption": "Mehr Raum für das gute Leben",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        }
+      ]
+    },
+    {
+      "key": "sun154-v3",
+      "images": [
+        {
+          "id": "pascal_1f62bdee19230e618b0d4a40",
+          "file": "sun154-v3/01-1f62bdee1923.webp",
+          "sourceName": "SUN 154 V3.png",
+          "sourcePath": "Haustypen/SUN 154 V3.png",
+          "mimeType": "image/webp",
+          "caption": "Dein wundervolles Zuhause",
+          "isFloorplan": false,
+          "role": "cover",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_0198108178d74267b276c769",
+          "file": "sun154-v3/02-0198108178d7.webp",
+          "sourceName": "V3.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 154/V3.jpg",
+          "mimeType": "image/webp",
+          "caption": "Architektur zum Ankommen",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_cd009cd43c904afa5881f7bd",
+          "file": "sun154-v3/03-cd009cd43c90.webp",
+          "sourceName": "SUN 154 V5.png",
+          "sourcePath": "Haustypen/Sunshine/Sun 154/SUN 154 V5.png",
+          "mimeType": "image/webp",
+          "caption": "Ein Zuhause voller Lieblingsplätze",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_0bdbc806322476422af41861",
+          "file": "sun154-v3/04-0bdbc8063224.webp",
+          "sourceName": "SUN 154 V7.png",
+          "sourcePath": "Haustypen/Sunshine/Sun 154/SUN 154 V7.png",
+          "mimeType": "image/webp",
+          "caption": "Freiraum für deine schönsten Pläne",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_cfe7de87b2ee840727469c45",
+          "file": "sun154-v3/05-cfe7de87b2ee.webp",
+          "sourceName": "V5.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 154/V5.jpg",
+          "mimeType": "image/webp",
+          "caption": "Wohngefühl, das jeden Tag begeistert",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_0326449238124396ec4a1174",
+          "file": "sun154-v3/06-032644923812.webp",
+          "sourceName": "V6.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 154/V6.jpg",
+          "mimeType": "image/webp",
+          "caption": "So fühlt sich Zuhause an",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_d1ff8c93be180868310562c8",
+          "file": "sun154-v3/07-d1ff8c93be18.webp",
+          "sourceName": "V7.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 154/V7.jpg",
+          "mimeType": "image/webp",
+          "caption": "Dein neuer Lieblingsort",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_aaf48b80e882788c82576bdb",
+          "file": "sun154-v3/08-aaf48b80e882.webp",
+          "sourceName": "V8.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 154/V8.jpg",
+          "mimeType": "image/webp",
+          "caption": "Mehr Raum für das gute Leben",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        }
+      ]
+    },
+    {
+      "key": "sun157-v2",
+      "images": [
+        {
+          "id": "pascal_cf81b9f2da710dfdfdf337fb",
+          "file": "sun157-v2/01-cf81b9f2da71.webp",
+          "sourceName": "SUN 157 V2.png",
+          "sourcePath": "Haustypen/SUN 157 V2.png",
+          "mimeType": "image/webp",
+          "caption": "Dein wundervolles Zuhause",
+          "isFloorplan": false,
+          "role": "cover",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_88afd760898a307149d3016b",
+          "file": "sun157-v2/02-88afd760898a.webp",
+          "sourceName": "3455_BZ_Livinghaus_Muha_Fellbach_Garten1_04(1).jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 157/3455_BZ_Livinghaus_Muha_Fellbach_Garten1_04(1).jpg",
+          "mimeType": "image/webp",
+          "caption": "Architektur zum Ankommen",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_3160c63c9ae773444be792f8",
+          "file": "sun157-v2/03-3160c63c9ae7.webp",
+          "sourceName": "SUN_157_SD2_V_MH_EG.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 157/SUN_157_SD2_V_MH_EG.jpg",
+          "mimeType": "image/webp",
+          "caption": "Dein Erdgeschoss",
+          "isFloorplan": true,
+          "role": "floorplan_ground",
+          "captionLocked": true
+        },
+        {
+          "id": "pascal_1c274c6f74dbfe338472915e",
+          "file": "sun157-v2/04-1c274c6f74db.webp",
+          "sourceName": "SUN_157_SD2_V_MH_OG.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 157/SUN_157_SD2_V_MH_OG.jpg",
+          "mimeType": "image/webp",
+          "caption": "Dein Obergeschoss",
+          "isFloorplan": true,
+          "role": "floorplan_upper",
+          "captionLocked": true
+        }
+      ]
+    },
+    {
+      "key": "sun164-v2",
+      "images": [
+        {
+          "id": "pascal_3f818526394d612eb14af474",
+          "file": "sun164-v2/01-3f818526394d.webp",
+          "sourceName": "SUN 164 V2.png",
+          "sourcePath": "Haustypen/SUN 164 V2.png",
+          "mimeType": "image/webp",
+          "caption": "Dein wundervolles Zuhause",
+          "isFloorplan": false,
+          "role": "cover",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_e1cc484fb3ef5b03c70ad910",
+          "file": "sun164-v2/02-e1cc484fb3ef.webp",
+          "sourceName": "3612_LivingHaus_Sunshine164_V2_SD_02.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 164/3612_LivingHaus_Sunshine164_V2_SD_02.jpg",
+          "mimeType": "image/webp",
+          "caption": "Architektur zum Ankommen",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_356724185bee12841af0a7d6",
+          "file": "sun164-v2/03-356724185bee.webp",
+          "sourceName": "3612_LivingHaus_Sunshine164_V3_SD_01.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 164/3612_LivingHaus_Sunshine164_V3_SD_01.jpg",
+          "mimeType": "image/webp",
+          "caption": "Ein Zuhause voller Lieblingsplätze",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_80179bd2bc14542c77401e66",
+          "file": "sun164-v2/04-80179bd2bc14.webp",
+          "sourceName": "3612_LivingHaus_Sunshine164_V5_WD_01.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 164/3612_LivingHaus_Sunshine164_V5_WD_01.jpg",
+          "mimeType": "image/webp",
+          "caption": "Freiraum für deine schönsten Pläne",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_2607e33b12b888f4f744636e",
+          "file": "sun164-v2/05-2607e33b12b8.webp",
+          "sourceName": "3612_LivingHaus_Sunshine164_V6_FD_02.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 164/3612_LivingHaus_Sunshine164_V6_FD_02.jpg",
+          "mimeType": "image/webp",
+          "caption": "Wohngefühl, das jeden Tag begeistert",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_def87572a4c721e4920382cd",
+          "file": "sun164-v2/06-def87572a4c7.webp",
+          "sourceName": "3632_LivingHaus _Sunshine164_001.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 164/3632_LivingHaus _Sunshine164_001.jpg",
+          "mimeType": "image/webp",
+          "caption": "So fühlt sich Zuhause an",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_796f84da2c3a786e2d5872b8",
+          "file": "sun164-v2/07-796f84da2c3a.webp",
+          "sourceName": "SUN 164 V4.png",
+          "sourcePath": "Haustypen/Sunshine/Sun 164/SUN 164 V4.png",
+          "mimeType": "image/webp",
+          "caption": "Dein neuer Lieblingsort",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_22a6e1a4546c4121490b0c6e",
+          "file": "sun164-v2/08-22a6e1a4546c.webp",
+          "sourceName": "Sun 164 V5.png",
+          "sourcePath": "Haustypen/Sunshine/Sun 164/Sun 164 V5.png",
+          "mimeType": "image/webp",
+          "caption": "Mehr Raum für das gute Leben",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_e4c48d7d221db18df2be2a3d",
+          "file": "sun164-v2/09-e4c48d7d221d.webp",
+          "sourceName": "Sun 164 V6.png",
+          "sourcePath": "Haustypen/Sunshine/Sun 164/Sun 164 V6.png",
+          "mimeType": "image/webp",
+          "caption": "Hier wächst Zukunft",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        }
+      ]
+    },
+    {
+      "key": "sun165-v2",
+      "images": [
+        {
+          "id": "pascal_427a0a914b6aaca66f03c963",
+          "file": "sun165-v2/01-427a0a914b6a.webp",
+          "sourceName": "Sun 165 V2.png",
+          "sourcePath": "Haustypen/Sun 165 V2.png",
+          "mimeType": "image/webp",
+          "caption": "Dein wundervolles Zuhause",
+          "isFloorplan": false,
+          "role": "cover",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_f81a1874a919d8c5aad87200",
+          "file": "sun165-v2/02-f81a1874a919.webp",
+          "sourceName": "3122_BZ_Sunshine_165_V2_PV_01.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 165/3122_BZ_Sunshine_165_V2_PV_01.jpg",
+          "mimeType": "image/webp",
+          "caption": "Architektur zum Ankommen",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_6538ae33060f12725bd72390",
+          "file": "sun165-v2/03-6538ae33060f.webp",
+          "sourceName": "Sun 165 V3 Schnee.png",
+          "sourcePath": "Haustypen/Sunshine/Sun 165 V3 Schnee.png",
+          "mimeType": "image/webp",
+          "caption": "Ein Zuhause voller Lieblingsplätze",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_43450dda3f6bcae1be674ed9",
+          "file": "sun165-v2/04-43450dda3f6b.webp",
+          "sourceName": "3122_BZ_Sunshine_165_SD_V3_PV_01.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 165/3122_BZ_Sunshine_165_SD_V3_PV_01.jpg",
+          "mimeType": "image/webp",
+          "caption": "Freiraum für deine schönsten Pläne",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_1df60cddc572fd68afcb8086",
+          "file": "sun165-v2/05-1df60cddc572.webp",
+          "sourceName": "3122_BZ_Sunshine_165_V5_PV_01.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 165/3122_BZ_Sunshine_165_V5_PV_01.jpg",
+          "mimeType": "image/webp",
+          "caption": "Wohngefühl, das jeden Tag begeistert",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_6f15742a9a7feb46e86c9c04",
+          "file": "sun165-v2/06-6f15742a9a7f.webp",
+          "sourceName": "3880_LivingHaus_Sunshine_165_V8_04-A3.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 165/3880_LivingHaus_Sunshine_165_V8_04-A3.jpg",
+          "mimeType": "image/webp",
+          "caption": "So fühlt sich Zuhause an",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_bdd121f07a606afdcb2aadc7",
+          "file": "sun165-v2/07-bdd121f07a60.webp",
+          "sourceName": "BZ_Muha_Ulm_Cam_3_04.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 165/BZ_Muha_Ulm_Cam_3_04.jpg",
+          "mimeType": "image/webp",
+          "caption": "Dein neuer Lieblingsort",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_4fc548af1cb7beb559c895d2",
+          "file": "sun165-v2/08-4fc548af1cb7.webp",
+          "sourceName": "BZ_Sunshine_165_V6_002.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 165/BZ_Sunshine_165_V6_002.jpg",
+          "mimeType": "image/webp",
+          "caption": "Mehr Raum für das gute Leben",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_0dd4a79afa2fce65d09ac433",
+          "file": "sun165-v2/09-0dd4a79afa2f.webp",
+          "sourceName": "BZ_Sunshine_165_V7_02.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 165/BZ_Sunshine_165_V7_02.jpg",
+          "mimeType": "image/webp",
+          "caption": "Hier wächst Zukunft",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_a3c5daeef2cb5e3dec35cff6",
+          "file": "sun165-v2/10-a3c5daeef2cb.webp",
+          "sourceName": "SUN  165 V8.png",
+          "sourcePath": "Haustypen/Sunshine/Sun 165/SUN  165 V8.png",
+          "mimeType": "image/webp",
+          "caption": "Ein Haus mit Wohlfühlfaktor",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_4abdf48b542761df45ef83b9",
+          "file": "sun165-v2/11-4abdf48b5427.webp",
+          "sourceName": "Sun 165 V3 - Herbst.png",
+          "sourcePath": "Haustypen/Sunshine/Sun 165/Sun 165 V3 - Herbst.png",
+          "mimeType": "image/webp",
+          "caption": "Platz für alles, was dir wichtig ist",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_289869c235f89ad356c7f2c5",
+          "file": "sun165-v2/12-289869c235f8.webp",
+          "sourceName": "SUN_165_V8_PD_EG.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 165/Grundriss/SUN_165_V8_PD_EG.jpg",
+          "mimeType": "image/webp",
+          "caption": "Dein Erdgeschoss",
+          "isFloorplan": true,
+          "role": "floorplan_ground",
+          "captionLocked": true
+        }
+      ]
+    },
+    {
+      "key": "sun167-v3",
+      "images": [
+        {
+          "id": "pascal_dd1dc672527045825f6b8d2d",
+          "file": "sun167-v3/01-dd1dc6725270.webp",
+          "sourceName": "SUN 167 V3.png",
+          "sourcePath": "Haustypen/SUN 167 V3.png",
+          "mimeType": "image/webp",
+          "caption": "Dein wundervolles Zuhause",
+          "isFloorplan": false,
+          "role": "cover",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_c52e1bcb9abc3b35e05a4356",
+          "file": "sun167-v3/02-c52e1bcb9abc.webp",
+          "sourceName": "3334_LivingHaus_Sunshine_167_V3_03__.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 167/3334_LivingHaus_Sunshine_167_V3_03__.jpg",
+          "mimeType": "image/webp",
+          "caption": "Architektur zum Ankommen",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_08b3f986230c9597630f1fd7",
+          "file": "sun167-v3/03-08b3f986230c.webp",
+          "sourceName": "3334_LivingHaus_Sunshine_167_SD_V4_02.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 167/3334_LivingHaus_Sunshine_167_SD_V4_02.jpg",
+          "mimeType": "image/webp",
+          "caption": "Ein Zuhause voller Lieblingsplätze",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_19d4f6f73ba80396a1e358b9",
+          "file": "sun167-v3/04-19d4f6f73ba8.webp",
+          "sourceName": "3334_LivingHaus_Sunshine_167_V2_02.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 167/3334_LivingHaus_Sunshine_167_V2_02.jpg",
+          "mimeType": "image/webp",
+          "caption": "Freiraum für deine schönsten Pläne",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_6fecbf72414ce79e415174a4",
+          "file": "sun167-v3/05-6fecbf72414c.webp",
+          "sourceName": "SUN 167 V5.png",
+          "sourcePath": "Haustypen/Sunshine/Sun 167/SUN 167 V5.png",
+          "mimeType": "image/webp",
+          "caption": "Wohngefühl, das jeden Tag begeistert",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_df8d048487bfc8300f3ed88f",
+          "file": "sun167-v3/06-df8d048487bf.webp",
+          "sourceName": "SUN 167 V6.png",
+          "sourcePath": "Haustypen/Sunshine/Sun 167/SUN 167 V6.png",
+          "mimeType": "image/webp",
+          "caption": "So fühlt sich Zuhause an",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        }
+      ]
+    },
+    {
+      "key": "sun168-v2",
+      "images": [
+        {
+          "id": "pascal_bd9d71a5168156b9b24cbd39",
+          "file": "sun168-v2/01-bd9d71a51681.webp",
+          "sourceName": "SUN 168 V2.png",
+          "sourcePath": "Haustypen/SUN 168 V2.png",
+          "mimeType": "image/webp",
+          "caption": "Dein wundervolles Zuhause",
+          "isFloorplan": false,
+          "role": "cover",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_0476ef57d43a954c0f9df478",
+          "file": "sun168-v2/02-0476ef57d43a.webp",
+          "sourceName": "3504_LivingHaus_Sunshine_168_V8_SD2_02.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 168/3504_LivingHaus_Sunshine_168_V8_SD2_02.jpg",
+          "mimeType": "image/webp",
+          "caption": "Architektur zum Ankommen",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_a0d02f206ea272b482c66439",
+          "file": "sun168-v2/03-a0d02f206ea2.webp",
+          "sourceName": "SUN_168_SD2_V2_EG.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 168/SUN_168_SD2_V2_EG.jpg",
+          "mimeType": "image/webp",
+          "caption": "Dein Erdgeschoss",
+          "isFloorplan": true,
+          "role": "floorplan_ground",
+          "captionLocked": true
+        },
+        {
+          "id": "pascal_99340ee81139f313e31d2bfd",
+          "file": "sun168-v2/04-99340ee81139.webp",
+          "sourceName": "SUN_168_SD2_V2_OG.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 168/SUN_168_SD2_V2_OG.jpg",
+          "mimeType": "image/webp",
+          "caption": "Dein Obergeschoss",
+          "isFloorplan": true,
+          "role": "floorplan_upper",
+          "captionLocked": true
+        }
+      ]
+    },
+    {
+      "key": "sun210-v2",
+      "images": [
+        {
+          "id": "pascal_2f824ba72b01fade61787b70",
+          "file": "sun210-v2/01-2f824ba72b01.webp",
+          "sourceName": "SUN 210 V2.png",
+          "sourcePath": "Haustypen/SUN 210 V2.png",
+          "mimeType": "image/webp",
+          "caption": "Dein wundervolles Zuhause",
+          "isFloorplan": false,
+          "role": "cover",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_092e56f385d984d3d6466da5",
+          "file": "sun210-v2/02-092e56f385d9.webp",
+          "sourceName": "SUN 210 V4.png",
+          "sourcePath": "Haustypen/Sunshine/Sun 210/SUN 210 V4.png",
+          "mimeType": "image/webp",
+          "caption": "Architektur zum Ankommen",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_05e61833d160ff294bf173e2",
+          "file": "sun210-v2/03-05e61833d160.webp",
+          "sourceName": "SUN 210 V6.png",
+          "sourcePath": "Haustypen/Sunshine/Sun 210/SUN 210 V6.png",
+          "mimeType": "image/webp",
+          "caption": "Ein Zuhause voller Lieblingsplätze",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_306c41a608e441bea5b33ae3",
+          "file": "sun210-v2/04-architekturdetail.webp",
+          "sourceName": "SUN 210 V2.png – Architekturdetail",
+          "sourcePath": "Haustypen/SUN 210 V2.png#architekturdetail-4",
+          "mimeType": "image/webp",
+          "caption": "Wohngefühl, das jeden Tag begeistert",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        }
+      ]
+    },
+    {
+      "key": "sol101-v2",
+      "images": [
+        {
+          "id": "pascal_7ac5cbd28472c03d6a854628",
+          "file": "sol101-v2/01-7ac5cbd28472.webp",
+          "sourceName": "SOL 101 V2.png",
+          "sourcePath": "Haustypen/SOL 101 V2.png",
+          "mimeType": "image/webp",
+          "caption": "Dein wundervolles Zuhause",
+          "isFloorplan": false,
+          "role": "cover",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_ee12acf954feea24a132ce76",
+          "file": "sol101-v2/02-ee12acf954fe.webp",
+          "sourceName": "3376_BZ_LivingHaus_Bungalows_SOL_101_B_V2_SD_03.jpg",
+          "sourcePath": "Haustypen/Solution/Sol101/3376_BZ_LivingHaus_Bungalows_SOL_101_B_V2_SD_03.jpg",
+          "mimeType": "image/webp",
+          "caption": "Architektur zum Ankommen",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_52ae50ce4dbfaa2a952e637a",
+          "file": "sol101-v2/03-52ae50ce4dbf.webp",
+          "sourceName": "3376_BZ_LivingHaus_Bungalows_SOL_101_B_V3_WD_01.jpg",
+          "sourcePath": "Haustypen/Solution/Sol101/3376_BZ_LivingHaus_Bungalows_SOL_101_B_V3_WD_01.jpg",
+          "mimeType": "image/webp",
+          "caption": "Ein Zuhause voller Lieblingsplätze",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_fc9cf4792cf66a5dfd00ff47",
+          "file": "sol101-v2/04-fc9cf4792cf6.webp",
+          "sourceName": "3376_BZ_LivingHaus_Bungalows_SOL_101_B_V4_FD_02.jpg",
+          "sourcePath": "Haustypen/Solution/Sol101/3376_BZ_LivingHaus_Bungalows_SOL_101_B_V4_FD_02.jpg",
+          "mimeType": "image/webp",
+          "caption": "Freiraum für deine schönsten Pläne",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_a1bc69d3093400eb577875f3",
+          "file": "sol101-v2/05-a1bc69d30934.webp",
+          "sourceName": "SOL 101 V3.png",
+          "sourcePath": "Haustypen/Solution/Sol101/SOL 101 V3.png",
+          "mimeType": "image/webp",
+          "caption": "Wohngefühl, das jeden Tag begeistert",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_ac9755ff122a3e2719c20d3e",
+          "file": "sol101-v2/06-ac9755ff122a.webp",
+          "sourceName": "SOL_101_V2_KAT_EG.jpg",
+          "sourcePath": "Haustypen/Solution/Sol101/Grundrisse/SOL_101_V2_KAT_EG.jpg",
+          "mimeType": "image/webp",
+          "caption": "Dein Erdgeschoss",
+          "isFloorplan": true,
+          "role": "floorplan_ground",
+          "captionLocked": true
+        },
+        {
+          "id": "pascal_20c1132801d5673feb39d2ed",
+          "file": "sol101-v2/07-20c1132801d5.webp",
+          "sourceName": "SOL_101_V3_KAT_EG.jpg",
+          "sourcePath": "Haustypen/Solution/Sol101/Grundrisse/SOL_101_V3_KAT_EG.jpg",
+          "mimeType": "image/webp",
+          "caption": "Dein Erdgeschoss",
+          "isFloorplan": true,
+          "role": "floorplan_ground",
+          "captionLocked": true
+        },
+        {
+          "id": "pascal_b75a1162ed3bdd707af57d04",
+          "file": "sol101-v2/08-b75a1162ed3b.webp",
+          "sourceName": "SOL_101_V4_KAT_EG.jpg",
+          "sourcePath": "Haustypen/Solution/Sol101/Grundrisse/SOL_101_V4_KAT_EG.jpg",
+          "mimeType": "image/webp",
+          "caption": "Dein Erdgeschoss",
+          "isFloorplan": true,
+          "role": "floorplan_ground",
+          "captionLocked": true
+        }
+      ]
+    },
+    {
+      "key": "sol107-v2",
+      "images": [
+        {
+          "id": "pascal_18d19f383ae9870ab094eca9",
+          "file": "sol107-v2/01-18d19f383ae9.webp",
+          "sourceName": "Sol 107 SD.png",
+          "sourcePath": "Haustypen/Sol 107 SD.png",
+          "mimeType": "image/webp",
+          "caption": "Dein wundervolles Zuhause",
+          "isFloorplan": false,
+          "role": "cover",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_552d15e8bedc4409024afed7",
+          "file": "sol107-v2/02-552d15e8bedc.webp",
+          "sourceName": "3901_LivingHaus_Bungalows_Sol107_B_V2_SD_01.jpg",
+          "sourcePath": "Haustypen/Solution/Sol107/3901_LivingHaus_Bungalows_Sol107_B_V2_SD_01.jpg",
+          "mimeType": "image/webp",
+          "caption": "Architektur zum Ankommen",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_8c7381e4b73d16ab3f928939",
+          "file": "sol107-v2/03-8c7381e4b73d.webp",
+          "sourceName": "3901_LivingHaus_Bungalows_Sol107_B_V3_WD_01.jpg",
+          "sourcePath": "Haustypen/Solution/Sol107/3901_LivingHaus_Bungalows_Sol107_B_V3_WD_01.jpg",
+          "mimeType": "image/webp",
+          "caption": "Ein Zuhause voller Lieblingsplätze",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_3cfa1eaea6933cdbb14e6ee8",
+          "file": "sol107-v2/04-3cfa1eaea693.webp",
+          "sourceName": "3901_LivingHaus_Bungalows_Sol107_B_V4_FD_02.jpg",
+          "sourcePath": "Haustypen/Solution/Sol107/3901_LivingHaus_Bungalows_Sol107_B_V4_FD_02.jpg",
+          "mimeType": "image/webp",
+          "caption": "Freiraum für deine schönsten Pläne",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_bf95f0399776f116aab36648",
+          "file": "sol107-v2/05-bf95f0399776.webp",
+          "sourceName": "Sol 107 V3.png",
+          "sourcePath": "Haustypen/Solution/Sol107/Sol 107 V3.png",
+          "mimeType": "image/webp",
+          "caption": "Wohngefühl, das jeden Tag begeistert",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_3f6bbc13404474a9a3deb746",
+          "file": "sol107-v2/06-3f6bbc134044.webp",
+          "sourceName": "SOL_107_V2_KAT_TYP_SD_EG1-BP.jpg",
+          "sourcePath": "Haustypen/Solution/Sol107/Grundrisse/SOL_107_V2_KAT_TYP_SD_EG1-BP.jpg",
+          "mimeType": "image/webp",
+          "caption": "Dein Erdgeschoss",
+          "isFloorplan": true,
+          "role": "floorplan_ground",
+          "captionLocked": true
+        },
+        {
+          "id": "pascal_bfb9ab490fd76748296aec7f",
+          "file": "sol107-v2/07-bfb9ab490fd7.webp",
+          "sourceName": "SOL_107_V3_KAT_TYP_WD_EG1-BP.jpg",
+          "sourcePath": "Haustypen/Solution/Sol107/Grundrisse/SOL_107_V3_KAT_TYP_WD_EG1-BP.jpg",
+          "mimeType": "image/webp",
+          "caption": "Dein Erdgeschoss",
+          "isFloorplan": true,
+          "role": "floorplan_ground",
+          "captionLocked": true
+        },
+        {
+          "id": "pascal_46ab95da184d67a1f4df2f08",
+          "file": "sol107-v2/08-46ab95da184d.webp",
+          "sourceName": "SOL_107_V4_KAT_TYP_FD_EG1-BP.jpg",
+          "sourcePath": "Haustypen/Solution/Sol107/Grundrisse/SOL_107_V4_KAT_TYP_FD_EG1-BP.jpg",
+          "mimeType": "image/webp",
+          "caption": "Dein Erdgeschoss",
+          "isFloorplan": true,
+          "role": "floorplan_ground",
+          "captionLocked": true
+        }
+      ]
+    },
+    {
+      "key": "sol110-v2",
+      "images": [
+        {
+          "id": "pascal_fef331ce1069e67150e398ee",
+          "file": "sol110-v2/01-fef331ce1069.webp",
+          "sourceName": "SOL 110 V2.png",
+          "sourcePath": "Haustypen/SOL 110 V2.png",
+          "mimeType": "image/webp",
+          "caption": "Dein wundervolles Zuhause",
+          "isFloorplan": false,
+          "role": "cover",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_166e1f9ae239b5915635277c",
+          "file": "sol110-v2/02-166e1f9ae239.webp",
+          "sourceName": "3376_BZ_LivingHaus_Bungalows_SOL_110_B_V2_SD_02.jpg",
+          "sourcePath": "Haustypen/Solution/Sol110/3376_BZ_LivingHaus_Bungalows_SOL_110_B_V2_SD_02.jpg",
+          "mimeType": "image/webp",
+          "caption": "Architektur zum Ankommen",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_0c1ab4e3113f732e159bad0f",
+          "file": "sol110-v2/03-0c1ab4e3113f.webp",
+          "sourceName": "3376_BZ_LivingHaus_Bungalows_SOL_110_B_V3_WD_01.jpg",
+          "sourcePath": "Haustypen/Solution/Sol110/3376_BZ_LivingHaus_Bungalows_SOL_110_B_V3_WD_01.jpg",
+          "mimeType": "image/webp",
+          "caption": "Ein Zuhause voller Lieblingsplätze",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_caf33f9677f075237a707d49",
+          "file": "sol110-v2/04-caf33f9677f0.webp",
+          "sourceName": "3376_BZ_LivingHaus_Bungalows_SOL_110_B_V4_FD_02.jpg",
+          "sourcePath": "Haustypen/Solution/Sol110/3376_BZ_LivingHaus_Bungalows_SOL_110_B_V4_FD_02.jpg",
+          "mimeType": "image/webp",
+          "caption": "Freiraum für deine schönsten Pläne",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_7fb7967a7fb4058ae4dc964e",
+          "file": "sol110-v2/05-7fb7967a7fb4.webp",
+          "sourceName": "SOL 110 V3.png",
+          "sourcePath": "Haustypen/Solution/Sol110/SOL 110 V3.png",
+          "mimeType": "image/webp",
+          "caption": "Wohngefühl, das jeden Tag begeistert",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_334704dd7c4f854daa292a97",
+          "file": "sol110-v2/06-334704dd7c4f.webp",
+          "sourceName": "SOL 110 V4.png",
+          "sourcePath": "Haustypen/Solution/Sol110/SOL 110 V4.png",
+          "mimeType": "image/webp",
+          "caption": "So fühlt sich Zuhause an",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_327b7c72f0e57fbeb92a9e9e",
+          "file": "sol110-v2/07-327b7c72f0e5.webp",
+          "sourceName": "SOL_110_V2_KAT_EG.jpg",
+          "sourcePath": "Haustypen/Solution/Sol110/Grundrisse/SOL_110_V2_KAT_EG.jpg",
+          "mimeType": "image/webp",
+          "caption": "Dein Erdgeschoss",
+          "isFloorplan": true,
+          "role": "floorplan_ground",
+          "captionLocked": true
+        },
+        {
+          "id": "pascal_bece08ce9efd8e95e545b8f7",
+          "file": "sol110-v2/08-bece08ce9efd.webp",
+          "sourceName": "SOL_110_V3_KAT_EG.jpg",
+          "sourcePath": "Haustypen/Solution/Sol110/Grundrisse/SOL_110_V3_KAT_EG.jpg",
+          "mimeType": "image/webp",
+          "caption": "Dein Erdgeschoss",
+          "isFloorplan": true,
+          "role": "floorplan_ground",
+          "captionLocked": true
+        },
+        {
+          "id": "pascal_c3aa560c0ae3c9ac020c29db",
+          "file": "sol110-v2/09-c3aa560c0ae3.webp",
+          "sourceName": "SOL_110_V4_KAT_EG_M1-75.jpg",
+          "sourcePath": "Haustypen/Solution/Sol110/Grundrisse/SOL_110_V4_KAT_EG_M1-75.jpg",
+          "mimeType": "image/webp",
+          "caption": "Dein Erdgeschoss",
+          "isFloorplan": true,
+          "role": "floorplan_ground",
+          "captionLocked": true
+        }
+      ]
+    },
+    {
+      "key": "sun113-v6",
+      "images": [
+        {
+          "id": "pascal_c1b730eec911586c86075c52",
+          "file": "sun113-v6/01-c1b730eec911.webp",
+          "sourceName": "SUN 113 V6.png",
+          "sourcePath": "Haustypen/SUN 113 V6.png",
+          "mimeType": "image/webp",
+          "caption": "Dein wundervolles Zuhause",
+          "isFloorplan": false,
+          "role": "cover",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_86face9264fadead9d76435e",
+          "file": "sun113-v6/02-86face9264fa.webp",
+          "sourceName": "BZ_KoGue_V6_03.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 113/BZ_KoGue_V6_03.jpg",
+          "mimeType": "image/webp",
+          "caption": "Architektur zum Ankommen",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_65fb3bc86edcd8461c33f997",
+          "file": "sun113-v6/03-65fb3bc86edc.webp",
+          "sourceName": "BZ_KoGue_V4_02.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 113/BZ_KoGue_V4_02.jpg",
+          "mimeType": "image/webp",
+          "caption": "Ein Zuhause voller Lieblingsplätze",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_d34e2bde8dfdc1d00cecd525",
+          "file": "sun113-v6/04-d34e2bde8dfd.webp",
+          "sourceName": "BZ_Solution_106_WD_V8_03.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 113/BZ_Solution_106_WD_V8_03.jpg",
+          "mimeType": "image/webp",
+          "caption": "Freiraum für deine schönsten Pläne",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_8369cfbc710575db85a254de",
+          "file": "sun113-v6/05-8369cfbc7105.webp",
+          "sourceName": "BZ_Solution_106_WD_V9_02.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 113/BZ_Solution_106_WD_V9_02.jpg",
+          "mimeType": "image/webp",
+          "caption": "Wohngefühl, das jeden Tag begeistert",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_77e48fb37c36e8e09f3f5795",
+          "file": "sun113-v6/06-77e48fb37c36.webp",
+          "sourceName": "BZ_Solution_117_V5-xl-Aenderung_01.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 113/BZ_Solution_117_V5-xl-Aenderung_01.jpg",
+          "mimeType": "image/webp",
+          "caption": "So fühlt sich Zuhause an",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_668796a3e1ab653f4b4b6573",
+          "file": "sun113-v6/07-668796a3e1ab.webp",
+          "sourceName": "BZ_Solution_124_FD_V10_02.jpg",
+          "sourcePath": "Haustypen/Sunshine/Sun 113/BZ_Solution_124_FD_V10_02.jpg",
+          "mimeType": "image/webp",
+          "caption": "Dein neuer Lieblingsort",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_b292d9aeb1eb5d81598fb9d5",
+          "file": "sun113-v6/08-b292d9aeb1eb.webp",
+          "sourceName": "SUN 113 V1.png",
+          "sourcePath": "Haustypen/Sunshine/Sun 113/SUN 113 V1.png",
+          "mimeType": "image/webp",
+          "caption": "Mehr Raum für das gute Leben",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_1063a6434a1d4a84fec15fd2",
+          "file": "sun113-v6/09-1063a6434a1d.webp",
+          "sourceName": "SUN 113 V8.png",
+          "sourcePath": "Haustypen/Sunshine/Sun 113/SUN 113 V8.png",
+          "mimeType": "image/webp",
+          "caption": "Hier wächst Zukunft",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        },
+        {
+          "id": "pascal_efd5ea9d151057ceb1a05257",
+          "file": "sun113-v6/10-efd5ea9d1510.webp",
+          "sourceName": "SUN 113 V9.png",
+          "sourcePath": "Haustypen/Sunshine/Sun 113/SUN 113 V9.png",
+          "mimeType": "image/webp",
+          "caption": "Ein Haus mit Wohlfühlfaktor",
+          "isFloorplan": false,
+          "role": "other",
+          "captionLocked": false
+        }
+      ]
+    }
+  ]
+}

@@ -553,9 +553,10 @@ export default function InseratStudio() {
   const [totalSyncStatus, setTotalSyncStatus] = useState("");
   const totalSyncStopRequested = useRef(false);
 
-  useEffect(() => {
+  const selectActiveHouse = (houseId: string) => {
     setSelectedMediaItems([]);
-  }, [activeHouseId]);
+    setActiveHouseId(houseId);
+  };
 
   useEffect(() => {
     let releaseLock: (() => void) | undefined;
@@ -620,7 +621,7 @@ export default function InseratStudio() {
           ? loaded
           : { ...loaded, projects: [newProject("fabian")] };
         setState(next);
-        setActiveHouseId(next.houses[0]?.id ?? "");
+        selectActiveHouse(next.houses[0]?.id ?? "");
         setActiveProjectId(next.projects[0]?.id ?? "");
         setActiveOwner(projectOwner(next.projects[0]));
         setTotalSyncScope(
@@ -750,8 +751,9 @@ export default function InseratStudio() {
     return () => window.clearTimeout(timer);
   }, [helperOnline, isPrimaryTab, ready, state]);
 
+  const activeHouses = state.houses.filter((house) => house.archived !== true);
   const activeHouse =
-    state.houses.find((house) => house.id === activeHouseId) ?? state.houses[0];
+    activeHouses.find((house) => house.id === activeHouseId) ?? activeHouses[0];
   const activeHousePriceMatch = resolveHousePrice([
     activeHouse.name,
     ...activeHouse.images.map((image) => image.name),
@@ -763,8 +765,12 @@ export default function InseratStudio() {
     ownerProjects.find((project) => project.id === activeProjectId) ??
     ownerProjects[0];
 
-  const selectedHouses = state.houses.filter((house) =>
-    activeProject?.selectedHouseIds.includes(house.id),
+  const activeHouseIds = new Set(activeHouses.map((house) => house.id));
+  const activeSelectedHouseIds = activeProject?.selectedHouseIds.filter(
+    (houseId) => activeHouseIds.has(houseId),
+  ) ?? [];
+  const selectedHouses = activeHouses.filter((house) =>
+    activeSelectedHouseIds.includes(house.id),
   );
   const resumableTotalSync = totalSyncCanResume(state.totalSyncRun);
   const totalSyncEffectiveScope = resumableTotalSync && state.totalSyncRun
@@ -773,7 +779,7 @@ export default function InseratStudio() {
   const totalSyncScopedProjects = projectsInTotalSyncScope(state.projects, totalSyncEffectiveScope);
   const totalSyncReadyProjects = totalSyncScopedProjects.filter(projectIsReadyForTotalSync);
   const totalSyncSkippedProjects = totalSyncScopedProjects.length - totalSyncReadyProjects.length;
-  const totalSyncEligibleHouses = state.houses.filter((house) => {
+  const totalSyncEligibleHouses = activeHouses.filter((house) => {
     const imageCount = house.images.length;
     return imageCount >= MIN_HOUSE_IMAGES && imageCount <= MAX_HOUSE_IMAGES;
   });
@@ -781,7 +787,7 @@ export default function InseratStudio() {
 
   const saveHousesNow = async () => {
     const savedAt = new Date().toISOString();
-    const imageCount = state.houses.reduce((sum, house) => sum + house.images.length, 0)
+    const imageCount = activeHouses.reduce((sum, house) => sum + house.images.length, 0)
       + promotionPool(state).length;
     setSavingHouses(true);
     try {
@@ -789,10 +795,10 @@ export default function InseratStudio() {
       if (helperOnline) {
         await queueWindowsCatalogSnapshot(state, savedAt);
         setSaveLabel("Browser + Gerätesicherung aktuell");
-        setNotice(`${state.houses.length} Haustypen mit ${imageCount} Bildern wurden sicher gespeichert.`);
+        setNotice(`${activeHouses.length} Haustypen mit ${imageCount} Bildern wurden sicher gespeichert.`);
       } else {
         setSaveLabel("Lokal im Browser gespeichert");
-        setNotice(`${state.houses.length} Haustypen mit ${imageCount} Bildern wurden im Browser gespeichert. Die Gerätesicherung wird ergänzt, sobald der lokale Helfer erreichbar ist.`);
+        setNotice(`${activeHouses.length} Haustypen mit ${imageCount} Bildern wurden im Browser gespeichert. Die Gerätesicherung wird ergänzt, sobald der lokale Helfer erreichbar ist.`);
       }
     } catch (error) {
       setSaveLabel("Speichern fehlgeschlagen");
@@ -845,17 +851,17 @@ export default function InseratStudio() {
   };
 
   const addHouse = () => {
-    if (state.houses.length >= MAX_HOUSE_TEMPLATES) {
+    if (activeHouses.length >= MAX_HOUSE_TEMPLATES) {
       setNotice(`Es sind bereits ${MAX_HOUSE_TEMPLATES} Haustypen angelegt.`);
       return;
     }
-    const house = newHouse(state.houses.length + 1);
+    const house = newHouse(activeHouses.length + 1);
     setState((current) => ({ ...current, houses: [...current.houses, house] }));
-    setActiveHouseId(house.id);
+    selectActiveHouse(house.id);
   };
 
   const removeHouse = () => {
-    if (!activeHouse || state.houses.length === 1) return;
+    if (!activeHouse || activeHouses.length === 1) return;
     if (!window.confirm(`Haustyp „${activeHouse.name}“ wirklich lokal löschen?`)) return;
     const houses = state.houses.filter((house) => house.id !== activeHouse.id);
     setState((current) => ({
@@ -876,7 +882,7 @@ export default function InseratStudio() {
         ),
       })),
     }));
-    setActiveHouseId(houses[0]?.id ?? "");
+    selectActiveHouse(houses.find((house) => house.archived !== true)?.id ?? "");
   };
 
   const replaceHouseImageCaptions = (houseId: string, captionById: Map<string, string>) => {
@@ -964,7 +970,7 @@ export default function InseratStudio() {
       setNotice("Bitte zuerst einen gültigen OpenAI API-Schlüssel einfügen und über „Zugangsdaten prüfen & speichern“ bestätigen.");
       return;
     }
-    const housesWithImages = state.houses
+    const housesWithImages = activeHouses
       .map((house) => ({ ...house, images: house.images.filter((image) => !image.captionLocked) }))
       .filter((house) => house.images.length > 0);
     const totalImages = housesWithImages.reduce((sum, house) => sum + house.images.length, 0);
@@ -1285,12 +1291,20 @@ export default function InseratStudio() {
         promotionImage: null,
         promotionImageEnabled: false,
         projects: current.projects.map((project) => {
+          const currentActiveHouseIds = new Set(
+            current.houses
+              .filter((house) => house.archived !== true)
+              .map((house) => house.id),
+          );
+          const selectedHouseIds = project.selectedHouseIds.filter(
+            (houseId) => currentActiveHouseIds.has(houseId),
+          );
           const promotionImageCount = Math.min(
             projectPromotionCount(project),
             promotionImages.length,
           );
           const promotionAssignments = reconcilePromotionAssignments(
-            project.selectedHouseIds,
+            selectedHouseIds,
             promotionImageIds,
             promotionImageCount,
             project.promotionAssignments,
@@ -1514,16 +1528,20 @@ export default function InseratStudio() {
 
   const toggleHouse = (houseId: string) => {
     if (!activeProject) return;
-    const selected = activeProject.selectedHouseIds.includes(houseId);
-    if (!selected && activeProject.selectedHouseIds.length >= 4) {
+    const selected = activeSelectedHouseIds.includes(houseId);
+    if (!selected && activeSelectedHouseIds.length >= 4) {
       setNotice("Pro Adresse können maximal vier Haustypen gewählt werden.");
       return;
     }
-    const selectedHouseIds = selected
-      ? activeProject.selectedHouseIds.filter((id) => id !== houseId)
-      : [...activeProject.selectedHouseIds, houseId];
+    const archivedSelectedHouseIds = activeProject.selectedHouseIds.filter(
+      (id) => !activeHouseIds.has(id),
+    );
+    const nextActiveHouseIds = selected
+      ? activeSelectedHouseIds.filter((id) => id !== houseId)
+      : [...activeSelectedHouseIds, houseId];
+    const selectedHouseIds = [...archivedSelectedHouseIds, ...nextActiveHouseIds];
     const promotionAssignments = reconcilePromotionAssignments(
-      selectedHouseIds,
+      nextActiveHouseIds,
       promotionPool(state).map((image) => image.id),
       projectPromotionCount(activeProject),
       activeProject.promotionAssignments,
@@ -1547,7 +1565,7 @@ export default function InseratStudio() {
       Math.min(MAX_PROMOTED_LISTINGS, requestedCount, promotionPool(state).length),
     );
     const promotionAssignments = reconcilePromotionAssignments(
-      activeProject.selectedHouseIds,
+      activeSelectedHouseIds,
       promotionPool(state).map((image) => image.id),
       promotionImageCount,
       activeProject.promotionAssignments,
@@ -1565,7 +1583,7 @@ export default function InseratStudio() {
   const rerollProjectPromotions = () => {
     if (!activeProject) return;
     const promotionAssignments = randomPromotionAssignments(
-      activeProject.selectedHouseIds,
+      activeSelectedHouseIds,
       promotionPool(state).map((image) => image.id),
       projectPromotionCount(activeProject),
     );
@@ -2439,7 +2457,7 @@ export default function InseratStudio() {
           ? normalized
           : { ...normalized, projects: [newProject("fabian")] };
         setState(next);
-        setActiveHouseId(next.houses[0]?.id ?? "");
+        selectActiveHouse(next.houses[0]?.id ?? "");
         setActiveProjectId(next.projects[0]?.id ?? "");
         setActiveOwner(projectOwner(next.projects[0]));
         setTotalSyncScope(
@@ -2503,8 +2521,8 @@ export default function InseratStudio() {
           </p>
         </div>
         <div className="workflow-summary">
-          <div><b>{state.houses.length}</b><span>von {MAX_HOUSE_TEMPLATES} Haustypen</span></div>
-          <div><b>{activeProject.selectedHouseIds.length}</b><span>ausgewählt</span></div>
+          <div><b>{activeHouses.length}</b><span>von {MAX_HOUSE_TEMPLATES} Haustypen</span></div>
+          <div><b>{activeSelectedHouseIds.length}</b><span>ausgewählt</span></div>
           <div><b>{activeProject.listings.length}</b><span>Entwürfe</span></div>
         </div>
       </section>
@@ -2603,11 +2621,11 @@ export default function InseratStudio() {
               <button className="icon-button" onClick={addHouse} aria-label="Haustyp hinzufügen">+</button>
             </div>
             <div className="house-list">
-              {state.houses.map((house, index) => (
+              {activeHouses.map((house, index) => (
                 <button
                   key={house.id}
                   className={house.id === activeHouse.id ? "house-row active" : "house-row"}
-                  onClick={() => setActiveHouseId(house.id)}
+                  onClick={() => selectActiveHouse(house.id)}
                 >
                   <span>{String(index + 1).padStart(2, "0")}</span>
                   <div><strong>{house.name}</strong><small>{house.livingArea} m² · {house.images.length}/{MAX_HOUSE_IMAGES} Bilder · mindestens {MIN_HOUSE_IMAGES}</small></div>
@@ -2708,7 +2726,7 @@ export default function InseratStudio() {
                   </button>
                   <button
                     className="secondary"
-                    disabled={replacingAllImageCaptions || captioningImageIds.length > 0 || !state.houses.some((house) => house.images.length > 0)}
+                    disabled={replacingAllImageCaptions || captioningImageIds.length > 0 || !activeHouses.some((house) => house.images.length > 0)}
                     onClick={replaceAllExistingImageCaptions}
                   >
                     {replacingAllImageCaptions ? "Vorhandene Bildtexte werden erneuert …" : "Alle vorhandenen Bildtexte erneuern"}
@@ -3019,10 +3037,10 @@ export default function InseratStudio() {
             <div className="selection-section">
               <div className="section-heading compact">
                 <div><span className="eyebrow">Maximal vier auswählen</span><h3>Welche Häuser passen zu dieser Adresse?</h3></div>
-                <b>{activeProject.selectedHouseIds.length}/4</b>
+                <b>{activeSelectedHouseIds.length}/4</b>
               </div>
               <div className="selection-grid">
-                {state.houses.map((house) => {
+                {activeHouses.map((house) => {
                   const selected = activeProject.selectedHouseIds.includes(house.id);
                   const displayImage = house.images[0];
                   return (
@@ -3061,7 +3079,7 @@ export default function InseratStudio() {
                 </label>
                 <button
                   className="secondary"
-                  disabled={!projectPromotionCount(activeProject) || !activeProject.selectedHouseIds.length}
+                  disabled={!projectPromotionCount(activeProject) || !activeSelectedHouseIds.length}
                   onClick={rerollProjectPromotions}
                 >
                   Neu auslosen

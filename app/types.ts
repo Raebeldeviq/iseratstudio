@@ -30,6 +30,7 @@ export type HouseImage = {
 
 export type HouseTemplate = {
   id: string;
+  archived?: boolean;
   name: string;
   houseType: string;
   livingArea: number;
