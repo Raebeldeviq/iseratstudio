@@ -5,11 +5,25 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  BUNDLED_INTERIOR_LIBRARY_ROOT,
+  BUNDLED_MEDIA_LIBRARY_ROOT,
   clearMediaLibraryCache,
   getMediaLibraryItem,
   queryMediaLibrary,
   recommendedMediaSequence,
 } from "../media-library.mjs";
+
+test("ships the complete integrated image library", async () => {
+  const library = await queryMediaLibrary({
+    root: BUNDLED_MEDIA_LIBRARY_ROOT,
+    interiorRoot: BUNDLED_INTERIOR_LIBRARY_ROOT,
+    pageSize: 1,
+  });
+  assert.equal(library.available, true);
+  assert.equal(library.libraryTotal, 665);
+  assert.ok(library.groups.some((group) => group.name === "Inneneinrichtung"));
+  assert.ok(library.groups.some((group) => group.name === "Haustypen · Übersicht"));
+});
 
 test("indexes, classifies and filters the labeled media library", async (context) => {
   const root = await mkdtemp(join(tmpdir(), "fpi-media-library-"));

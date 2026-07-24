@@ -73,6 +73,11 @@ function validMediaSignature(id, suppliedSignature) {
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
+function isGitLfsPointer(data) {
+  return data.length < 1024
+    && data.subarray(0, 100).toString("utf8").startsWith("version https://git-lfs.github.com/spec/v1");
+}
+
 function publicMediaItem(item) {
   const signature = mediaSignature(item.id);
   return {
@@ -304,11 +309,14 @@ const server = createServer(async (request, response) => {
         data = await readFile(item.absolutePath, { signal: controller.signal });
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") {
-          throw new Error("Die iCloud-Datei konnte nicht innerhalb von 45 Sekunden geladen werden. Bitte in Finder zuerst vollständig laden und erneut versuchen.");
+          throw new Error("Die Mediendatei konnte nicht innerhalb von 45 Sekunden geladen werden. Bitte Git LFS beziehungsweise den konfigurierten Medienpfad prüfen.");
         }
         throw error;
       } finally {
         clearTimeout(downloadTimeout);
+      }
+      if (isGitLfsPointer(data)) {
+        throw new Error("Die Bildoriginale wurden noch nicht geladen. Bitte im App-Ordner zuerst „git lfs pull“ ausführen.");
       }
       response.writeHead(200, {
         ...headers(origin),

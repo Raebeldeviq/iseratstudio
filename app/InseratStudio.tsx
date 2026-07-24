@@ -15,7 +15,14 @@ import {
   parseHouseVariant,
   TITLE_IMAGE_CAPTIONS,
 } from "../image-sequence.mjs";
-import { resolveHousePrice } from "../house-price-catalog.mjs";
+import { housePriceCatalogEntries, resolveHousePrice } from "../house-price-catalog.mjs";
+import { applyConfirmedHouseModelDetails } from "../house-template-presets.mjs";
+import {
+  createDefaultProvider,
+  createEmptyHouse,
+  createEmptyProject,
+  createInitialStudioState,
+} from "../studio-defaults.mjs";
 import { IMMOPROFESSIONAL_FTPS_HOST } from "../ftp-config.mjs";
 import {
   fillMissingProjectingDefaults,
@@ -85,6 +92,7 @@ const MAX_HOUSE_TEMPLATES = 18;
 const MAX_ADDRESS_IMPORT_BYTES = 10 * 1024 * 1024;
 const MAX_PROMOTION_IMAGE_BYTES = 25 * 1024 * 1024;
 const HELPER_BASE_URL = "http://127.0.0.1:43182";
+const HOUSE_PRICE_ENTRIES = housePriceCatalogEntries();
 
 const MEDIA_KIND_LABELS: Record<MediaLibraryKind, string> = {
   house: "Hausansicht",
@@ -117,85 +125,27 @@ function looksLikeOpenAiApiKey(value: string): boolean {
 }
 
 const uid = () => crypto.randomUUID();
-
-const newHouse = (index = 1): HouseTemplate => ({
-  id: uid(),
-  name: index === 1 ? "Zweifamilienhaus – Muster" : `Haustyp ${index}`,
-  houseType: index === 1 ? "Zweifamilienhaus" : "Einfamilienhaus",
-  livingArea: index === 1 ? 242 : 150,
-  rooms: index === 1 ? 8 : 5,
-  bedrooms: index === 1 ? 6 : 3,
-  bathrooms: index === 1 ? 4 : 2,
-  floors: 2,
-  housePrice: 0,
-  constructionYear: new Date().getFullYear() + 1,
-  energyDemand: 18,
-  energyClass: IMMOPROFESSIONAL_DEFAULTS.energyClass,
-  heatingType: "Fußbodenheizung mit Luft-Wasser-Wärmepumpe",
-  energySource: "Umweltwärme und Strom",
-  architecture:
-    "Ein klar gegliederter Grundriss verbindet offene Gemeinschaftsbereiche mit gut nutzbaren privaten Rückzugsräumen",
-  equipmentHighlights:
-    "individuelle Grundrissplanung, moderne Haustechnik, hochwertige Sanitärausstattung und persönliche Bemusterung",
-  useStandardPackage: true,
-  images: [],
-});
-
-const newProject = (owner: AddressOwner = "fabian"): ProjectInput => ({
-  id: uid(),
-  owner,
-  name: `Neues Adressprojekt ${new Date().toLocaleDateString("de-DE")}`,
-  street: "",
-  houseNumber: "",
-  zip: "",
-  city: "",
-  district: "",
-  federalState: "",
-  county: "",
-  plotArea: 0,
-  plotPrice: 0,
-  additionalCosts: 0,
-  locationFacts: "",
-  transportFacts: "",
-  familyFacts: "",
-  natureFacts: "",
-  notes: "",
-  selectedHouseIds: [],
-  listings: [],
-  createdAt: new Date().toISOString(),
-});
-
-const defaultProvider: ProviderSettings = {
-  providerNumber: "",
-  company: "Fabian Raebel - Freie Handelsvertretung der Living Fertighaus GmbH",
-  firstName: "",
-  lastName: "",
-  email: "",
-  phone: "",
-};
-
-const initialState = (): StudioState => ({
-  version: 1,
-  houses: [newHouse(1)],
-  projects: [newProject("fabian")],
-  provider: defaultProvider,
-  promotionImage: null,
-  promotionImageEnabled: false,
-});
+const newHouse = (index = 1): HouseTemplate => createEmptyHouse(index) as HouseTemplate;
+const newProject = (owner: AddressOwner = "fabian"): ProjectInput => createEmptyProject(owner) as ProjectInput;
+const defaultProvider = createDefaultProvider() as ProviderSettings;
+const initialState = (): StudioState => createInitialStudioState() as StudioState;
 
 function normalizeMandatoryListingStandards(state: StudioState): StudioState {
-  const houses = state.houses.map((house) => ({
-    ...house,
-    energyClass: isMissingProjectingValue(house.energyClass)
-      ? IMMOPROFESSIONAL_DEFAULTS.energyClass
-      : house.energyClass,
-    heatingType: isMissingProjectingValue(house.heatingType)
-      ? "Fußbodenheizung mit Luft-Wasser-Wärmepumpe"
-      : house.heatingType,
-    energySource: isMissingProjectingValue(house.energySource)
-      ? "Umweltwärme und Strom"
-      : house.energySource,
-  }));
+  const houses = state.houses.map((storedHouse) => {
+    const house = applyConfirmedHouseModelDetails(storedHouse);
+    return {
+      ...house,
+      energyClass: isMissingProjectingValue(house.energyClass)
+        ? IMMOPROFESSIONAL_DEFAULTS.energyClass
+        : house.energyClass,
+      heatingType: isMissingProjectingValue(house.heatingType)
+        ? "Fußbodenheizung mit Luft-Wasser-Wärmepumpe"
+        : house.heatingType,
+      energySource: isMissingProjectingValue(house.energySource)
+        ? "Umweltwärme und Strom"
+        : house.energySource,
+    };
+  });
   const houseById = new Map(houses.map((house) => [house.id, house]));
   return {
     ...state,
@@ -1099,7 +1049,7 @@ export default function InseratStudio() {
       return;
     }
     if (!helperOnline) {
-      setNotice("Die iCloud-Medienbibliothek ist verfügbar, sobald die App über den macOS-Startknopf geöffnet wurde.");
+      setNotice("Die integrierte Medienbibliothek ist verfügbar, sobald die App über den macOS-Startknopf geöffnet wurde.");
       return;
     }
     setMediaLibraryOpen(true);
@@ -1130,7 +1080,7 @@ export default function InseratStudio() {
         cache: "no-store",
         signal: AbortSignal.timeout(50_000),
       });
-      if (!response.ok) throw new Error(`${item.filename} konnte nicht aus iCloud geladen werden.`);
+      if (!response.ok) throw new Error(`${item.filename} konnte nicht aus der Medienbibliothek geladen werden.`);
       const blob = await response.blob();
       const role = (item.role || inferImageRole(item)) as ImageRole;
       return {
@@ -1184,8 +1134,8 @@ export default function InseratStudio() {
       }
       setSelectedMediaItems([]);
       setNotice(failed
-        ? `${imported.length} Bilder wurden übernommen; ${failed} iCloud-Dateien konnten noch nicht geladen werden. Bitte den iCloud-Download prüfen und erneut versuchen.`
-        : `${imported.length} beschriftete Bilder wurden aus der iCloud-Medienbibliothek übernommen.`);
+        ? `${imported.length} Bilder wurden übernommen; ${failed} Mediendateien konnten noch nicht geladen werden. Bitte Git LFS beziehungsweise den konfigurierten Medienpfad prüfen.`
+        : `${imported.length} beschriftete Bilder wurden aus der integrierten Medienbibliothek übernommen.`);
     } finally {
       setImportingMedia(false);
     }
@@ -1226,7 +1176,7 @@ export default function InseratStudio() {
       }
       const { images, failed } = await downloadMediaItems(data.items);
       if (failed || images.length !== data.items.length) {
-        setNotice(`${failed || data.items.length - images.length} iCloud-Bilder konnten nicht geladen werden. Die vorhandene Bildfolge wurde nicht verändert.`);
+        setNotice(`${failed || data.items.length - images.length} Medienbilder konnten nicht geladen werden. Die vorhandene Bildfolge wurde nicht verändert.`);
         return;
       }
       const houseId = activeHouse.id;
@@ -2073,6 +2023,23 @@ export default function InseratStudio() {
             </label>
           )}
         </section>
+        <section className="workspace integrated-catalog-card">
+          <details>
+            <summary>
+              <span><span className="eyebrow">Direkt in der App</span><b>Vollständige hinterlegte Preisliste</b></span>
+              <strong>{HOUSE_PRICE_ENTRIES.length} Hauspreise</strong>
+            </summary>
+            <div className="integrated-price-grid">
+              {HOUSE_PRICE_ENTRIES.map((entry) => (
+                <div key={entry.key}>
+                  <span>{entry.houseType}</span>
+                  <b>{entry.label}</b>
+                  <strong>{euro(entry.price)}</strong>
+                </div>
+              ))}
+            </div>
+          </details>
+        </section>
         <section className="workspace two-column">
           <aside className="rail-card">
             <div className="section-heading compact">
@@ -2157,7 +2124,7 @@ export default function InseratStudio() {
                 </div>
                 <div className="button-row image-heading-actions">
                   <button className="secondary" onClick={toggleMediaLibrary}>
-                    {mediaLibraryOpen ? "Medienbibliothek schließen" : "iCloud-Medienbibliothek"}
+                    {mediaLibraryOpen ? "Medienbibliothek schließen" : "Integrierte Medienbibliothek"}
                   </button>
                   <button
                     className="secondary"
@@ -2173,11 +2140,11 @@ export default function InseratStudio() {
                 </div>
               </div>
               {mediaLibraryOpen ? (
-                <section className="media-library" aria-label="iCloud-Medienbibliothek">
+                <section className="media-library" aria-label="Integrierte Medienbibliothek">
                   <div className="media-library-intro">
                     <div>
                       <b>Haus-, Innenraum-, Grundriss- und Vertrauensbilder</b>
-                      <span>Eine versionsbezeichnete SUN-/SOL-Hausansicht genügt, um die vollständige Folge automatisch zusammenzustellen.</span>
+                      <span>Alle hinterlegten Haus-, Innenraum-, Grundriss-, Standort- und Vertrauensbilder sind direkt in der App verfügbar.</span>
                     </div>
                     <strong>{mediaLibraryTotal} Treffer</strong>
                   </div>
@@ -2221,7 +2188,7 @@ export default function InseratStudio() {
 
                   {!mediaLibraryAvailable ? (
                     <div className="media-library-message">
-                      Der konfigurierte iCloud-Ordner ist auf diesem Mac nicht erreichbar. Bitte iCloud Drive aktivieren oder den Pfad über <code>FPI_MEDIA_LIBRARY_ROOT</code> konfigurieren.
+                      Die integrierten Medien sind nicht erreichbar. Bitte im App-Ordner <code>git lfs pull</code> ausführen oder einen externen Pfad über <code>FPI_MEDIA_LIBRARY_ROOT</code> konfigurieren.
                     </div>
                   ) : mediaLibraryError ? (
                     <div className="media-library-message error">{mediaLibraryError}</div>
@@ -2276,7 +2243,7 @@ export default function InseratStudio() {
                         disabled={!selectedMediaItems.length || importingMedia || activeHouse.images.length >= MAX_HOUSE_IMAGES}
                         onClick={importSelectedMedia}
                       >
-                        {importingMedia ? "iCloud-Bilder werden übernommen …" : `${selectedMediaItems.length} ausgewählte Bilder übernehmen`}
+                        {importingMedia ? "Bilder werden übernommen …" : `${selectedMediaItems.length} ausgewählte Bilder übernehmen`}
                       </button>
                     </div>
                   </div>

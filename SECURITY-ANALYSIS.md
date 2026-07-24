@@ -105,9 +105,9 @@ sichtbar und kann nach manuellen Änderungen gezielt wiederhergestellt werden.
 5. Der Entwicklungsserver ist für den lokalen Einzelplatzbetrieb gedacht. Für
    Verteilung an mehrere Macs sollte daraus ein signiertes und notarisiertes
    App-Bundle mit fest gebauter Oberfläche entstehen.
-6. iCloud-Platzhalter benötigen beim ersten Zugriff eine Netzwerkverbindung und
-   können die Vorschau verzögern. Der Helfer verändert oder löscht die
-   Originaldateien nicht.
+6. Die integrierten Originalbilder werden mit Git LFS verteilt. Ein unvollständig
+   ausgeführter Checkout enthält nur kleine Zeigerdateien; der Helfer erkennt
+   diese und verlangt `git lfs pull`, statt sie als Bilder weiterzugeben.
 7. Die Adressansichten von Fabian und Pascal liegen im selben lokalen Katalog.
    Sie verhindern versehentliche Vermischung in der Oberfläche, ersetzen aber
    keine getrennten macOS-Benutzerkonten bei unterschiedlichen Zugriffsrechten.

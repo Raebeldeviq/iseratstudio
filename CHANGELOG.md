@@ -1,5 +1,72 @@
 # Änderungsprotokoll
 
+## Vollständig integrierter Medien- und Preiskatalog – 24. Juli 2026
+
+### Report
+
+- Die vollständige verfügbare Medienbibliothek mit 655 Anzeigenbildern und
+  10 zusätzlichen Innenraumbildern direkt in die macOS-App übernommen. Alle
+  665 JPEG-, PNG- und WebP-Originale bleiben verlustfrei und behalten ihre
+  bestehende Ordnerstruktur.
+- Die Standard-Medienquelle von einem persönlichen iCloud-Pfad auf den
+  eingebauten Ordner `bundled-media` umgestellt. Externe Pfade können weiterhin
+  bewusst über Umgebungsvariablen gesetzt werden.
+- Einen neutralen Erststart ergänzt: Auf einem neuen Mac werden die 18
+  bestätigten Hausvorlagen samt benötigter Bildfolgen automatisch lokal
+  installiert. Ein bereits vorhandener Katalog wird niemals überschrieben.
+- Die vollständige hinterlegte Preisliste mit 30 Modellen in Schritt 1 sichtbar
+  gemacht. Bildversionen bleiben für die Preisidentifikation ohne Bedeutung.
+- Gemeinsame neutrale Standardwerte für Browser und Erstinstallation zentral
+  zusammengeführt. Anwendungsversion auf 0.10.0 angehoben.
+
+### Begründung
+
+Die App soll ohne persönliche iCloud-Verzeichnisstruktur vollständig nutzbar
+sein. Medien, Hausvorlagen und Preise liegen deshalb reproduzierbar neben dem
+Programmcode. Git LFS hält die großen Binärdateien aus der normalen
+Git-Historie heraus, während ein Checkout weiterhin den vollständigen Bestand
+erhält.
+
+### Hürden und Risiken
+
+- Die Originalbilder umfassen rund 3,17 GB logische Daten. Ein neuer Checkout
+  benötigt Git LFS, ausreichend lokalen Speicher und eine entsprechend lange
+  erste Übertragung.
+- Private Grundstücksprojekte, persönliche Anbieterdaten, Schlüsselbundinhalte,
+  Sitzungstoken und Uploadprotokolle wurden ausdrücklich nicht eingebaut oder
+  für GitHub vorgemerkt.
+- Der Erststart kopiert nur die 61 für die 18 Standardvorlagen benötigten
+  Bilddateien in den lokalen Katalog. Der vollständige Bestand bleibt direkt
+  über die integrierte Medienbibliothek verfügbar, ohne den Web-Build zu
+  duplizieren.
+
+## Bestätigte SUN-113-Stammdaten – 24. Juli 2026
+
+### Report
+
+- SUN 113 zentral mit 355.122 € Hauspreis, 106,15 m² Wohnfläche, 4 Zimmern
+  und 3 Schlafzimmern hinterlegt. Die Bildvariante bleibt für den Preis ohne
+  Bedeutung.
+- Die vorinstallierte Vorlage `SUN 113 V6` auf diese bestätigten Stammdaten
+  umgestellt. Bereits lokal gespeicherte SUN-113-Versionen werden beim Laden
+  in genau diesen vier Werten aktualisiert.
+- Anwendungsversion auf 0.9.6 angehoben.
+
+### Begründung
+
+Preis und Modellangaben liegen in den bestehenden zentralen Katalogen. Eine
+kleine gemeinsame Normalisierung stellt sicher, dass nicht nur neue Vorlagen,
+sondern auch der bereits installierte lokale Hauskatalog die bestätigten Werte
+erhält.
+
+### Hürden und Risiken
+
+- Bilder, Grundrisse, Badanzahl, Etagen und alle weiteren Hausangaben werden
+  von der Bestandsaktualisierung nicht verändert.
+- Bereits erzeugte Inserat-Gesamtpreise werden nicht still überschrieben.
+  Neu erzeugte oder bewusst aktualisierte Projektierungen verwenden den
+  korrigierten Hauspreis zusammen mit den jeweiligen Grundstückskosten.
+
 ## Ergänzende Projektierungsstandardwerte – 24. Juli 2026
 
 ### Report

@@ -8,7 +8,8 @@ import {
 
 test("contains every supplied price and uses the confirmed lower SUN prices", () => {
   const entries = housePriceCatalogEntries();
-  assert.equal(entries.length, 29);
+  assert.equal(entries.length, 30);
+  assert.equal(resolveHousePrice("SUN 113 V6.png").price, 355_122);
   assert.equal(resolveHousePrice("SUN 126 V2.png").price, 365_073);
   assert.equal(resolveHousePrice("SUN_165_V7_KAT_OG.jpg").price, 426_931);
   assert.equal(resolveHousePrice("SOL_082_B_SD").price, 325_931);
@@ -16,6 +17,8 @@ test("contains every supplied price and uses the confirmed lower SUN prices", ()
 });
 
 test("ignores image versions while retaining L and XL as separate models", () => {
+  assert.equal(resolveHousePrice("SUN 113 V2.png").price, 355_122);
+  assert.equal(resolveHousePrice("SUN_113_V9_KAT_OG.jpg").price, 355_122);
   assert.equal(resolveHousePrice("SOL_125L_KAT_V2_DG.jpg").price, 378_568);
   assert.equal(resolveHousePrice("SOL_125L_KAT_V5_OG.jpg").price, 378_568);
   assert.equal(resolveHousePrice("SOL_125XL_KAT_V4_EG.jpg").price, 483_864);

@@ -95,7 +95,7 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
   };
   const xml = buildOpenImmoXml(input);
 
-  assert.match(xml, /senderversion="0\.9\.5"/);
+  assert.match(xml, /senderversion="0\.10\.0"/);
   assert.match(xml, /<openimmo_obid>FPI-TEST-1<\/openimmo_obid>/);
   assert.match(xml, /<aktion aktionart="CHANGE" timestamp="[^"]+" \/>/);
   assert.match(xml, /<bad dusche="true" wanne="true" fenster="true" \/>/);

@@ -8,9 +8,7 @@ Die aktuell geöffnete Anwendungsversion steht dauerhaft dezent unten rechts.
 
 1. `Start-Fabian-Pascal-Inseratestudio.command` doppelt anklicken.
 2. Falls macOS beim ersten Start nachfragt, die Datei per Rechtsklick **Öffnen**.
-3. Den einmaligen Zugriff von Terminal auf **iCloud Drive** erlauben, damit die
-   vorhandene Medienbibliothek gelesen werden kann.
-4. Die Anwendung öffnet `http://127.0.0.1:43181` im Standardbrowser.
+3. Die Anwendung öffnet `http://127.0.0.1:43181` im Standardbrowser.
 
 Benötigt werden Node.js ab Version 22, pnpm und die Apple Command Line Tools
 (bei Bedarf einmalig mit `xcode-select --install`). Der Startknopf verwendet zuerst
@@ -19,9 +17,21 @@ Beim ersten Start werden die exakt im Lockfile festgeschriebenen Pakete
 installiert und die lokale Produktionsfassung gebaut. Laufzeitprotokolle liegen
 ausschließlich im Unterordner `work`.
 
+Bei einem neuen Git-Checkout müssen die Originalbilder einmalig mit Git LFS
+geladen werden:
+
+```bash
+git lfs install
+git lfs pull
+```
+
+Die App enthält 665 Originalbilder mit rund 3,17 GB logischer Größe. Ein Zugriff
+auf iCloud Drive oder die ursprüngliche Ordnerstruktur ist für den Betrieb nicht
+mehr erforderlich.
+
 ## Arbeitsablauf
 
-1. Unter **Haustypen** Hausdaten pflegen und in der **iCloud-Medienbibliothek**
+1. Unter **Haustypen** Hausdaten pflegen und in der **integrierten Medienbibliothek**
    genau eine versionsbezeichnete SUN-/SOL-Hausansicht mit LivingHaus-Logo
    auswählen. **Komplette Bildfolge erstellen** ergänzt automatisch die sechs
    Innenräume, den emotionalen Catch, die zur Version passenden Grundrisse,
@@ -58,7 +68,7 @@ Unter **Haustypen** stehen 18 vollständige Vorlagen bereit:
   SUN 144 V4 Tag, SUN 151 V8, SUN 154 V3, SUN 157 V2, SUN 164 V2,
   SUN 165 V2, SUN 167 V3, SUN 168 V2 und SUN 210 V2
 - SOL 101 V2, SOL 107 V2 und SOL 110 V2 als eingeschossige Bungalows
-- SUN 113 V6 mit vollständiger Bildfolge, aber bewusst offenem Hauspreis
+- SUN 113 V6 mit 106,15 m², 4 Zimmern, 3 Schlafzimmern und 355.122 € Hauspreis
 
 Jede Vorlage enthält die festgelegte Bildfolge mit beschriftetem Titelbild,
 sechs unterschiedlichen Innenraumkategorien, emotionalem Catch,
@@ -66,10 +76,22 @@ versionsgenauen Grundrissen, Auszeichnungen, Vertrauensmotiv und QR-Abschluss.
 Das optionale zentrale Aktionsbild bleibt unverändert nutzbar und wird beim
 Export vor diese Folge gesetzt.
 
-Das Installationsskript ersetzt nur die leeren ursprünglichen Platzhalter
-`Zweifamilienhaus – Muster` und `Haustyp 2`. Sobald ein echter Haustyp im
-Katalog erkannt wird, bricht es ab, statt Daten zu überschreiben. Bestehende
-Projekte, Anbieterdaten, Aktionsbild und Zugangsdaten bleiben erhalten.
+Auf einem frischen Mac installiert der Startknopf diesen neutralen Katalog
+automatisch aus den eingebauten Medien. Existiert bereits ein lokaler Katalog,
+wird er nicht überschrieben. Bestehende Projekte, Anbieterdaten, Aktionsbild
+und Zugangsdaten bleiben erhalten.
+
+## Integrierte Medienbibliothek
+
+Im Repository liegen 655 Bilder aus dem Anzeigenbestand und 10 zusätzliche
+Innenraumbilder – insgesamt 665 JPEG-, PNG- und WebP-Originale. Enthalten sind
+sämtliche hinterlegten Hausansichten, Grundrisse, Innenräume, Standortmotive,
+emotionale Motive, Auszeichnungen, Vertrauensbilder und QR-Abschlüsse.
+
+Die Dateien liegen unter `bundled-media` und werden wegen ihrer Gesamtgröße mit
+Git LFS versioniert. Sie werden nicht noch einmal in den Web-Build kopiert,
+sondern ausschließlich durch den lokalen, sitzungsgeschützten Helfer ausgeliefert.
+Für kontrollierte Wartungsimporte steht `npm run media:sync` zur Verfügung.
 
 ## Hinterlegte Hauspreise
 
@@ -79,6 +101,7 @@ Die Größen L und XL werden dagegen als unterschiedliche Häuser behandelt. Bei
 einer eindeutigen Zuordnung werden Hauspreis und Objektart automatisch
 übernommen; eine manuelle Änderung bleibt möglich. Fehlt ein Preis oder ist die
 Kennung nicht eindeutig, bleibt der vorhandene Wert unverändert.
+Die komplette Liste ist zusätzlich direkt im Bereich **Haustypen** aufklappbar.
 
 | Objektart | Preismodell | Hauspreis |
 | --- | --- | ---: |
@@ -91,6 +114,7 @@ Kennung nicht eindeutig, bleibt der vorhandene Wert unverändert.
 | Doppelhaushälfte | SOL 124 L | 370.542 € |
 | Doppelhaushälfte | SOL 125 L | 378.568 € |
 | Doppelhaushälfte | SOL 125 XL | 483.864 € |
+| Einfamilienhaus | SUN 113 | 355.122 € |
 | Einfamilienhaus | SUN 125 | 362.591 € |
 | Einfamilienhaus | SUN 126 | 365.073 € |
 | Einfamilienhaus | SUN 130 | 386.555 € |
@@ -113,7 +137,7 @@ Kennung nicht eindeutig, bleibt der vorhandene Wert unverändert.
 | Zweifamilienhaus | SOL 242 | 655.971 € |
 
 Für SUN 126 und SUN 165 ist jeweils der bestätigte niedrigere Listenpreis
-hinterlegt. SUN 107, SUN 112, SUN 113 und SUN 155 besitzen im bereitgestellten
+hinterlegt. SUN 107, SUN 112 und SUN 155 besitzen im bereitgestellten
 Preisausschnitt keinen Wert; die App erfindet dafür keinen Ersatzpreis.
 
 ## Sicherheit
@@ -130,9 +154,12 @@ Preisausschnitt keinen Wert; die App erfindet dafür keinen Ersatzpreis.
 - Uploads werden einzeln gepackt, lokal zwischengespeichert und nach Abschluss
   oder Fehler entfernt. Das Diagnoseprotokoll enthält keine Zugangsdaten.
 - An die Text-KI werden weder Straße, Hausnummer noch Postleitzahl übermittelt.
-- Die iCloud-Medienliste erfordert die lokale Sitzung. Vorschaubilder werden
+- Die integrierte Medienliste erfordert die lokale Sitzung. Vorschaubilder werden
   ausschließlich über signierte, nicht erratbare URLs ausgeliefert; freie
   Dateipfade können nicht an den Helfer übergeben werden.
+- Private Grundstücksprojekte, persönliche Anbieterdaten, Zugangsdaten,
+  Sitzungsdateien und Uploadprotokolle gehören nicht zum eingebauten Katalog
+  und werden nicht im Git-Repository gespeichert.
 
 Lokale Daten liegen unter:
 
@@ -270,11 +297,11 @@ Erdgeschoss plus Ober-/Dachgeschoss. Die Überschrift des Titelbilds kann zwisch
 Zuhause** wechseln. Die fachlich vorgegebenen Überschriften aller anderen Rollen
 bleiben unverändert und werden von der KI-Bildtextfunktion nicht überschrieben.
 
-## iCloud-Medienbibliothek
+## Integrierte Medienbibliothek
 
 Beim Öffnen der Bibliothek indexiert die App die unterstützten JPEG-, PNG- und
-WebP-Dateien im vorhandenen Anzeigenordner sowie die Motive aus
-`01_RENDERING/Inneneinrichtung`. Ordnerstruktur und Dateinamen werden für
+WebP-Dateien unter `bundled-media/advertisements` sowie die Motive unter
+`bundled-media/interiors`. Ordnerstruktur und Dateinamen werden für
 Gruppierung, Bildrolle und Beschriftung verwendet. Erkannte Kategorien sind
 Hausansicht, Innenraum, Grundriss, Standort und allgemeine Anzeige. Suche,
 Gruppen- und Kategorienfilter begrenzen die Ansicht auf jeweils 36
@@ -286,30 +313,15 @@ immer vor Ober- oder Dachgeschoss. Eine dritte Etage wird separat eingeordnet.
 Zusätzlich kann jedes manuell importierte Bild einer Rolle zugeordnet und die
 gesamte Folge anschließend nach Rollen normalisiert werden.
 
-Die Originale bleiben unverändert in iCloud. Erst beim Übernehmen werden die
-ausgewählten Dateien in den lokalen Haustyp kopiert und danach wie manuell
-gewählte Bilder doppelt gesichert. Eine stabile Quell-ID verhindert erneute
-Übernahme desselben Motivs. Ist eine Datei nur als iCloud-Platzhalter vorhanden,
-löst die Vorschau beziehungsweise Übernahme den normalen iCloud-Download aus.
-Nach 45 Sekunden wird ein festhängender Einzelabruf kontrolliert beendet; die
-Datei kann dann in Finder über **Jetzt laden** lokal bereitgestellt werden.
+Beim Übernehmen werden ausgewählte Dateien in den lokalen Haustyp kopiert und
+danach wie manuell gewählte Bilder doppelt gesichert. Eine stabile Quell-ID
+verhindert die erneute Übernahme desselben Motivs. Nicht geladene Git-LFS-Dateien
+werden mit einem klaren Hinweis auf `git lfs pull` abgelehnt, statt einen
+unbrauchbaren Zeiger als Bild zu speichern.
 
-Standardpfad:
-
-`~/Library/Mobile Documents/com~apple~CloudDocs/Life Business-System/01_HANDELSVERTRETUNG/03_MARKETING/04_ANZEIGEN`
-
-Standardpfad der Innenräume:
-
-`~/Library/Mobile Documents/com~apple~CloudDocs/Life Business-System/01_HANDELSVERTRETUNG/03_MARKETING/01_RENDERING/Inneneinrichtung`
-
-Auf einem anderen Mac können die Pfade vor dem Start über die
+Für bewusst abweichende externe Bibliotheken können die Pfade vor dem Start über die
 Umgebungsvariablen `FPI_MEDIA_LIBRARY_ROOT` und
 `FPI_INTERIOR_LIBRARY_ROOT` gesetzt werden.
-
-Wenn macOS die Bibliothek nicht freigibt, unter **Systemeinstellungen →
-Datenschutz & Sicherheit → Dateien und Ordner → Terminal** den Zugriff auf
-iCloud Drive aktivieren und die App neu starten. Der Index bricht einen solchen
-Wartezustand nach acht Sekunden ab, damit der lokale Helfer erreichbar bleibt.
 
 Details zur Sicherheitsanalyse stehen in [SECURITY-ANALYSIS.md](SECURITY-ANALYSIS.md),
 die technische Änderungsübersicht in [CHANGELOG.md](CHANGELOG.md).

@@ -8,6 +8,7 @@ const PRICE_ENTRIES = [
   { key: "SOL124L", label: "SOL 124 L", price: 370_542, houseType: "Doppelhaushälfte" },
   { key: "SOL125L", label: "SOL 125 L", price: 378_568, houseType: "Doppelhaushälfte" },
   { key: "SOL125XL", label: "SOL 125 XL", price: 483_864, houseType: "Doppelhaushälfte" },
+  { key: "SUN113", label: "SUN 113", price: 355_122, houseType: "Einfamilienhaus" },
   { key: "SUN125", label: "SUN 125", price: 362_591, houseType: "Einfamilienhaus" },
   { key: "SUN126", label: "SUN 126", price: 365_073, houseType: "Einfamilienhaus" },
   { key: "SUN130", label: "SUN 130", price: 386_555, houseType: "Einfamilienhaus" },

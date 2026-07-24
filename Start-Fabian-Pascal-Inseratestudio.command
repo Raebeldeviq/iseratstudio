@@ -43,6 +43,9 @@ chmod 600 "$SESSION_FILE"
 FPI_SESSION_TOKEN="$(<"$SESSION_FILE")"
 export FPI_SESSION_TOKEN
 
+cd "$APP_ROOT"
+"$NODE_BIN" scripts/bootstrap-bundled-catalog.mjs
+
 if /usr/sbin/lsof -nP -iTCP:43182 -sTCP:LISTEN >/dev/null 2>&1; then
   if ! /usr/bin/curl --silent --fail --max-time 2 -H "X-FPI-Session: $FPI_SESSION_TOKEN" "http://127.0.0.1:43182/health" >/dev/null; then
     print -u2 "Port 43182 wird von einem anderen oder veralteten Prozess verwendet. Bitte diesen Prozess beenden und erneut starten."

@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
-import { basename, extname, join, relative } from "node:path";
+import { basename, dirname, extname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
   buildRecommendedMediaSequence,
@@ -10,10 +12,17 @@ import {
 } from "./image-sequence.mjs";
 import { resolveHousePrice } from "./house-price-catalog.mjs";
 
+const MODULE_DIRECTORY = dirname(fileURLToPath(import.meta.url));
+export const BUNDLED_MEDIA_LIBRARY_ROOT = join(MODULE_DIRECTORY, "bundled-media", "advertisements");
+export const BUNDLED_INTERIOR_LIBRARY_ROOT = join(MODULE_DIRECTORY, "bundled-media", "interiors");
+export const LEGACY_MEDIA_LIBRARY_ROOT =
+  "/Users/pascalfrohlich/Library/Mobile Documents/com~apple~CloudDocs/Life Business-System/01_HANDELSVERTRETUNG/03_MARKETING/04_ANZEIGEN";
+export const LEGACY_INTERIOR_LIBRARY_ROOT =
+  "/Users/pascalfrohlich/Library/Mobile Documents/com~apple~CloudDocs/Life Business-System/01_HANDELSVERTRETUNG/03_MARKETING/01_RENDERING/Inneneinrichtung";
 export const DEFAULT_MEDIA_LIBRARY_ROOT = process.env.FPI_MEDIA_LIBRARY_ROOT
-  || "/Users/pascalfrohlich/Library/Mobile Documents/com~apple~CloudDocs/Life Business-System/01_HANDELSVERTRETUNG/03_MARKETING/04_ANZEIGEN";
+  || (existsSync(BUNDLED_MEDIA_LIBRARY_ROOT) ? BUNDLED_MEDIA_LIBRARY_ROOT : LEGACY_MEDIA_LIBRARY_ROOT);
 export const DEFAULT_INTERIOR_LIBRARY_ROOT = process.env.FPI_INTERIOR_LIBRARY_ROOT
-  || "/Users/pascalfrohlich/Library/Mobile Documents/com~apple~CloudDocs/Life Business-System/01_HANDELSVERTRETUNG/03_MARKETING/01_RENDERING/Inneneinrichtung";
+  || (existsSync(BUNDLED_INTERIOR_LIBRARY_ROOT) ? BUNDLED_INTERIOR_LIBRARY_ROOT : LEGACY_INTERIOR_LIBRARY_ROOT);
 
 const SUPPORTED_EXTENSIONS = new Map([
   [".jpg", "image/jpeg"],
@@ -143,7 +152,7 @@ async function scanFiles(root, output, source) {
     ));
   } catch (error) {
     if (error && typeof error === "object" && (error.killed || error.signal)) {
-      throw new Error("macOS hat den Zugriff auf iCloud Drive nicht rechtzeitig freigegeben. Bitte Terminal unter Systemeinstellungen > Datenschutz & Sicherheit > Dateien und Ordner den Zugriff auf iCloud Drive erlauben.");
+      throw new Error("macOS hat den Zugriff auf das konfigurierte Medienverzeichnis nicht rechtzeitig freigegeben. Bitte Git LFS und die lokalen Dateiberechtigungen prüfen.");
     }
     throw error;
   }

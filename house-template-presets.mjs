@@ -6,6 +6,10 @@ const DEFAULT_ARCHITECTURE =
 const DEFAULT_EQUIPMENT =
   "individuelle Grundrissplanung, moderne Haustechnik, hochwertige Sanitärausstattung und persönliche Bemusterung";
 
+export const CONFIRMED_HOUSE_MODEL_DETAILS = Object.freeze({
+  SUN113: Object.freeze({ livingArea: 106.15, rooms: 4, bedrooms: 3 }),
+});
+
 export const HOUSE_TEMPLATE_PRESETS = Object.freeze([
   { key: "sun126-v2", name: "SUN 126 V2", coverFilename: "SUN 126 V2.png", livingArea: 121.74, rooms: 4, bedrooms: 2, bathrooms: 2, floors: 2 },
   { key: "sun130-v2", name: "SUN 130 V2", coverFilename: "SUN 130 V2.png", livingArea: 130.73, rooms: 4, bedrooms: 2, bathrooms: 1, floors: 2 },
@@ -24,8 +28,23 @@ export const HOUSE_TEMPLATE_PRESETS = Object.freeze([
   { key: "sol101-v2", name: "SOL 101 V2", coverFilename: "SOL 101 V2.png", livingArea: 100.72, rooms: 3, bedrooms: 2, bathrooms: 1, floors: 1, houseType: "Bungalow" },
   { key: "sol107-v2", name: "SOL 107 V2", coverFilename: "Sol 107 SD.png", livingArea: 106.85, rooms: 4, bedrooms: 3, bathrooms: 1, floors: 1, houseType: "Bungalow" },
   { key: "sol110-v2", name: "SOL 110 V2", coverFilename: "SOL 110 V2.png", livingArea: 110.45, rooms: 4, bedrooms: 3, bathrooms: 1, floors: 1, houseType: "Bungalow" },
-  { key: "sun113-v6", name: "SUN 113 V6", coverFilename: "SUN 113 V6.png", livingArea: 113, rooms: 4, bedrooms: 2, bathrooms: 1, floors: 2, priceOpen: true },
+  { key: "sun113-v6", name: "SUN 113 V6", coverFilename: "SUN 113 V6.png", ...CONFIRMED_HOUSE_MODEL_DETAILS.SUN113, bathrooms: 1, floors: 2 },
 ]);
+
+/**
+ * Applies confirmed model data to saved templates without touching images or
+ * any house properties that were not explicitly confirmed for that model.
+ */
+export function applyConfirmedHouseModelDetails(house) {
+  const priceMatch = resolveHousePrice(house?.name);
+  const modelDetails = priceMatch && CONFIRMED_HOUSE_MODEL_DETAILS[priceMatch.key];
+  if (!modelDetails) return house;
+  return {
+    ...house,
+    ...modelDetails,
+    housePrice: priceMatch.price,
+  };
+}
 
 function presetCover(definition, mediaItems) {
   return mediaItems.find((item) => item.relativePath === `Haustypen/${definition.coverFilename}`) || null;
