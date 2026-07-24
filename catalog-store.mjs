@@ -1,23 +1,18 @@
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { gunzip, gzip } from "node:zlib";
 import { promisify } from "node:util";
+import { APPLICATION_DATA_DIRECTORY } from "./platform-paths.mjs";
 
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
-const applicationData = process.env.LOCALAPPDATA
-  || join(homedir(), "AppData", "Local");
-
 export const CATALOG_PATH = join(
-  applicationData,
-  "Fabian-Pascal Inseratestudio",
+  APPLICATION_DATA_DIRECTORY,
   "catalog.json.gz",
 );
 
 export const CATALOG_V2_DIRECTORY = join(
-  applicationData,
-  "Fabian-Pascal Inseratestudio",
+  APPLICATION_DATA_DIRECTORY,
   "catalog-v2",
 );
 
@@ -47,6 +42,9 @@ function safeId(value, label) {
 function withoutImageData(state) {
   return {
     ...state,
+    promotionImage: state.promotionImage
+      ? { ...state.promotionImage, dataUrl: "" }
+      : null,
     houses: state.houses.map((house) => ({
       ...house,
       images: Array.isArray(house.images)
@@ -57,10 +55,17 @@ function withoutImageData(state) {
 }
 
 function imageEntries(state) {
-  return state.houses.flatMap((house) => house.images.map((image) => ({
-    id: safeId(image.id, "Bild-ID"),
-    mimeType: String(image.mimeType || "application/octet-stream").slice(0, 120),
-  })));
+  const images = [
+    ...state.houses.flatMap((house) => house.images),
+    ...(state.promotionImage ? [state.promotionImage] : []),
+  ];
+  return [...new Map(images.map((image) => {
+    const entry = {
+      id: safeId(image.id, "Bild-ID"),
+      mimeType: String(image.mimeType || "application/octet-stream").slice(0, 120),
+    };
+    return [entry.id, entry];
+  })).values()];
 }
 
 function pendingManifestPath(catalogDirectory, sessionId) {
@@ -88,13 +93,36 @@ async function readV2Manifest(path) {
   return manifest;
 }
 
+function catalogConflict(message = "Der lokale Katalog wurde inzwischen von einer anderen App-Sitzung geändert. Bitte die App neu laden.") {
+  const error = new Error(message);
+  error.httpStatus = 409;
+  error.code = "CATALOG_CONFLICT";
+  return error;
+}
+
+async function currentV2Manifest(catalogDirectory) {
+  try {
+    return await readV2Manifest(join(catalogDirectory, MANIFEST_FILENAME));
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
 export async function startCatalogSnapshot(input, catalogDirectory = CATALOG_V2_DIRECTORY) {
   const state = input?.state;
   if (!validState(state)) throw new Error("Die lokale Inseratstudio-Sicherung ist unvollständig.");
   const sessionId = safeId(input.sessionId, "Sicherungssitzung");
+  const currentManifest = await currentV2Manifest(catalogDirectory);
+  const expectedSavedAt = typeof input.expectedSavedAt === "string"
+    ? input.expectedSavedAt
+    : null;
+  const currentSavedAt = currentManifest?.savedAt || "";
+  if (expectedSavedAt !== currentSavedAt) throw catalogConflict();
   const manifest = {
     format: 2,
     savedAt: normalizeSavedAt(input.savedAt),
+    baseSavedAt: currentSavedAt,
     state: withoutImageData(state),
   };
   await mkdir(join(catalogDirectory, IMAGES_DIRECTORY), { recursive: true });
@@ -141,6 +169,10 @@ export async function commitCatalogSnapshot(sessionIdValue, catalogDirectory = C
   const sessionId = safeId(sessionIdValue, "Sicherungssitzung");
   const pendingPath = pendingManifestPath(catalogDirectory, sessionId);
   const manifest = await readV2Manifest(pendingPath);
+  const currentManifest = await currentV2Manifest(catalogDirectory);
+  if ((currentManifest?.savedAt || "") !== String(manifest.baseSavedAt || "")) {
+    throw catalogConflict();
+  }
   for (const image of imageEntries(manifest.state)) {
     if (!await fileExistsWithContent(imagePath(catalogDirectory, image.id))) {
       throw new Error(`Bild ${image.id} fehlt in der lokalen Sicherung.`);

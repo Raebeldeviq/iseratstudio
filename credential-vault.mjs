@@ -1,18 +1,21 @@
 import { spawn } from "node:child_process";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { userInfo } from "node:os";
+import { readFile, rm, writeFile, mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { APPLICATION_DATA_DIRECTORY } from "./platform-paths.mjs";
+import { normalizeFtpHost } from "./ftp-config.mjs";
 
-const applicationData = process.env.LOCALAPPDATA
-  || join(homedir(), "AppData", "Local");
+const KEYCHAIN_SERVICE = "de.fabian-pascal.inseratstudio.credentials";
+const KEYCHAIN_ACCOUNT = userInfo().username;
+const KEYCHAIN_HELPER_PATH = fileURLToPath(new URL("./macos-keychain.swift", import.meta.url));
 
 export const CREDENTIAL_VAULT_PATH = join(
-  applicationData,
-  "Fabian-Pascal Inseratestudio",
-  "credentials.dpapi",
+  APPLICATION_DATA_DIRECTORY,
+  process.platform === "win32" ? "credentials.dpapi" : "credentials.keychain",
 );
 const LEGACY_CREDENTIAL_VAULT_PATH = join(
-  applicationData,
+  process.env.LOCALAPPDATA || "",
   "LivingHaus Inseratstudio",
   "credentials.dpapi",
 );
@@ -43,26 +46,37 @@ $plainBytes = [Security.Cryptography.ProtectedData]::Unprotect(
 [Console]::Out.Write([Text.Encoding]::UTF8.GetString($plainBytes))
 `;
 
-function runPowerShell(script, input) {
+function runProcess(executable, args, input = "") {
   return new Promise((resolve, reject) => {
-    const process = spawn(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
-      { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] },
-    );
+    const child = spawn(executable, args, {
+      windowsHide: true,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
     let output = "";
     let errorOutput = "";
-    process.stdout.setEncoding("utf8");
-    process.stderr.setEncoding("utf8");
-    process.stdout.on("data", (chunk) => { output += chunk; });
-    process.stderr.on("data", (chunk) => { errorOutput += chunk; });
-    process.on("error", reject);
-    process.on("close", (code) => {
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => { output += chunk; });
+    child.stderr.on("data", (chunk) => { errorOutput += chunk; });
+    child.on("error", reject);
+    child.on("close", (code) => {
       if (code === 0) resolve(output.trim());
-      else reject(new Error(errorOutput.trim() || "Der Windows-Zugangstresor konnte nicht geöffnet werden."));
+      else {
+        const error = new Error(errorOutput.trim() || "Der lokale Zugangstresor konnte nicht geöffnet werden.");
+        error.exitCode = code;
+        reject(error);
+      }
     });
-    process.stdin.end(input, "utf8");
+    child.stdin.end(input, "utf8");
   });
+}
+
+function runPowerShell(script, input) {
+  return runProcess(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
+    input,
+  );
 }
 
 function clean(value, maximum = 500) {
@@ -71,14 +85,30 @@ function clean(value, maximum = 500) {
 
 export function normalizeCredentials(input = {}) {
   const supportedModels = new Set(["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"]);
+  const supportedSecurity = new Set(["explicit", "implicit", "none"]);
   const model = supportedModels.has(input.aiModel) ? input.aiModel : "gpt-5.6-luna";
+  const ftpSecure = supportedSecurity.has(input.ftpSecure) ? input.ftpSecure : "explicit";
   return {
     openAiKey: clean(input.openAiKey, 400),
     aiModel: model,
-    ftpHost: clean(input.ftpHost, 240) || "fabianraebel.livinghaus.info",
+    ftpHost: normalizeFtpHost(clean(input.ftpHost, 240)),
     ftpUser: clean(input.ftpUser, 240),
     ftpPassword: clean(input.ftpPassword, 500),
     ftpPath: clean(input.ftpPath, 500) || "/",
+    ftpSecure,
+  };
+}
+
+export function publicCredentialStatus(input = {}) {
+  const credentials = normalizeCredentials(input);
+  return {
+    aiModel: credentials.aiModel,
+    ftpHost: credentials.ftpHost,
+    ftpUser: credentials.ftpUser,
+    ftpPath: credentials.ftpPath,
+    ftpSecure: credentials.ftpSecure,
+    hasOpenAiKey: Boolean(credentials.openAiKey),
+    hasFtpCredentials: Boolean(credentials.ftpUser && credentials.ftpPassword),
   };
 }
 
@@ -86,10 +116,55 @@ export function looksLikeOpenAiApiKey(value) {
   return /^sk-[a-zA-Z0-9_-]{20,}$/.test(clean(value, 400));
 }
 
+function keychainService(vaultPath) {
+  return vaultPath === CREDENTIAL_VAULT_PATH
+    ? KEYCHAIN_SERVICE
+    : `${KEYCHAIN_SERVICE}.${Buffer.from(vaultPath).toString("base64url").slice(0, 80)}`;
+}
+
+async function saveMacKeychain(credentials, vaultPath) {
+  const serialized = JSON.stringify(credentials);
+  await runProcess("/usr/bin/swift", [
+    KEYCHAIN_HELPER_PATH,
+    "save",
+    keychainService(vaultPath),
+    KEYCHAIN_ACCOUNT,
+    "device-only",
+  ], serialized);
+}
+
+async function loadMacKeychain(vaultPath) {
+  const value = await runProcess("/usr/bin/swift", [
+    KEYCHAIN_HELPER_PATH,
+    "load",
+    keychainService(vaultPath),
+    KEYCHAIN_ACCOUNT,
+    "device-only",
+  ]);
+  return value || null;
+}
+
+async function clearMacKeychain(vaultPath) {
+  await runProcess("/usr/bin/swift", [
+    KEYCHAIN_HELPER_PATH,
+    "delete",
+    keychainService(vaultPath),
+    KEYCHAIN_ACCOUNT,
+    "device-only",
+  ]);
+}
+
 export async function saveCredentialVault(credentials, vaultPath = CREDENTIAL_VAULT_PATH) {
   const normalized = normalizeCredentials(credentials);
   if (normalized.openAiKey && !looksLikeOpenAiApiKey(normalized.openAiKey)) {
     throw new Error("Der OpenAI API-Schlüssel muss mit sk- beginnen und vollständig eingefügt werden.");
+  }
+  if (process.platform === "darwin") {
+    await saveMacKeychain(normalized, vaultPath);
+    return normalized;
+  }
+  if (process.platform !== "win32") {
+    throw new Error("Der Zugangstresor wird derzeit auf macOS und Windows unterstützt.");
   }
   const protectedText = await runPowerShell(PROTECT_SCRIPT, JSON.stringify(normalized));
   await mkdir(dirname(vaultPath), { recursive: true });
@@ -98,12 +173,21 @@ export async function saveCredentialVault(credentials, vaultPath = CREDENTIAL_VA
 }
 
 export async function loadCredentialVault(vaultPath = CREDENTIAL_VAULT_PATH) {
+  if (process.platform === "darwin") {
+    const plainText = await loadMacKeychain(vaultPath);
+    if (!plainText) return { stored: false, credentials: normalizeCredentials() };
+    return { stored: true, credentials: normalizeCredentials(JSON.parse(plainText)) };
+  }
+  if (process.platform !== "win32") {
+    return { stored: false, credentials: normalizeCredentials() };
+  }
+
   let protectedText;
   try {
     protectedText = await readFile(vaultPath, "utf8");
   } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-      if (vaultPath === CREDENTIAL_VAULT_PATH) {
+    if (error && typeof error === "object" && error.code === "ENOENT") {
+      if (vaultPath === CREDENTIAL_VAULT_PATH && process.env.LOCALAPPDATA) {
         try {
           const legacy = await loadCredentialVault(LEGACY_CREDENTIAL_VAULT_PATH);
           if (legacy.stored) {
@@ -111,7 +195,7 @@ export async function loadCredentialVault(vaultPath = CREDENTIAL_VAULT_PATH) {
             return legacy;
           }
         } catch {
-          // Ein nicht lesbarer Alttresor darf den neuen, leeren Tresor nicht blockieren.
+          // Ein nicht lesbarer Alttresor darf den neuen Tresor nicht blockieren.
         }
       }
       return { stored: false, credentials: normalizeCredentials() };
@@ -119,15 +203,16 @@ export async function loadCredentialVault(vaultPath = CREDENTIAL_VAULT_PATH) {
     throw error;
   }
   const plainText = await runPowerShell(UNPROTECT_SCRIPT, protectedText);
-  return {
-    stored: true,
-    credentials: normalizeCredentials(JSON.parse(plainText)),
-  };
+  return { stored: true, credentials: normalizeCredentials(JSON.parse(plainText)) };
 }
 
 export async function clearCredentialVault(vaultPath = CREDENTIAL_VAULT_PATH) {
+  if (process.platform === "darwin") {
+    await clearMacKeychain(vaultPath);
+    return;
+  }
   await rm(vaultPath, { force: true });
-  if (vaultPath === CREDENTIAL_VAULT_PATH) {
+  if (vaultPath === CREDENTIAL_VAULT_PATH && process.platform === "win32") {
     await rm(LEGACY_CREDENTIAL_VAULT_PATH, { force: true });
   }
 }

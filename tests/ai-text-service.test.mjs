@@ -12,6 +12,12 @@ import {
   validateLocationPrivacy,
   validateNovelty,
 } from "../ai-text-service.mjs";
+import {
+  buildListingHeadline,
+  enforceListingCopy,
+  FIXED_EQUIPMENT_TEXT,
+  FIXED_OTHER_TEXT,
+} from "../listing-copy.mjs";
 
 const longText = (sentence, minimum) => {
   let value = sentence;
@@ -19,13 +25,20 @@ const longText = (sentence, minimum) => {
   return value;
 };
 
-const validTexts = {
-  title: "Ein Zuhause mit Weitblick: durchdacht bauen in Schulzendorf",
-  description: longText("Der projektierte Entwurf verbindet klare Architektur mit flexibel nutzbaren Räumen und einer sorgfältig abgestimmten Planung für den Familienalltag.", 1250),
-  equipment: longText("Die geplante Ausstattung kombiniert eine moderne Wärmepumpe, komfortable Flächen und individuell zu vereinbarende Materialien gemäß Bau- und Leistungsbeschreibung.", 1550),
-  location: longText("Das Grundstück liegt in Schulzendorf und bietet einen stimmigen Rahmen für das geplante Zuhause; alle weiteren Details werden anhand bestätigter Standortdaten beurteilt.", 550),
-  other: longText("Das Haus ist projektiert; maßgeblich sind die konkrete Planung, die Grundstücksprüfung und die individuell vereinbarte Bau- und Leistungsbeschreibung.", 600),
+const testHouse = {
+  id: "sun-113-v6",
+  name: "SUN 113 V6",
+  livingArea: 113.4,
+  rooms: 5,
 };
+const testProject = { city: "Schulzendorf", district: "" };
+const validTexts = enforceListingCopy({
+  title: "Entwurf",
+  description: longText("Der projektierte Entwurf verbindet klare Architektur mit flexibel nutzbaren Räumen und einer sorgfältig abgestimmten Planung für den Familienalltag.", 1250),
+  equipment: "Wird ersetzt.",
+  location: longText("Das Grundstück liegt in Schulzendorf und bietet einen stimmigen Rahmen für das geplante Zuhause; alle weiteren Details werden anhand bestätigter Standortdaten beurteilt.", 550),
+  other: "Wird ersetzt.",
+}, { house: testHouse, project: testProject });
 
 test("removes the exact house number before building the AI source data", () => {
   const source = buildSourceData({
@@ -47,7 +60,9 @@ test("uses the Responses API quality settings and a strict text schema", () => {
   assert.equal(request.reasoning.effort, "medium");
   assert.equal(request.text.verbosity, "high");
   assert.equal(request.text.format.type, "json_schema");
-  assert.deepEqual(request.text.format.schema.required, ["title", "description", "equipment", "location", "other"]);
+  assert.deepEqual(request.text.format.schema.required, ["description", "location"]);
+  assert.deepEqual(Object.keys(request.text.format.schema.properties), ["description", "location"]);
+  assert.match(request.input[0].content[0].text, /gerundeter Wohnfläche, Zimmerzahl/);
 });
 
 test("uses GPT-5.6 Luna as the economical default", () => {
@@ -79,10 +94,22 @@ test("sends uploaded images at low detail and requires structured short captions
 });
 
 test("accepts complete texts and rejects short or Markdown-formatted output", () => {
-  assert.deepEqual(validateListingTexts(validTexts), []);
-  const errors = validateListingTexts({ ...validTexts, description: "## Zu kurz" });
+  assert.deepEqual(validateListingTexts(validTexts, testHouse, testProject), []);
+  const errors = validateListingTexts({ ...validTexts, description: "## Zu kurz" }, testHouse, testProject);
   assert.ok(errors.some((value) => value.includes("zu kurz")));
   assert.ok(errors.some((value) => value.includes("Markdown")));
+});
+
+test("requires the checklist headline with place, rounded area and rooms", () => {
+  const title = buildListingHeadline(testHouse, testProject);
+  assert.match(title, /in Schulzendorf:/);
+  assert.match(title, /113 m², 5 Zimmer,/);
+  assert.match(title, /!$/);
+  assert.deepEqual(validateListingTexts(validTexts, testHouse, testProject), []);
+  const errors = validateListingTexts({ ...validTexts, title: "Dein Zuhause in Schulzendorf" }, testHouse, testProject);
+  assert.ok(errors.some((value) => value.includes("Wohnfläche")));
+  assert.equal(validTexts.equipment, FIXED_EQUIPMENT_TEXT);
+  assert.equal(validTexts.other, FIXED_OTHER_TEXT);
 });
 
 test("extracts structured text from a Responses API output block", () => {
@@ -94,8 +121,9 @@ test("extracts structured text from a Responses API output block", () => {
 
 test("rejects a new version that repeats the previous listing", () => {
   const errors = validateNovelty(validTexts, validTexts);
-  assert.ok(errors.some((value) => value.includes("Überschrift")));
   assert.ok(errors.some((value) => value.includes("Objektbeschreibung")));
+  assert.ok(errors.some((value) => value.includes("Lage")));
+  assert.equal(errors.some((value) => value.includes("Ausstattung")), false);
 });
 
 test("rejects street names in every AI-generated listing field", () => {

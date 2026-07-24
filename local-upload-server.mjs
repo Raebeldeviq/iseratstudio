@@ -1,6 +1,6 @@
 import { Client } from "basic-ftp";
-import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, open, rm } from "node:fs/promises";
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { appendFile, mkdir, open, readFile, rm, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { dirname, join, parse } from "node:path";
@@ -9,8 +9,11 @@ import { generateAiImageCaptions, generateAiListing, validateOpenAiApiKey } from
 import {
   clearCredentialVault,
   loadCredentialVault,
+  normalizeCredentials,
+  publicCredentialStatus,
   saveCredentialVault,
 } from "./credential-vault.mjs";
+import { APPLICATION_DATA_DIRECTORY } from "./platform-paths.mjs";
 import {
   commitCatalogSnapshot,
   loadCatalogSnapshot,
@@ -20,6 +23,7 @@ import {
   saveCatalogImage,
   startCatalogSnapshot,
 } from "./catalog-store.mjs";
+import { getMediaLibraryItem, queryMediaLibrary, recommendedMediaSequence } from "./media-library.mjs";
 
 const HOST = "127.0.0.1";
 const PORT = 43182;
@@ -27,23 +31,70 @@ const MAX_BODY_BYTES = 180 * 1024 * 1024;
 const MAX_CATALOG_BODY_BYTES = 500 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 100 * 1024 * 1024;
 const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
-const UPLOAD_LOG_PATH = join(
-  process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local"),
-  "Fabian-Pascal Inseratestudio",
-  "upload.log",
-);
+const UPLOAD_LOG_PATH = join(APPLICATION_DATA_DIRECTORY, "upload.log");
+const SESSION_TOKEN = String(process.env.FPI_SESSION_TOKEN || randomBytes(32).toString("hex"));
 const allowedOrigins = new Set([
   "http://localhost:43181",
   "http://127.0.0.1:43181",
 ]);
+let credentialCache;
+
+async function credentialVault() {
+  if (!credentialCache) credentialCache = await loadCredentialVault();
+  return credentialCache;
+}
 
 function headers(origin) {
   return {
     "Access-Control-Allow-Origin": allowedOrigins.has(origin) ? origin : "http://localhost:43181",
-    "Access-Control-Allow-Headers": "Content-Type, X-FPI-Filename, X-FPI-Ftp-Host, X-FPI-Ftp-User, X-FPI-Ftp-Password, X-FPI-Ftp-Path",
+    "Access-Control-Allow-Headers": "Content-Type, X-FPI-Filename, X-FPI-Session",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
     "Cache-Control": "no-store",
     "Content-Type": "application/json; charset=utf-8",
+  };
+}
+
+function validSession(request) {
+  const supplied = String(request.headers["x-fpi-session"] || "");
+  const expected = Buffer.from(SESSION_TOKEN);
+  const actual = Buffer.from(supplied);
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+function mediaSignature(id) {
+  return createHmac("sha256", SESSION_TOKEN)
+    .update(`media:${String(id || "")}`)
+    .digest("base64url");
+}
+
+function validMediaSignature(id, suppliedSignature) {
+  const expected = Buffer.from(mediaSignature(id));
+  const actual = Buffer.from(String(suppliedSignature || ""));
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+function isGitLfsPointer(data) {
+  return data.length < 1024
+    && data.subarray(0, 100).toString("utf8").startsWith("version https://git-lfs.github.com/spec/v1");
+}
+
+function publicMediaItem(item) {
+  const signature = mediaSignature(item.id);
+  return {
+    id: item.id,
+    relativePath: item.relativePath,
+    filename: item.filename,
+    caption: item.caption,
+    mimeType: item.mimeType,
+    collection: item.collection,
+    family: item.family,
+    houseModel: item.houseModel,
+    group: item.group,
+    kind: item.kind,
+    role: item.role,
+    captionLocked: item.captionLocked === true,
+    brandedCover: item.brandedCover === true,
+    imageUrl: `http://${HOST}:${PORT}/media-library/image?id=${encodeURIComponent(item.id)}&sig=${encodeURIComponent(signature)}`,
   };
 }
 
@@ -105,6 +156,28 @@ async function readBytes(request, maximumBytes = MAX_IMAGE_BYTES) {
   return Buffer.concat(chunks);
 }
 
+function ftpAccessOptions(ftp) {
+  return {
+    host: String(ftp.ftpHost),
+    user: String(ftp.ftpUser),
+    password: String(ftp.ftpPassword),
+    secure: ftp.ftpSecure === "implicit" ? "implicit" : ftp.ftpSecure === "explicit",
+    secureOptions: { rejectUnauthorized: true },
+  };
+}
+
+async function verifyFtpCredentials(ftp) {
+  if (!ftp.ftpHost || !ftp.ftpUser || !ftp.ftpPassword) return false;
+  const verificationClient = new Client(30_000);
+  try {
+    await verificationClient.access(ftpAccessOptions(ftp));
+    if (ftp.ftpPath && ftp.ftpPath !== "/") await verificationClient.cd(ftp.ftpPath);
+    return true;
+  } finally {
+    verificationClient.close();
+  }
+}
+
 async function saveToDownloads(archive, requestedFilename) {
   const downloadsDirectory = join(homedir(), "Downloads");
   await mkdir(downloadsDirectory, { recursive: true });
@@ -141,11 +214,7 @@ const server = createServer(async (request, response) => {
     return;
   }
 
-  if (request.method === "GET" && pathname === "/health") {
-    send(response, 200, { ok: true, service: "fabian-pascal-helper" }, origin);
-    return;
-  }
-
+  const isHealth = request.method === "GET" && pathname === "/health";
   const isUpload = request.method === "POST" && pathname === "/upload";
   const isBinaryUpload = request.method === "POST" && pathname === "/upload-binary";
   const isLocalSave = request.method === "POST" && pathname === "/save-package";
@@ -161,7 +230,10 @@ const server = createServer(async (request, response) => {
   const isCatalogV2Commit = request.method === "POST" && pathname === "/catalog-v2/commit";
   const isCatalogV2ManifestLoad = request.method === "GET" && pathname === "/catalog-v2/manifest";
   const isCatalogV2ImageLoad = request.method === "GET" && pathname === "/catalog-v2/image";
-  if (!isUpload && !isBinaryUpload && !isLocalSave && !isTextGeneration && !isImageCaptionGeneration && !isOpenAiKeyValidation && !isCredentialLoad && !isCredentialSave && !isCatalogLoad && !isCatalogSave && !isCatalogV2Start && !isCatalogV2ImageSave && !isCatalogV2Commit && !isCatalogV2ManifestLoad && !isCatalogV2ImageLoad) {
+  const isMediaLibraryList = request.method === "GET" && pathname === "/media-library";
+  const isMediaLibrarySequence = request.method === "GET" && pathname === "/media-library/sequence";
+  const isMediaLibraryImage = request.method === "GET" && pathname === "/media-library/image";
+  if (!isHealth && !isUpload && !isBinaryUpload && !isLocalSave && !isTextGeneration && !isImageCaptionGeneration && !isOpenAiKeyValidation && !isCredentialLoad && !isCredentialSave && !isCatalogLoad && !isCatalogSave && !isCatalogV2Start && !isCatalogV2ImageSave && !isCatalogV2Commit && !isCatalogV2ManifestLoad && !isCatalogV2ImageLoad && !isMediaLibraryList && !isMediaLibrarySequence && !isMediaLibraryImage) {
     send(response, 404, { ok: false, message: "Nicht gefunden." }, origin);
     return;
   }
@@ -171,9 +243,91 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  const mediaImageId = requestUrl.searchParams.get("id");
+  const signedMediaRequest = isMediaLibraryImage
+    && validMediaSignature(mediaImageId, requestUrl.searchParams.get("sig"));
+  if (!validSession(request) && !signedMediaRequest) {
+    send(response, 401, { ok: false, message: "Die lokale Sitzung ist nicht autorisiert. Bitte die App über den macOS-Startknopf öffnen." }, origin);
+    return;
+  }
+
+  if (request.method === "GET" && pathname === "/health") {
+    send(response, 200, { ok: true, service: "fabian-pascal-helper", platform: process.platform }, origin);
+    return;
+  }
+
   let client;
   let temporaryUploadPath = "";
   try {
+    if (isMediaLibrarySequence) {
+      const result = await recommendedMediaSequence(requestUrl.searchParams.get("coverId"));
+      send(response, 200, {
+        ok: true,
+        warnings: result.warnings,
+        priceMatch: result.priceMatch,
+        items: result.items.map(publicMediaItem),
+      }, origin);
+      return;
+    }
+
+    if (isMediaLibraryList) {
+      const result = await queryMediaLibrary({
+        query: requestUrl.searchParams.get("query") || "",
+        group: requestUrl.searchParams.get("group") || "",
+        kind: requestUrl.searchParams.get("kind") || "",
+        page: requestUrl.searchParams.get("page") || 1,
+        pageSize: requestUrl.searchParams.get("pageSize") || 36,
+      });
+      send(response, 200, {
+        ok: true,
+        available: result.available,
+        total: result.total,
+        libraryTotal: result.libraryTotal,
+        page: result.page,
+        pages: result.pages,
+        pageSize: result.pageSize,
+        groups: result.groups,
+        items: result.items.map(publicMediaItem),
+      }, origin);
+      return;
+    }
+
+    if (isMediaLibraryImage) {
+      const item = await getMediaLibraryItem(mediaImageId);
+      if (!item) {
+        send(response, 404, { ok: false, message: "Das Bild wurde in der Medienbibliothek nicht gefunden." }, origin);
+        return;
+      }
+      const fileStats = await stat(item.absolutePath);
+      if (!fileStats.isFile() || fileStats.size > MAX_IMAGE_BYTES) {
+        throw new Error("Das Bild ist ungültig oder größer als 100 MB.");
+      }
+      const controller = new AbortController();
+      const downloadTimeout = setTimeout(() => controller.abort(), 45_000);
+      let data;
+      try {
+        data = await readFile(item.absolutePath, { signal: controller.signal });
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") {
+          throw new Error("Die Mediendatei konnte nicht innerhalb von 45 Sekunden geladen werden. Bitte Git LFS beziehungsweise den konfigurierten Medienpfad prüfen.");
+        }
+        throw error;
+      } finally {
+        clearTimeout(downloadTimeout);
+      }
+      if (isGitLfsPointer(data)) {
+        throw new Error("Die Bildoriginale wurden noch nicht geladen. Bitte im App-Ordner zuerst „git lfs pull“ ausführen.");
+      }
+      response.writeHead(200, {
+        ...headers(origin),
+        "Content-Type": item.mimeType,
+        "Content-Length": String(data.length),
+        "X-Content-Type-Options": "nosniff",
+      });
+      response.end(data);
+      return;
+    }
+
     if (isCatalogV2ManifestLoad) {
       const result = await loadCatalogManifest();
       send(response, 200, { ok: true, ...result }, origin);
@@ -198,8 +352,12 @@ const server = createServer(async (request, response) => {
     }
 
     if (isCredentialLoad) {
-      const result = await loadCredentialVault();
-      send(response, 200, { ok: true, ...result }, origin);
+      const result = await credentialVault();
+      send(response, 200, {
+        ok: true,
+        stored: result.stored,
+        credentials: publicCredentialStatus(result.credentials),
+      }, origin);
       return;
     }
 
@@ -215,13 +373,9 @@ const server = createServer(async (request, response) => {
 
     if (isBinaryUpload) {
       const filename = safeFilename(decodedHeader(request, "x-fpi-filename"));
-      const ftp = {
-        host: decodedHeader(request, "x-fpi-ftp-host"),
-        user: decodedHeader(request, "x-fpi-ftp-user"),
-        password: decodedHeader(request, "x-fpi-ftp-password"),
-        remotePath: decodedHeader(request, "x-fpi-ftp-path") || "/",
-      };
-      if (!ftp.host || !ftp.user || !ftp.password) {
+      const vault = await credentialVault();
+      const ftp = vault.credentials;
+      if (!ftp.ftpHost || !ftp.ftpUser || !ftp.ftpPassword) {
         throw new Error("Der FTP-Zugang ist unvollständig.");
       }
 
@@ -234,8 +388,8 @@ const server = createServer(async (request, response) => {
       await logUpload("receiving-started", {
         filename,
         expectedBytes: Number(request.headers["content-length"] || 0),
-        host: ftp.host,
-        remotePath: ftp.remotePath,
+        host: ftp.ftpHost,
+        remotePath: ftp.ftpPath,
       });
       try {
         for await (const chunk of request) {
@@ -253,20 +407,17 @@ const server = createServer(async (request, response) => {
         await handle.close();
       }
       if (!archiveBytes) throw new Error("Das Importpaket ist leer.");
-      await logUpload("received", { filename, archiveBytes, host: ftp.host, remotePath: ftp.remotePath });
+      await logUpload("received", { filename, archiveBytes, host: ftp.ftpHost, remotePath: ftp.ftpPath });
 
       client = new Client(300_000);
       client.ftp.verbose = false;
       await client.access({
-        host: ftp.host,
-        user: ftp.user,
-        password: ftp.password,
-        secure: false,
+        ...ftpAccessOptions(ftp),
       });
-      if (ftp.remotePath && ftp.remotePath !== "/") await client.cd(ftp.remotePath);
-      await logUpload("connected", { filename, host: ftp.host, remotePath: ftp.remotePath });
+      if (ftp.ftpPath && ftp.ftpPath !== "/") await client.cd(ftp.ftpPath);
+      await logUpload("connected", { filename, host: ftp.ftpHost, remotePath: ftp.ftpPath, transport: ftp.ftpSecure });
       await client.uploadFrom(temporaryUploadPath, filename);
-      await logUpload("transferred", { filename, archiveBytes, host: ftp.host, remotePath: ftp.remotePath });
+      await logUpload("transferred", { filename, archiveBytes, host: ftp.ftpHost, remotePath: ftp.ftpPath, transport: ftp.ftpSecure });
       send(response, 200, {
         ok: true,
         message: `Importpaket „${filename}“ wurde an Immoprofessional übertragen. Bitte den Importbericht und den Entwurfsstatus prüfen.`,
@@ -297,22 +448,40 @@ const server = createServer(async (request, response) => {
     if (isCredentialSave) {
       if (body.clear === true) {
         await clearCredentialVault();
+        credentialCache = undefined;
         send(response, 200, { ok: true, stored: false }, origin);
       } else {
-        await saveCredentialVault(body.credentials);
-        send(response, 200, { ok: true, stored: true }, origin);
+        const current = await credentialVault();
+        const incoming = body.credentials && typeof body.credentials === "object" ? body.credentials : {};
+        const nextCredentials = normalizeCredentials({
+          ...current.credentials,
+          ...incoming,
+          openAiKey: incoming.openAiKey || current.credentials.openAiKey,
+          ftpPassword: incoming.ftpPassword || current.credentials.ftpPassword,
+        });
+        if (incoming.ftpPassword && (!nextCredentials.ftpHost || !nextCredentials.ftpUser)) {
+          throw new Error("Host und Benutzername werden für die Prüfung des Immoprofessional-Zugangs benötigt.");
+        }
+        const ftpValidated = incoming.ftpPassword
+          ? await verifyFtpCredentials(nextCredentials)
+          : false;
+        const savedCredentials = await saveCredentialVault(nextCredentials);
+        credentialCache = { stored: true, credentials: savedCredentials };
+        send(response, 200, { ok: true, stored: true, ftpValidated }, origin);
       }
       return;
     }
 
     if (isTextGeneration) {
-      const result = await generateAiListing(body);
+      const vault = await credentialVault();
+      const result = await generateAiListing({ ...body, apiKey: vault.credentials.openAiKey });
       send(response, 200, { ok: true, ...result }, origin);
       return;
     }
 
     if (isImageCaptionGeneration) {
-      const result = await generateAiImageCaptions(body);
+      const vault = await credentialVault();
+      const result = await generateAiImageCaptions({ ...body, apiKey: vault.credentials.openAiKey });
       send(response, 200, { ok: true, ...result }, origin);
       return;
     }
@@ -335,38 +504,34 @@ const server = createServer(async (request, response) => {
         ok: true,
         filename: saved.filename,
         path: saved.path,
-        message: `Importpaket „${saved.filename}“ wurde im Windows-Downloadordner gespeichert.`,
+        message: `Importpaket „${saved.filename}“ wurde im Downloadordner gespeichert.`,
       }, origin);
       return;
     }
 
-    const ftp = body.ftp ?? {};
-    if (!ftp.host || !ftp.user || !ftp.password) {
+    const vault = await credentialVault();
+    const ftp = vault.credentials;
+    if (!ftp.ftpHost || !ftp.ftpUser || !ftp.ftpPassword) {
       throw new Error("Der FTP-Zugang ist unvollständig.");
     }
 
     const filename = safeFilename(body.filename);
-    const remotePath = String(ftp.remotePath || "/").trim();
+    const remotePath = String(ftp.ftpPath || "/").trim();
     await logUpload("started", {
       filename,
       archiveBytes: archive.length,
-      host: String(ftp.host),
+      host: String(ftp.ftpHost),
       remotePath,
     });
 
     client = new Client(45_000);
     client.ftp.verbose = false;
-    await client.access({
-      host: String(ftp.host),
-      user: String(ftp.user),
-      password: String(ftp.password),
-      secure: false,
-    });
+    await client.access(ftpAccessOptions(ftp));
 
     if (remotePath && remotePath !== "/") await client.cd(remotePath);
-    await logUpload("connected", { filename, host: String(ftp.host), remotePath });
+    await logUpload("connected", { filename, host: String(ftp.ftpHost), remotePath, transport: ftp.ftpSecure });
     await client.uploadFrom(Readable.from(archive), filename);
-    await logUpload("transferred", { filename, archiveBytes: archive.length, host: String(ftp.host), remotePath });
+    await logUpload("transferred", { filename, archiveBytes: archive.length, host: String(ftp.ftpHost), remotePath, transport: ftp.ftpSecure });
     send(response, 200, {
       ok: true,
       message: `Importpaket „${filename}“ wurde an Immoprofessional übertragen. Bitte den Importbericht und den Entwurfsstatus prüfen.`,
