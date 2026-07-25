@@ -36,30 +36,36 @@ mehr erforderlich.
 
 ## Arbeitsablauf
 
-1. Unter **Haustypen** Hausdaten pflegen und in der **integrierten Medienbibliothek**
+1. Unter **Grundstücke** Grundstücke aus Excel mit Prüfansicht importieren oder
+   manuell anlegen. Mögliche Dubletten werden nie ungefragt überschrieben.
+   Grundstücke lassen sich bearbeiten, filtern, mehrfach auswählen und gesammelt
+   an die Projektierung übergeben. Ein optionales PDF-Exposé bleibt lokal und
+   liefert nach manueller Prüfung ausschließlich Straße, PLZ, Ort,
+   Grundstücksgröße und Kaufpreis.
+2. Unter **Haustypen** Hausdaten pflegen und in der **integrierten Medienbibliothek**
    genau eine versionsbezeichnete SUN-/SOL-Hausansicht mit LivingHaus-Logo
    auswählen. **Komplette Bildfolge erstellen** ergänzt automatisch die sechs
    Innenräume, den emotionalen Catch, die zur Version passenden Grundrisse,
    Auszeichnungen, Vertrauensmotiv und QR-Abschluss. Eine nicht eindeutige
    Hausversion oder ein fehlender Grundriss blockiert die Übernahme, statt eine
    möglicherweise falsche Datei zu verwenden.
-2. Unter **Adresse & Auswahl** Grundstücksdaten erfassen, beliebig viele
+3. Unter **Adresse & Auswahl** die übergebenen Grundstücke prüfen, beliebig viele
    Adressen markieren und einen zentralen Hauspool festlegen. Die gewichtete
    Vorschau verteilt pro Grundstück genau vier unterschiedliche Häuser. Fabian und Pascal besitzen getrennte Adressansichten;
-   einzelne Adressen können gespeichert oder gesammelt per Excel importiert
-   werden. Importierte Adressen werden offline aus PLZ und Ort um Bundesland
+   einzelne Adressen können gespeichert werden. Importierte Grundstücke werden
+   offline aus PLZ und Ort um Bundesland
    sowie Landkreis ergänzt, entsprechend gruppiert und innerhalb der Gruppen
    nach PLZ sortiert. Die vorgeschriebenen Texte stehen direkt unter den Grundstücksdaten
    vollständig in vergrößerten Feldern. Unter der Hausauswahl erscheinen nur
    noch Überschrift, Hausbeschreibung und Lage je Haustyp; die erste Vorschau
    ist geöffnet.
-3. Unter **Export & Upload** Anbieterdaten und die benötigten Zugänge eintragen.
+4. Unter **Export & Upload** Anbieterdaten und die benötigten Zugänge eintragen.
    Mit **Zugangsdaten prüfen & speichern** wird ein neuer OpenAI-Zugang geprüft;
    ein neu eingegebener Immoprofessional-Zugang wird einschließlich Zielordner
    und FTPS-Zertifikat geprüft.
-4. Texte erzeugen, anschließend unter **Texte & Vorschau** fachlich und rechtlich
+5. Texte erzeugen, anschließend unter **Texte & Vorschau** fachlich und rechtlich
    kontrollieren.
-5. Unter **Adresse & Auswahl** Häuser einzeln austauschen, fixieren,
+6. Unter **Adresse & Auswahl** Häuser einzeln austauschen, fixieren,
    grundstücksbezogen ausschließen oder neu verteilen und die geprüfte
    Vierer-Vorschau übernehmen. Unter
    **Export & Upload** Reihenfolge, Hausvarianten, Aktionsbild, Status,
@@ -68,6 +74,32 @@ mehr erforderlich.
 Der Import erstellt Entwürfe. Adressfreigabe und Portalweitergabe sind im
 OpenImmo-Paket deaktiviert. Die tatsächliche Veröffentlichung bleibt eine
 bewusste Aktion in Immoprofessional.
+
+## Grundstücksverwaltung und Exposé-PDFs
+
+Grundstücke sind ab Datenschema 3 eigenständige Datensätze mit interner ID,
+Straße, Hausnummer, PLZ, Ort, Grundstücksgröße, Kaufpreis, Zeitstempeln und
+Aktivstatus. Projektierungen referenzieren den Grundstücksdatensatz; die
+bisherigen Projektfelder bleiben für bestehende Export- und Uploadpfade
+kompatibel und werden aus der zentralen Quelle synchronisiert.
+
+Der Excel-Import speichert erst nach einer sichtbaren Vorschau. Ungültige Zeilen
+sind nicht auswählbar. Bei einer Kombination aus gleicher Straße, Hausnummer,
+PLZ und Ort ist die sichere Voreinstellung **Überspringen**; Aktualisieren oder
+bewusstes Neu-Anlegen erfordern eine ausdrückliche Auswahl.
+
+Exposé-PDFs werden unter
+`~/Library/Application Support/Fabian-Pascal Inseratestudio/plot-exposes`
+gespeichert. Upload und Lesen laufen ausschließlich über den lokalen,
+sitzungsgeschützten Helfer. Entfernen und Ersetzen verschieben Altdateien in
+ein lokales Archiv. PDF-Inhalte, Bilder und Dateien gelangen weder in die
+OpenImmo-Pakete noch an die Text-KI. Die Auslesung führt keine
+Bebaubarkeits-, Risiko-, Makler-, Provisions- oder Bildanalyse durch.
+
+Der attraktive Lageverkaufstext nutzt nur Ort, Ortsteil und hinterlegte,
+geprüfte regionale Grundnotizen. Der Satz zur konkreten Bebaubarkeit und
+Hauspositionierung wird separat angezeigt und als eigener sachlicher
+OpenImmo-Textwert exportiert.
 
 ## Vorinstallierter Hauskatalog
 
@@ -163,6 +195,8 @@ Preisausschnitt keinen Wert; die App erfindet dafür keinen Ersatzpreis.
 - Uploads werden einzeln gepackt, lokal zwischengespeichert und nach Abschluss
   oder Fehler entfernt. Das Diagnoseprotokoll enthält keine Zugangsdaten.
 - An die Text-KI werden weder Straße, Hausnummer noch Postleitzahl übermittelt.
+- Exposé-PDFs werden nur lokal verarbeitet und nicht an die Text-KI,
+  Immoprofessional oder ein anderes Portal übertragen.
 - Die integrierte Medienliste erfordert die lokale Sitzung. Vorschaubilder werden
   ausschließlich über signierte, nicht erratbare URLs ausgeliefert; freie
   Dateipfade können nicht an den Helfer übergeben werden.

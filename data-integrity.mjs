@@ -12,8 +12,9 @@ import {
   WORKFLOW_STATUS,
 } from "./workflow-status.mjs";
 import { enforceSinglePromotionAssignment } from "./promotion-images.mjs";
+import { normalizePlotState } from "./plot-records.mjs";
 
-export const STUDIO_DATA_SCHEMA_VERSION = 2;
+export const STUDIO_DATA_SCHEMA_VERSION = 3;
 
 function normalizedText(value) {
   return String(value ?? "")
@@ -170,7 +171,7 @@ function cleanProject(project, now, counters) {
 }
 
 function projectAddressFingerprint(project) {
-  const key = [project?.street, project?.houseNumber, project?.zip, project?.city].map(normalizedText).join("|");
+  const key = [project?.street, project?.houseNumber, project?.postalCode ?? project?.zip, project?.city].map(normalizedText).join("|");
   return key === "|||" ? "" : key;
 }
 
@@ -183,6 +184,7 @@ function houseFingerprint(house) {
 export function auditStudioState(state, options = {}) {
   const now = String(options.now || new Date().toISOString());
   const houses = Array.isArray(state?.houses) ? state.houses : [];
+  const plots = Array.isArray(state?.plots) ? state.plots : [];
   const projects = Array.isArray(state?.projects) ? state.projects : [];
   const listings = projects.flatMap((project) => Array.isArray(project.listings) ? project.listings : []);
   const controlRecords = projects.flatMap((project) => {
@@ -205,6 +207,8 @@ export function auditStudioState(state, options = {}) {
   };
 
   add("legacy-project-notes", "safe", projects.filter((project) => Object.hasOwn(project, "notes")).length, "remove");
+  add("duplicate-plot-id", "manual", duplicateGroups(plots, (plot) => plot.id).length, "review");
+  add("duplicate-plot-address", "manual", duplicateGroups(plots.filter((plot) => plot.isActive !== false), projectAddressFingerprint).length, "review");
   add("duplicate-project-id", "manual", duplicateGroups(projects, (project) => project.id).length, "review");
   add("duplicate-project-address", "manual", duplicateGroups(projects, projectAddressFingerprint).length, "review");
   add("duplicate-house-id", "manual", duplicateGroups(houses, (house) => house.id).length, "review");
@@ -239,6 +243,7 @@ export function auditStudioState(state, options = {}) {
     generatedAt: now,
     summary: {
       houses: houses.length,
+      plots: plots.length,
       projects: projects.length,
       listings: listings.length,
       controls: controls.length,
@@ -282,7 +287,7 @@ export function cleanupStudioState(state, options = {}) {
   const schedulerRuns = dedupeExact((state.scheduler?.runs || []).map((run) => statusRecord(run, "status", WORKFLOW_STATUS.DRAFT)), (run) => run.id || "");
   counters.removedExactSchedulerRuns += schedulerRuns.removed;
   const scheduler = state.scheduler ? statusRecord(state.scheduler, "lastStatus", WORKFLOW_STATUS.DRAFT) : state.scheduler;
-  const cleaned = {
+  const cleanedBase = {
     ...state,
     dataSchemaVersion: STUDIO_DATA_SCHEMA_VERSION,
     projects,
@@ -291,6 +296,7 @@ export function cleanupStudioState(state, options = {}) {
     uploadHistory: uploadHistory.values.slice(-MAX_UPLOAD_LOGS),
     ...(scheduler ? { scheduler: { ...scheduler, runs: schedulerRuns.values.slice(-MAX_SCHEDULER_LOGS) } } : {}),
   };
+  const cleaned = normalizePlotState(cleanedBase, { now });
   const after = auditStudioState(cleaned, { now });
   return {
     state: cleaned,

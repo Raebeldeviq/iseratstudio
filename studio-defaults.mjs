@@ -78,6 +78,7 @@ export function createInitialStudioState({ houses } = {}) {
   return {
     version: 1,
     houses: initialHouses,
+    plots: [],
     projects: initialProjects,
     provider: createDefaultProvider(),
     promotionImage: null,

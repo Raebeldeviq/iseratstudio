@@ -2,7 +2,6 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { ChangeEvent, useEffect, useState } from "react";
-import { readSheet } from "read-excel-file/browser";
 import {
   captionForImageRole,
   INTERIOR_IMAGE_ROLES,
@@ -55,6 +54,7 @@ import {
 } from "../listing-scheduler.mjs";
 import {
   fillMissingProjectingDefaults,
+  FACTUAL_BUILDABILITY_NOTE,
   fillMissingListingCopy,
   FIXED_ANNOTATION_TEXT,
   FIXED_DESCRIPTION_CTA,
@@ -67,7 +67,7 @@ import {
   IMMOPROFESSIONAL_DEFAULTS,
   isMissingProjectingValue,
 } from "../listing-copy.mjs";
-import { parseAddressWorkbookRows } from "./lib/address-import";
+import PlotManagement from "./components/PlotManagement";
 import { APP_VERSION } from "./lib/app-version.mjs";
 import { buildImportPackage } from "./lib/openimmo";
 import {
@@ -95,6 +95,14 @@ import {
 } from "../house-distribution.mjs";
 import { planListingRotation } from "../rotation-service.mjs";
 import { cleanupStudioState } from "../data-integrity.mjs";
+import {
+  applyPlotToProject,
+  createProjectFromPlot,
+  normalizePlotState,
+  patchPlotFromProject,
+  plotAddressKey,
+  plotFromProject,
+} from "../plot-records.mjs";
 import { normalizeWorkflowStatus, workflowStatusLabel, WORKFLOW_STATUS } from "../workflow-status.mjs";
 import {
   compareProjectsByRegion,
@@ -120,6 +128,7 @@ import type {
   PromotionImageAsset,
   PromotionSettings,
   PromotionUsage,
+  PlotRecord,
   ProjectInput,
   SchedulerSettings,
   ProviderSettings,
@@ -138,7 +147,7 @@ function normalizePromotionLibrary(value: StudioState): PromotionLibraryState {
   return normalizePromotionLibraryValue(value) as PromotionLibraryState;
 }
 
-type Tab = "houses" | "project" | "preview" | "manager" | "settings";
+type Tab = "plots" | "houses" | "project" | "preview" | "manager" | "settings";
 type AiModel = "gpt-5.6-luna" | "gpt-5.6-terra" | "gpt-5.6-sol";
 type FtpSecurity = "explicit" | "implicit" | "none";
 type MediaLibraryKind = "house" | "floorplan" | "interior" | "location" | "marketing";
@@ -180,7 +189,6 @@ type BatchUploadProgress = {
 const MIN_HOUSE_IMAGES = 4;
 const MAX_HOUSE_IMAGES = 14;
 const MAX_HOUSE_TEMPLATES = 18;
-const MAX_ADDRESS_IMPORT_BYTES = 10 * 1024 * 1024;
 const MAX_PROMOTION_IMAGE_BYTES = 25 * 1024 * 1024;
 const HELPER_BASE_URL = "http://127.0.0.1:43182";
 const HOUSE_PRICE_ENTRIES = housePriceCatalogEntries();
@@ -714,7 +722,7 @@ function snapshotTime(value: string): number {
 }
 
 export default function InseratStudio() {
-  const [tab, setTab] = useState<Tab>("houses");
+  const [tab, setTab] = useState<Tab>("plots");
   const [state, setState] = useState<StudioState>(initialState);
   const [ready, setReady] = useState(false);
   const [saveLabel, setSaveLabel] = useState("Lokaler Speicher wird vorbereitet …");
@@ -731,6 +739,7 @@ export default function InseratStudio() {
   const [hasStoredFtpCredentials, setHasStoredFtpCredentials] = useState(false);
   const [excludedUploadIds, setExcludedUploadIds] = useState<string[]>([]);
   const [selectedBatchProjectIds, setSelectedBatchProjectIds] = useState<string[]>([]);
+  const [selectedPlotIds, setSelectedPlotIds] = useState<string[]>([]);
   const [promotionOverrides, setPromotionOverrides] = useState<Record<string, PromotionOverride>>({});
   const [batchItemStatuses, setBatchItemStatuses] = useState<Record<string, { status: string; error: string }>>({});
   const [batchUploadProgress, setBatchUploadProgress] = useState<BatchUploadProgress>({
@@ -774,8 +783,6 @@ export default function InseratStudio() {
   const [mediaLibraryError, setMediaLibraryError] = useState("");
   const [selectedMediaItems, setSelectedMediaItems] = useState<MediaLibraryItem[]>([]);
   const [importingMedia, setImportingMedia] = useState(false);
-  const [importingAddresses, setImportingAddresses] = useState(false);
-  const [addressImportReport, setAddressImportReport] = useState<string[]>([]);
   const [groupOperationRunning, setGroupOperationRunning] = useState(false);
   const [lastGroupDryRun, setLastGroupDryRun] = useState<{
     ok: boolean;
@@ -978,6 +985,11 @@ export default function InseratStudio() {
         maximumImages: MAX_HOUSE_IMAGES,
       })
     : [];
+  const plotRecords = (state.plots || []) as PlotRecord[];
+  const linkedProjectCounts = state.projects.reduce<Record<string, number>>((counts, project) => {
+    if (project.plotId) counts[project.plotId] = (counts[project.plotId] || 0) + 1;
+    return counts;
+  }, {});
   const ownerProjects = state.projects
     .filter((project) => projectOwner(project) === activeOwner)
     .sort(compareProjectsByRegion);
@@ -1152,12 +1164,76 @@ export default function InseratStudio() {
 
   const updateProject = (patch: Partial<ProjectInput>) => {
     if (!activeProject) return;
-    setState((current) => ({
-      ...current,
-      projects: current.projects.map((project) =>
-        project.id === activeProject.id ? { ...project, ...patch } : project,
-      ),
-    }));
+    setState((current) => {
+      const project = current.projects.find((item) => item.id === activeProject.id);
+      if (!project) return current;
+      const updatedProject = { ...project, ...patch };
+      const coreChanged = ["street", "houseNumber", "zip", "city", "plotArea", "plotPrice"]
+        .some((field) => Object.hasOwn(patch, field));
+      let projects = current.projects.map((item) => item.id === project.id ? updatedProject : item);
+      let plots = current.plots || [];
+      if (coreChanged && project.plotId) {
+        plots = plots.map((plot) => plot.id === project.plotId
+          ? patchPlotFromProject(plot, updatedProject)
+          : plot);
+      } else if (coreChanged && updatedProject.street.trim() && /^\d{5}$/u.test(updatedProject.zip) && updatedProject.city.trim()) {
+        const existingPlot = plots.find((plot) => plotAddressKey(plot) === plotAddressKey(updatedProject));
+        const linkedPlot = existingPlot || plotFromProject(updatedProject, { id: `plot-${updatedProject.id}` });
+        if (!existingPlot) plots = [...plots, linkedPlot];
+        projects = projects.map((item) => item.id === updatedProject.id
+          ? applyPlotToProject(item, linkedPlot)
+          : item);
+      }
+      return {
+        ...current,
+        plots,
+        projects,
+      };
+    });
+  };
+
+  const savePlotRecords = (plots: PlotRecord[], message: string) => {
+    setState((current) => normalizePlotState({ ...current, plots }) as StudioState);
+    setNotice(message);
+  };
+
+  const handOffPlotsToProjects = async (plotIds: string[]) => {
+    const selectedPlots = plotRecords.filter((plot) => plotIds.includes(plot.id) && plot.isActive !== false);
+    if (!selectedPlots.length) {
+      setNotice("Bitte mindestens ein aktives Grundstück auswählen.");
+      return;
+    }
+    const postalRegionIndex = await loadPostalRegionIndex().catch(() => ({}));
+    const nextProjects = [...state.projects];
+    const projectIds: string[] = [];
+    for (const plot of selectedPlots) {
+      const existingIndex = nextProjects.findIndex((project) => project.plotId === plot.id
+        || (!project.plotId && plotAddressKey(project) === plotAddressKey(plot)));
+      if (existingIndex >= 0) {
+        const linked = enrichProjectWithPostalRegion(applyPlotToProject(nextProjects[existingIndex], plot), postalRegionIndex);
+        nextProjects[existingIndex] = linked;
+        projectIds.push(linked.id);
+        continue;
+      }
+      const created = enrichProjectWithPostalRegion(createProjectFromPlot(plot, {
+        owner: plot.owner || activeOwner,
+        createId: uid,
+      }) as ProjectInput, postalRegionIndex);
+      nextProjects.unshift(created);
+      projectIds.push(created.id);
+    }
+    const nextState = normalizePlotState({
+      ...state,
+      projects: nextProjects,
+      houseDistribution: normalizeHouseDistribution(state.houseDistribution, state.houses, nextProjects) as HouseDistributionState,
+    }) as StudioState;
+    setState(nextState);
+    setSelectedBatchProjectIds(projectIds);
+    setActiveProjectId(projectIds[0]);
+    const firstProject = nextProjects.find((project) => project.id === projectIds[0]);
+    setActiveOwner(projectOwner(firstProject));
+    setTab("project");
+    setNotice(`${projectIds.length} Grundstück${projectIds.length === 1 ? " wurde" : "e wurden"} an die Projektierung übergeben.`);
   };
 
   const addHouse = () => {
@@ -1754,62 +1830,6 @@ export default function InseratStudio() {
     }));
     setActiveProjectId(project.id);
     setSelectedBatchProjectIds([project.id]);
-  };
-
-  const importAddressesFromExcel = async (event: ChangeEvent<HTMLInputElement>) => {
-    const input = event.target;
-    const file = input.files?.[0];
-    if (!file) return;
-    if (file.size > MAX_ADDRESS_IMPORT_BYTES) {
-      input.value = "";
-      setNotice("Die Excel-Datei darf maximal 10 MB groß sein.");
-      return;
-    }
-    setImportingAddresses(true);
-    setAddressImportReport([]);
-    try {
-      const rows = await readSheet(file);
-      const postalRegionIndex = await loadPostalRegionIndex();
-      const result = parseAddressWorkbookRows(rows, state.projects, uid, postalRegionIndex);
-      setAddressImportReport(result.errors.slice(0, 8));
-      if (!result.projects.length) {
-        const details = [
-          result.duplicateCount ? `${result.duplicateCount} bereits gespeichert` : "",
-          result.errors.length ? `${result.errors.length} fehlerhaft` : "",
-        ].filter(Boolean).join(", ");
-        setNotice(details
-          ? `Keine neue Adresse importiert: ${details}.`
-          : "Die Excel-Datei enthält keine importierbaren Adressen.");
-        return;
-      }
-      const importedProjects = [...result.projects].sort(compareProjectsByRegion);
-      const nextState: StudioState = {
-        ...state,
-        projects: [...importedProjects, ...state.projects],
-      };
-      setState(nextState);
-      const firstProject = importedProjects[0];
-      setActiveOwner(firstProject.owner);
-      setActiveProjectId(firstProject.id);
-      setSelectedBatchProjectIds(importedProjects.map((project) => project.id));
-      const savedAt = new Date().toISOString();
-      await saveStudioState(nextState, savedAt);
-      if (helperOnline) await queueDeviceCatalogSnapshot(nextState, savedAt);
-      const details = [
-        `${new Set(importedProjects.map(projectRegionLabel)).size} Regionsgruppen`,
-        result.duplicateCount ? `${result.duplicateCount} Dubletten übersprungen` : "",
-        result.errors.length ? `${result.errors.length} fehlerhafte Zeilen übersprungen` : "",
-        result.unresolvedRegionCount ? `${result.unresolvedRegionCount} PLZ nicht eindeutig zugeordnet` : "",
-      ].filter(Boolean).join(" · ");
-      setNotice(`${result.projects.length} Adressen aus Excel importiert, nach Bundesland/Landkreis und PLZ sortiert und lokal gespeichert${details ? ` · ${details}` : ""}.`);
-    } catch (error) {
-      setNotice(error instanceof Error
-        ? `Excel-Import fehlgeschlagen: ${error.message}`
-        : "Die Excel-Datei konnte nicht gelesen werden.");
-    } finally {
-      input.value = "";
-      setImportingAddresses(false);
-    }
   };
 
   const toggleBatchProject = (projectId: string, selected: boolean) => {
@@ -3158,7 +3178,9 @@ export default function InseratStudio() {
         if (imported.version !== 1 || !Array.isArray(imported.houses)) {
           throw new Error("Unbekanntes Sicherungsformat.");
         }
-        const normalized = normalizeMandatoryListingStandards(normalizeProjectOwners(imported));
+        const normalized = normalizePlotState(
+          normalizeMandatoryListingStandards(normalizeProjectOwners(imported)),
+        ) as StudioState;
         const next = normalized.projects.length
           ? normalized
           : { ...normalized, projects: [newProject("fabian")] };
@@ -3263,19 +3285,20 @@ export default function InseratStudio() {
           </p>
         </div>
         <div className="workflow-summary">
+          <div><b>{plotRecords.filter((plot) => plot.isActive !== false).length}</b><span>aktive Grundstücke</span></div>
           <div><b>{state.houses.length}</b><span>von {MAX_HOUSE_TEMPLATES} Haustypen</span></div>
           <div><b>{activeListingGroup?.variants.filter((variant) => variant.templateId).length || 0}</b><span>aktive Varianten</span></div>
-          <div><b>{activeProject.listings.length}</b><span>Entwürfe</span></div>
         </div>
       </section>
 
       <nav className="step-nav" aria-label="Arbeitsbereiche">
         {([
-          ["houses", "01", "Haustypen"],
-          ["project", "02", "Adresse & Auswahl"],
-          ["preview", "03", "Texte & Vorschau"],
-          ["manager", "04", "Inseratsmanager"],
-          ["settings", "05", "Export & Upload"],
+          ["plots", "01", "Grundstücke"],
+          ["houses", "02", "Haustypen"],
+          ["project", "03", "Adresse & Auswahl"],
+          ["preview", "04", "Texte & Vorschau"],
+          ["manager", "05", "Inseratsmanager"],
+          ["settings", "06", "Export & Upload"],
         ] as Array<[Tab, string, string]>).map(([id, number, label]) => (
           <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>
             <span>{number}</span>{label}
@@ -3288,6 +3311,20 @@ export default function InseratStudio() {
           <span>{notice}</span>
           <button onClick={() => setNotice(null)} aria-label="Hinweis schließen">×</button>
         </div>
+      ) : null}
+
+      {tab === "plots" ? (
+        <PlotManagement
+          plots={plotRecords}
+          selectedPlotIds={selectedPlotIds}
+          defaultOwner={activeOwner}
+          helperOnline={helperOnline}
+          helperRequest={helperFetch}
+          linkedProjectCounts={linkedProjectCounts}
+          onSelectionChange={setSelectedPlotIds}
+          onSave={savePlotRecords}
+          onHandOff={handOffPlotsToProjects}
+        />
       ) : null}
 
       {tab === "houses" ? (
@@ -3665,28 +3702,14 @@ export default function InseratStudio() {
             </div>
             <div className="address-import-bar">
               <div>
-                <b>Mehrere Adressen aus Excel übernehmen</b>
-                <span>Eine Zeile pro Grundstück. Benutzer, Bundesland und Landkreis werden automatisch zugeordnet; die Adressen erscheinen nach PLZ sortiert.</span>
+                <b>Grundstücke zentral verwalten</b>
+                <span>Excel-Import, Dublettenprüfung, Bearbeitung und Mehrfachauswahl erfolgen jetzt sicher im Grundstücksbereich.</span>
               </div>
               <div className="button-row">
                 <a className="secondary" href="/Fabian-Pascal-Adressimport-Vorlage.xlsx" download>Excel-Vorlage herunterladen</a>
-                <label className={`primary file-label${importingAddresses ? " disabled" : ""}`}>
-                  {importingAddresses ? "Excel wird eingelesen …" : "Excel-Adressen importieren"}
-                  <input
-                    type="file"
-                    accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    disabled={importingAddresses}
-                    onChange={importAddressesFromExcel}
-                  />
-                </label>
+                <button className="primary" onClick={() => setTab("plots")}>Zur Grundstücksverwaltung</button>
               </div>
             </div>
-            {addressImportReport.length ? (
-              <div className="address-import-report" role="status">
-                <b>Nicht übernommene Zeilen</b>
-                {addressImportReport.map((message) => <span key={message}>{message}</span>)}
-              </div>
-            ) : null}
             <section className="batch-address-selection" aria-label="Adressen für den Sammel-Upload auswählen">
               <div className="section-heading compact">
                 <div>
@@ -4072,6 +4095,7 @@ export default function InseratStudio() {
                         <TextField label="Überschrift" rows={2} value={texts.title} readOnly />
                         <TextField label="Objektbeschreibung · wird hausbezogen verfeinert" rows={9} value={texts.description} readOnly />
                         <TextField label="Lage · wird ortsbezogen verfeinert" rows={9} value={texts.location} readOnly />
+                        <TextField label="Sachlicher Hinweis zur Bebaubarkeit · fest" rows={3} value={FACTUAL_BUILDABILITY_NOTE} readOnly />
                       </div>
                     </details>
                   ))}
@@ -4128,6 +4152,7 @@ export default function InseratStudio() {
                         <TextField label="1 · Objektbeschreibung" rows={8} value={listing.texts.description} onChange={(value) => updateListingText(listing.id, "description", value)} />
                         <TextField label="2 · Ausstattung · fest" rows={8} value={listing.texts.equipment} readOnly />
                         <TextField label="3 · Lage" rows={7} value={listing.texts.location} onChange={(value) => updateListingText(listing.id, "location", value)} />
+                        <TextField label="Sachlicher Hinweis zur Bebaubarkeit · getrennt vom Lagetext" rows={3} value={FACTUAL_BUILDABILITY_NOTE} readOnly />
                         <TextField label="4 · Sonstiges · fest" rows={7} value={listing.texts.other} readOnly />
                         <TextField label="5 · Provision · fest" rows={2} value={FIXED_PROVISION_TEXT} readOnly />
                         <TextField label="6 · Anmerkung · fest" rows={4} value={FIXED_ANNOTATION_TEXT} readOnly />

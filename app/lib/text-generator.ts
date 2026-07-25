@@ -260,9 +260,8 @@ export function generateListingTexts(
     locationOpening,
     locationFacts.length
       ? locationFacts
-      : `${place} bietet den Rahmen für ein individuell geplantes Zuhause. Versorgung, Bildung, Arbeitswege und Freizeit lassen sich im persönlichen Beratungsgespräch passend zum eigenen Alltag betrachten.`,
+      : `Das Grundstück befindet sich in ${place}. Konkrete Aussagen zu Versorgung, Bildung, Freizeit und Verkehr werden ausschließlich aus geprüften Ortsinformationen ergänzt.`,
     locationClosing,
-    "Die konkrete Bebaubarkeit und Positionierung des Hauses werden im weiteren Planungsverlauf mit den Grundstücksgegebenheiten und den öffentlich-rechtlichen Vorgaben abgestimmt.",
   ].flat());
 
   const priceNote = project.plotPrice > 0

@@ -153,7 +153,7 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
   width: min(1180px, 92vw);
   margin: 0 auto 1.5rem;
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(6, 1fr);
   background: #edf0eb;
   border-radius: 16px;
   padding: 0.35rem;
@@ -177,6 +177,63 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
   font-size: 0.86rem;
 }
 .notice button { background: transparent; border: 0; font-size: 1.2rem; color: var(--ink); }
+
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.plot-workspace { display: grid; gap: 1rem; }
+.plot-management-card, .plot-import-preview { padding: 1.35rem; }
+.plot-inline-message { margin: 0.85rem 0; padding: 0.72rem 0.9rem; border: 1px solid #d5e6b7; border-radius: 10px; background: #f1f9e4; color: var(--ink); font-size: 0.76rem; line-height: 1.5; }
+.plot-toolbar { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(160px, 0.65fr) auto auto; align-items: end; gap: 0.75rem; padding: 0.9rem; margin: 1rem 0; border: 1px solid var(--line); border-radius: 13px; background: #f6f8f3; }
+.plot-selection-summary { display: flex; flex-direction: column; justify-content: center; min-height: 42px; padding: 0 0.75rem; border-left: 1px solid var(--line); }
+.plot-selection-summary b { color: var(--ink); font-size: 1.25rem; }
+.plot-selection-summary span { color: var(--muted); font-size: 0.66rem; }
+.plot-table, .plot-import-table { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; }
+.plot-table-head, .plot-table-row { display: grid; grid-template-columns: 62px minmax(190px, 1.3fr) 72px minmax(130px, 0.9fr) 100px 105px minmax(105px, 0.8fr) minmax(190px, 1fr); align-items: center; min-width: 1030px; }
+.plot-table-head { padding: 0.68rem 0.75rem; background: #edf1e9; color: var(--muted); font-size: 0.63rem; font-weight: 750; text-transform: uppercase; letter-spacing: 0.04em; }
+.plot-table-row { min-height: 70px; padding: 0.62rem 0.75rem; border-top: 1px solid var(--line); font-size: 0.75rem; }
+.plot-table-row:first-of-type { border-top: 0; }
+.plot-table-row > b, .plot-expose { display: flex; flex-direction: column; gap: 0.2rem; }
+.plot-table-row small { color: var(--muted); font-size: 0.61rem; font-weight: 500; line-height: 1.35; overflow-wrap: anywhere; }
+.plot-checkbox input { width: auto; accent-color: #7eaf39; }
+.plot-expose { color: var(--muted); }
+.plot-expose.yes { color: #4e7624; font-weight: 750; }
+.plot-actions { display: flex; flex-wrap: wrap; gap: 0.32rem; }
+.plot-actions button, .danger-link { border: 0; border-radius: 7px; padding: 0.42rem 0.5rem; background: #edf1e9; color: var(--ink); font-size: 0.66rem; font-weight: 700; }
+.plot-actions .danger-link, .danger-link { color: var(--danger); background: #fff0ee; }
+.plot-import-preview details { margin-bottom: 0.8rem; padding: 0.7rem 0.85rem; border-radius: 9px; background: #fff4e6; color: #7a5324; font-size: 0.72rem; }
+.plot-import-preview details ul { margin: 0.55rem 0 0; padding-left: 1.1rem; }
+.plot-import-head, .plot-import-row { display: grid; grid-template-columns: 54px 52px minmax(260px, 1.2fr) 100px 115px minmax(220px, 1fr); align-items: center; gap: 0.45rem; min-width: 880px; }
+.plot-import-head { padding: 0.68rem; background: #edf1e9; color: var(--muted); font-size: 0.63rem; font-weight: 750; }
+.plot-import-row { min-height: 62px; padding: 0.6rem 0.68rem; border-top: 1px solid var(--line); font-size: 0.71rem; }
+.plot-import-row.duplicate { background: #fffbf0; }
+.plot-import-row.invalid { background: #fff3f1; opacity: 0.82; }
+.plot-import-row input { width: auto; }
+.plot-import-row label { display: flex; flex-direction: column; gap: 0.2rem; }
+.plot-import-row label > span { color: #8b692b; font-size: 0.62rem; font-weight: 750; }
+.plot-import-row select { padding: 0.45rem 0.55rem; font-size: 0.68rem; }
+.plot-error { color: var(--danger); font-weight: 700; }
+.plot-ok { color: #4e7624; font-weight: 750; }
+.plot-editor-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: start center; overflow-y: auto; padding: 4vh 1rem; background: rgba(20, 37, 32, 0.58); backdrop-filter: blur(4px); }
+.plot-editor { width: min(900px, calc(100vw - 2rem)); padding: 1.35rem; box-shadow: 0 24px 90px rgba(12, 30, 24, 0.28); }
+.input-shell i { position: absolute; right: 0.8rem; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 0.72rem; font-style: normal; pointer-events: none; }
+.input-shell:has(i) input { padding-right: 2.3rem; }
+.plot-pdf-section { display: grid; gap: 0.85rem; margin-top: 1.2rem; padding-top: 1.1rem; border-top: 1px solid var(--line); }
+.plot-pdf-section h3 { margin: 0.2rem 0; color: var(--ink); }
+.plot-pdf-section p { max-width: 680px; margin: 0; color: var(--muted); font-size: 0.71rem; line-height: 1.55; }
+.plot-existing-pdf { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.75rem; border: 1px solid #cfe1b3; border-radius: 10px; background: #f4faeb; }
+.plot-existing-pdf > div:first-child { display: flex; flex-direction: column; gap: 0.2rem; }
+.plot-existing-pdf small { color: var(--muted); font-size: 0.65rem; }
+.plot-pdf-drop { display: grid; justify-items: center; gap: 0.35rem; padding: 1.25rem; border: 2px dashed #c8d4c4; border-radius: 12px; background: #fafbf8; text-align: center; }
+.plot-pdf-drop span { color: var(--muted); font-size: 0.68rem; }
+.plot-pdf-drop button { margin-top: 0.35rem; }
+.plot-pdf-review { margin-top: 1rem; padding: 0.9rem; border: 1px solid #d8e6c4; border-radius: 12px; background: #f7faF3; }
+.plot-pdf-review > label { display: grid; grid-template-columns: 28px 125px minmax(180px, 1fr) 120px; align-items: center; gap: 0.55rem; padding: 0.5rem 0; border-top: 1px solid #e2e9dc; }
+.plot-pdf-review > label:first-of-type { border-top: 0; }
+.plot-pdf-review > label input[type="checkbox"] { width: auto; accent-color: #7eaf39; }
+.plot-pdf-review > label input:not([type="checkbox"]) { padding: 0.55rem 0.65rem; }
+.plot-pdf-review > label span { font-size: 0.7rem; font-weight: 750; }
+.plot-pdf-review > label small { color: #4e7624; font-size: 0.63rem; }
+.plot-pdf-review > label.needs-review small { color: #a05b26; font-weight: 750; }
+.plot-pdf-review > .button-row { justify-content: flex-end; margin-top: 0.75rem; }
 
 .integrated-catalog-card details { width: 100%; }
 .integrated-catalog-card summary {
@@ -679,6 +736,8 @@ input:focus, textarea:focus, select:focus { border-color: #91bc47; box-shadow: 0
   .house-pool-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .house-distribution-slot { grid-template-columns: 28px minmax(0, 1fr) auto; }
   .slot-move, .slot-promotion, .slot-normal { grid-column: 2 / -1; }
+  .plot-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .plot-toolbar > .button-row { grid-column: 1 / -1; }
 }
 
 @media (max-width: 620px) {
@@ -689,7 +748,7 @@ input:focus, textarea:focus, select:focus { border-color: #91bc47; box-shadow: 0
   .hero-panel { margin-top: 0.7rem; padding: 1.5rem; border-radius: 20px; }
   .workflow-summary { grid-template-columns: 1fr; }
   .workflow-summary > div { flex-direction: row; }
-  .step-nav { overflow-x: auto; grid-template-columns: repeat(5, minmax(150px, 1fr)); }
+  .step-nav { overflow-x: auto; grid-template-columns: repeat(6, minmax(150px, 1fr)); }
   .form-grid.three, .form-grid.two, .listing-fields, .project-copy-fields, .fixed-copy-fields, .optional-project-facts-grid { grid-template-columns: 1fr; }
   .field-wide, .form-grid.two .field-wide { grid-column: auto; }
   .project-copy-fields .field:first-child { grid-column: auto; }
@@ -723,6 +782,11 @@ input:focus, textarea:focus, select:focus { border-color: #91bc47; box-shadow: 0
   .listing-thumb { width: 70px; height: 60px; }
   .price-tag { grid-column: 1 / -1; text-align: left; }
   .listing-card footer, .action-bar, .backup-card, .section-heading, .credential-vault-card { flex-direction: column; align-items: stretch; }
+  .plot-toolbar { grid-template-columns: 1fr; }
+  .plot-toolbar > .button-row { grid-column: auto; align-items: stretch; flex-direction: column; }
+  .plot-existing-pdf { align-items: stretch; flex-direction: column; }
+  .plot-pdf-review > label { grid-template-columns: 24px 1fr; }
+  .plot-pdf-review > label input:not([type="checkbox"]), .plot-pdf-review > label small { grid-column: 2; }
   .image-heading-actions { justify-content: stretch; }
   .image-heading-actions > * { width: 100%; }
   .sequence-status, .price-catalog-status { align-items: stretch; flex-direction: column; }

@@ -5,6 +5,7 @@ import {
   enforceListingCopy,
   fillMissingProjectingDefaults,
   projectingEnvironmentLabels,
+  FACTUAL_BUILDABILITY_NOTE,
   FIXED_ANNOTATION_TEXT,
   FIXED_PROVISION_TEXT,
   FIXED_RECOMMENDATION_TEXT,
@@ -249,6 +250,7 @@ function listingXml(
           <ausstatt_beschr>${cdata(texts.equipment)}</ausstatt_beschr>
           <objektbeschreibung>${cdata(texts.description)}</objektbeschreibung>
           <sonstige_angaben>${cdata(texts.other)}</sonstige_angaben>
+          <user_defined_simplefield feldname="Sachlicher Hinweis zur Bebaubarkeit">${cdata(FACTUAL_BUILDABILITY_NOTE)}</user_defined_simplefield>
           <user_defined_simplefield feldname="Energieklasse">${cdata(projecting.energyClass)}</user_defined_simplefield>
           <user_defined_simplefield feldname="Anmerkung">${cdata(FIXED_ANNOTATION_TEXT)}</user_defined_simplefield>
           <user_defined_simplefield feldname="Allgemeine Geschäftsbedingungen">${cdata(FIXED_TERMS_TEXT)}</user_defined_simplefield>

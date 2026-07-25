@@ -1,5 +1,11 @@
-import type { AddressOwner, ListingGroup, ProjectInput } from "../types";
+import type { AddressOwner, ListingGroup, PlotRecord, ProjectInput } from "../types";
 import { createListingGroup } from "../../listing-groups.mjs";
+import {
+  createPlotRecord,
+  normalizePlotRecord,
+  plotAddressKey,
+  replacePlotRecord,
+} from "../../plot-records.mjs";
 import {
   enrichProjectWithPostalRegion,
   type PostalRegionIndex,
@@ -26,6 +32,25 @@ export type AddressImportResult = {
   errors: string[];
   duplicateCount: number;
   unresolvedRegionCount: number;
+};
+
+export type PlotImportAction = "create" | "update" | "skip";
+
+export type PlotImportPreviewRow = {
+  id: string;
+  excelRow: number;
+  selected: boolean;
+  status: "valid" | "duplicate" | "invalid";
+  issues: string[];
+  action: PlotImportAction;
+  duplicatePlotId: string;
+  providedFields: Array<"street" | "houseNumber" | "postalCode" | "city" | "plotSizeSqm" | "purchasePrice" | "regionalNotes" | "owner">;
+  plot: PlotRecord;
+};
+
+export type PlotImportPreview = {
+  rows: PlotImportPreviewRow[];
+  errors: string[];
 };
 
 const HEADER_ALIASES: Record<AddressColumn, string[]> = {
@@ -108,6 +133,141 @@ function hasRequiredColumns(columns: Partial<Record<AddressColumn, number>>): bo
     && columns.street !== undefined
     && columns.zip !== undefined
     && columns.city !== undefined;
+}
+
+function hasPlotRequiredColumns(columns: Partial<Record<AddressColumn, number>>): boolean {
+  return columns.street !== undefined
+    && columns.zip !== undefined
+    && columns.city !== undefined;
+}
+
+export function parsePlotWorkbookRows(
+  rows: readonly (readonly unknown[])[],
+  existingPlots: readonly PlotRecord[],
+  createId: () => string,
+  defaultOwner: AddressOwner = "fabian",
+): PlotImportPreview {
+  const headerIndex = rows.findIndex((row) => hasPlotRequiredColumns(columnMap(row)));
+  if (headerIndex < 0) {
+    return {
+      rows: [],
+      errors: ["Keine passende Kopfzeile gefunden. Benötigt werden Straße, PLZ und Ort."],
+    };
+  }
+
+  const columns = columnMap(rows[headerIndex]);
+  const knownByAddress = new Map(
+    existingPlots
+      .filter((plot) => plot.isActive !== false)
+      .map((plot) => [plotAddressKey(plot), plot] as const)
+      .filter(([key]) => Boolean(key)),
+  );
+  const previewRows: PlotImportPreviewRow[] = [];
+  const errors: string[] = [];
+  const cell = (row: readonly unknown[], column: AddressColumn): unknown => {
+    const index = columns[column];
+    return index === undefined ? "" : row[index];
+  };
+
+  rows.slice(headerIndex + 1).forEach((row, relativeIndex) => {
+    const excelRow = headerIndex + relativeIndex + 2;
+    if (row.every((value) => text(value) === "")) return;
+    const id = createId();
+    const street = text(cell(row, "street"));
+    const houseNumber = text(cell(row, "houseNumber"));
+    const postalCodeValue = postalCode(cell(row, "zip"));
+    const city = text(cell(row, "city"));
+    const issues: string[] = [];
+    if (!street) issues.push("Straße fehlt");
+    if (!postalCodeValue || !/^\d{5}$/.test(postalCodeValue)) issues.push("Gültige fünfstellige PLZ fehlt");
+    if (!city) issues.push("Ort fehlt");
+
+    const owner = ownerFromCell(cell(row, "owner")) || defaultOwner;
+    const plot = createPlotRecord({
+      id,
+      street,
+      houseNumber,
+      postalCode: postalCodeValue,
+      city,
+      plotSizeSqm: parseGermanNumber(cell(row, "plotArea")),
+      purchasePrice: parseGermanNumber(cell(row, "plotPrice")),
+      regionalNotes: text(cell(row, "locationFacts")),
+      owner,
+    }, { createId: () => id });
+    const providedFields = ([
+      ["street", cell(row, "street")],
+      ["houseNumber", cell(row, "houseNumber")],
+      ["postalCode", cell(row, "zip")],
+      ["city", cell(row, "city")],
+      ["plotSizeSqm", cell(row, "plotArea")],
+      ["purchasePrice", cell(row, "plotPrice")],
+      ["regionalNotes", cell(row, "locationFacts")],
+      ["owner", cell(row, "owner")],
+    ] as const).filter(([, value]) => text(value) !== "").map(([field]) => field);
+    const duplicate = issues.length ? undefined : knownByAddress.get(plotAddressKey(plot));
+    const status = issues.length ? "invalid" : duplicate ? "duplicate" : "valid";
+    previewRows.push({
+      id: `excel-${excelRow}-${id}`,
+      excelRow,
+      selected: status !== "invalid",
+      status,
+      issues,
+      action: duplicate ? "skip" : "create",
+      duplicatePlotId: duplicate?.id || "",
+      providedFields,
+      plot,
+    });
+    if (issues.length) errors.push(`Zeile ${excelRow}: ${issues.join(", ")}.`);
+    if (!issues.length) knownByAddress.set(plotAddressKey(plot), plot);
+  });
+
+  return { rows: previewRows, errors };
+}
+
+export function applyPlotImportPreview(
+  existingPlots: readonly PlotRecord[],
+  previewRows: readonly PlotImportPreviewRow[],
+  now = new Date().toISOString(),
+): { plots: PlotRecord[]; created: number; updated: number; skipped: number } {
+  let plots = [...existingPlots];
+  let created = 0;
+  let updated = 0;
+  let skipped = 0;
+  for (const row of previewRows) {
+    if (!row.selected || row.status === "invalid" || row.action === "skip") {
+      skipped += 1;
+      continue;
+    }
+    if (row.action === "update" && row.duplicatePlotId) {
+      const current = plots.find((plot) => plot.id === row.duplicatePlotId);
+      if (!current) {
+        skipped += 1;
+        continue;
+      }
+      const patch = Object.fromEntries(row.providedFields.map((field) => [field, row.plot[field]]));
+      plots = replacePlotRecord(plots, normalizePlotRecord({
+        ...current,
+        ...patch,
+        id: current.id,
+        createdAt: current.createdAt,
+        updatedAt: now,
+        exposeFileReference: current.exposeFileReference,
+        exposeFilename: current.exposeFilename,
+        exposeUploadedAt: current.exposeUploadedAt,
+        isActive: current.isActive,
+      }, { now, fallbackId: current.id }), now);
+      updated += 1;
+      continue;
+    }
+    plots = replacePlotRecord(plots, normalizePlotRecord({
+      ...row.plot,
+      createdAt: now,
+      updatedAt: now,
+      isActive: true,
+    }, { now, fallbackId: row.plot.id }), now);
+    created += 1;
+  }
+  return { plots, created, updated, skipped };
 }
 
 export function parseAddressWorkbookRows(

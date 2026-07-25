@@ -28,6 +28,13 @@ import { getMediaLibraryItem, queryMediaLibrary, recommendedMediaSequence } from
 import { createStructuredFileLogger } from "./structured-log.mjs";
 import { createUploadJobLedger } from "./upload-job-ledger.mjs";
 import { WORKFLOW_STATUS } from "./workflow-status.mjs";
+import {
+  analyzePlotExpose,
+  archivePlotExpose,
+  commitPlotExpose,
+  MAX_PLOT_EXPOSE_BYTES,
+  readPlotExpose,
+} from "./plot-expose-store.mjs";
 
 const HOST = "127.0.0.1";
 const PORT = 43182;
@@ -157,7 +164,7 @@ async function readBytes(request, maximumBytes = MAX_IMAGE_BYTES) {
   let length = 0;
   for await (const chunk of request) {
     length += chunk.length;
-    if (length > maximumBytes) throw new Error("Die einzelne Bilddatei ist zu groß.");
+    if (length > maximumBytes) throw new Error("Die einzelne Datei ist zu groß.");
     chunks.push(chunk);
   }
   return Buffer.concat(chunks);
@@ -240,7 +247,11 @@ const server = createServer(async (request, response) => {
   const isMediaLibraryList = request.method === "GET" && pathname === "/media-library";
   const isMediaLibrarySequence = request.method === "GET" && pathname === "/media-library/sequence";
   const isMediaLibraryImage = request.method === "GET" && pathname === "/media-library/image";
-  if (!isHealth && !isUpload && !isBinaryUpload && !isLocalSave && !isTextGeneration && !isImageCaptionGeneration && !isOpenAiKeyValidation && !isCredentialLoad && !isCredentialSave && !isCatalogLoad && !isCatalogSave && !isCatalogV2Start && !isCatalogV2ImageSave && !isCatalogV2Commit && !isCatalogV2ManifestLoad && !isCatalogV2ImageLoad && !isMediaLibraryList && !isMediaLibrarySequence && !isMediaLibraryImage) {
+  const isPlotExposeAnalyze = request.method === "POST" && pathname === "/plot-exposes/analyze";
+  const isPlotExposeCommit = request.method === "POST" && pathname === "/plot-exposes/commit";
+  const isPlotExposeLoad = request.method === "GET" && pathname === "/plot-exposes/file";
+  const isPlotExposeArchive = request.method === "POST" && pathname === "/plot-exposes/archive";
+  if (!isHealth && !isUpload && !isBinaryUpload && !isLocalSave && !isTextGeneration && !isImageCaptionGeneration && !isOpenAiKeyValidation && !isCredentialLoad && !isCredentialSave && !isCatalogLoad && !isCatalogSave && !isCatalogV2Start && !isCatalogV2ImageSave && !isCatalogV2Commit && !isCatalogV2ManifestLoad && !isCatalogV2ImageLoad && !isMediaLibraryList && !isMediaLibrarySequence && !isMediaLibraryImage && !isPlotExposeAnalyze && !isPlotExposeCommit && !isPlotExposeLoad && !isPlotExposeArchive) {
     send(response, 404, { ok: false, message: "Nicht gefunden." }, origin);
     return;
   }
@@ -336,6 +347,28 @@ const server = createServer(async (request, response) => {
         "X-Content-Type-Options": "nosniff",
       });
       response.end(data);
+      return;
+    }
+
+    if (isPlotExposeLoad) {
+      const result = await readPlotExpose(requestUrl.searchParams.get("reference"));
+      response.writeHead(200, {
+        ...headers(origin),
+        "Content-Type": "application/pdf",
+        "Content-Length": String(result.data.length),
+        "Content-Disposition": `inline; filename*=UTF-8''${encodeURIComponent(result.filename)}`,
+        "X-Content-Type-Options": "nosniff",
+      });
+      response.end(result.data);
+      return;
+    }
+
+    if (isPlotExposeAnalyze) {
+      const result = await analyzePlotExpose({
+        data: await readBytes(request, MAX_PLOT_EXPOSE_BYTES),
+        filename: decodedHeader(request, "x-fpi-filename"),
+      });
+      send(response, 200, { ok: true, ...result }, origin);
       return;
     }
 
@@ -452,6 +485,18 @@ const server = createServer(async (request, response) => {
     }
 
     const body = await readJson(request, isCatalogSave ? MAX_CATALOG_BODY_BYTES : MAX_BODY_BYTES);
+
+    if (isPlotExposeCommit) {
+      const result = await commitPlotExpose(body);
+      send(response, 200, { ok: true, ...result }, origin);
+      return;
+    }
+
+    if (isPlotExposeArchive) {
+      const result = await archivePlotExpose(body.reference, { allowPending: body.pending === true });
+      send(response, 200, { ok: true, ...result }, origin);
+      return;
+    }
 
     if (isCatalogV2Start) {
       const result = await startCatalogSnapshot(body);

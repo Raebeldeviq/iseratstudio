@@ -31,6 +31,9 @@ Gute Beratung ist der Anfang von Allem. Deshalb analysieren wir gemeinsam mit eu
 
 Interessiert? Kontaktiere mich und vereinbare noch heute einen kostenlosen und unverbindlichen Beratungstermin unter +49160 93087 202`;
 
+export const FACTUAL_BUILDABILITY_NOTE =
+  "Die konkrete Bebaubarkeit und Positionierung des Hauses werden im weiteren Planungsverlauf anhand der Grundstücksgegebenheiten und der öffentlich-rechtlichen Vorgaben geprüft und abgestimmt.";
+
 export const FIXED_PROVISION_TEXT =
   "Das Grundstück wird über einen Drittanbieter provisionspflichtig verkauft.";
 
@@ -167,6 +170,20 @@ function clean(value) {
   return String(value ?? "").trim();
 }
 
+const LOCATION_PLANNING_PHRASE = /(?:Bebaubarkeit|Positionierung\s+(?:des\s+Hauses\s+)?(?:wird|werden)|im\s+weiteren\s+(?:Planungs)?verlauf|im\s+(?:persönlichen\s+)?Beratungsgespräch\s+(?:betrachtet|abgestimmt)|später\s+abgestimmt)/iu;
+
+export function cleanSalesLocationText(value) {
+  return clean(value)
+    .split(/\n\s*\n/gu)
+    .map((paragraph) => paragraph
+      .split(/(?<=[.!?])\s+/gu)
+      .filter((sentence) => !LOCATION_PLANNING_PHRASE.test(sentence))
+      .join(" ")
+      .trim())
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 function germanNumber(value, maximumFractionDigits = 0) {
   return new Intl.NumberFormat("de-DE", { maximumFractionDigits }).format(finiteNumber(value));
 }
@@ -202,7 +219,7 @@ export function enforceListingCopy(texts = {}, { house = {}, project = {} } = {}
     title: buildListingHeadline(house, project),
     description: body ? `${body}\n\n${FIXED_DESCRIPTION_CTA}` : FIXED_DESCRIPTION_CTA,
     equipment: FIXED_EQUIPMENT_TEXT,
-    location: clean(texts.location),
+    location: cleanSalesLocationText(texts.location),
     other: FIXED_OTHER_TEXT,
   };
 }

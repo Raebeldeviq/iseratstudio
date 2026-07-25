@@ -22,7 +22,9 @@ test("stores and restores the complete local catalog including images", async (c
 
   const state = {
     version: 1,
-    dataSchemaVersion: 2,
+    dataSchemaVersion: 3,
+    plotSchemaVersion: 1,
+    plots: [],
     houses: [{
       id: "house-1",
       name: "Testhaus",
@@ -149,6 +151,12 @@ test("migrates an existing manifest atomically and keeps a pre-migration backup"
     houses: [],
     projects: [{
       id: "project-1",
+      street: "Kirschallee",
+      houseNumber: "12",
+      postalCode: "14469",
+      city: "Potsdam",
+      plotArea: 651,
+      plotPrice: 420000,
       notes: "Altes Hinweisfeld",
       selectedHouseIds: ["house-1", "house-2", "house-3", "house-4", "house-5"],
       listings: [],
@@ -178,10 +186,13 @@ test("migrates an existing manifest atomically and keeps a pre-migration backup"
   const result = await migrateCatalogManifest(directory);
   assert.equal(result.migrated, true);
   const migrated = await loadCatalogManifest(directory);
-  assert.equal(migrated.state.dataSchemaVersion, 2);
+  assert.equal(migrated.state.dataSchemaVersion, 3);
+  assert.equal(migrated.state.plotSchemaVersion, 1);
+  assert.equal(migrated.state.plots.length, 1);
+  assert.equal(migrated.state.projects[0].plotId, migrated.state.plots[0].id);
   assert.equal(Object.hasOwn(migrated.state.projects[0], "notes"), false);
   assert.equal(migrated.state.projects[0].listingGroup.variants.filter((variant) => variant.active).length, 4);
-  assert.deepEqual(await readdir(join(directory, "backups")), ["manifest.pre-schema-2.json"]);
+  assert.deepEqual(await readdir(join(directory, "backups")), ["manifest.pre-schema-3.json"]);
 
   const repeated = await migrateCatalogManifest(directory);
   assert.equal(repeated.migrated, false);

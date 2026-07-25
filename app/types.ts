@@ -153,8 +153,27 @@ export type HouseTemplate = {
 
 export type AddressOwner = "fabian" | "pascal";
 
+export type PlotRecord = {
+  id: string;
+  street: string;
+  houseNumber: string;
+  postalCode: string;
+  city: string;
+  plotSizeSqm: number;
+  purchasePrice: number;
+  regionalNotes: string;
+  owner?: AddressOwner;
+  exposeFileReference: string;
+  exposeFilename: string;
+  exposeUploadedAt: string;
+  createdAt: string;
+  updatedAt: string;
+  isActive: boolean;
+};
+
 export type ProjectInput = {
   id: string;
+  plotId?: string;
   owner: AddressOwner;
   name: string;
   street: string;
@@ -406,7 +425,9 @@ export type BatchUploadLog = {
 export type StudioState = {
   version: 1;
   dataSchemaVersion?: number;
+  plotSchemaVersion?: number;
   houses: HouseTemplate[];
+  plots?: PlotRecord[];
   projects: ProjectInput[];
   provider: ProviderSettings;
   promotionImage: HouseImage | null;

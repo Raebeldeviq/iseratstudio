@@ -7,6 +7,7 @@ import {
   FIXED_ANNOTATION_TEXT,
   FIXED_EQUIPMENT_TEXT,
   FIXED_OTHER_TEXT,
+  FACTUAL_BUILDABILITY_NOTE,
   FIXED_PROVISION_TEXT,
   FIXED_RECOMMENDATION_TEXT,
   FIXED_TERMS_TEXT,
@@ -115,6 +116,7 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
   assert.ok(xml.includes(FIXED_PROVISION_TEXT));
   assert.ok(xml.includes(FIXED_EQUIPMENT_TEXT));
   assert.ok(xml.includes(FIXED_OTHER_TEXT));
+  assert.ok(xml.includes(FACTUAL_BUILDABILITY_NOTE));
   assert.ok(xml.includes(FIXED_ANNOTATION_TEXT));
   assert.ok(xml.includes(FIXED_TERMS_TEXT));
   assert.ok(xml.includes(FIXED_RECOMMENDATION_TEXT));

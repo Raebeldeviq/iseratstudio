@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   buildListingHeadline,
+  cleanSalesLocationText,
   enforceListingCopy,
   fillMissingListingCopy,
   fillMissingProjectingDefaults,
@@ -14,6 +15,7 @@ import {
   FIXED_PROVISION_TEXT,
   FIXED_RECOMMENDATION_TEXT,
   FIXED_TERMS_TEXT,
+  FACTUAL_BUILDABILITY_NOTE,
   IMMOPROFESSIONAL_DEFAULTS,
 } from "../listing-copy.mjs";
 
@@ -62,6 +64,13 @@ test("fills empty existing text fields without overwriting usable dynamic copy",
   assert.equal(result.location, "Roskow bietet den Rahmen für das geplante Zuhause.");
   assert.equal(result.equipment, FIXED_EQUIPMENT_TEXT);
   assert.equal(result.other, FIXED_OTHER_TEXT);
+});
+
+test("keeps planning language out of the sales location and exposes the separate factual note", () => {
+  const location = cleanSalesLocationText("Potsdam verbindet Natur und Alltag. Die Bebaubarkeit wird im weiteren Planungsverlauf geprüft. Schulen und Einkaufsmöglichkeiten sind nach geprüfter Angabe erreichbar.");
+  assert.equal(location, "Potsdam verbindet Natur und Alltag. Schulen und Einkaufsmöglichkeiten sind nach geprüfter Angabe erreichbar.");
+  assert.doesNotMatch(location, /Bebaubarkeit|Planungsverlauf/u);
+  assert.match(FACTUAL_BUILDABILITY_NOTE, /öffentlich-rechtlichen Vorgaben geprüft und abgestimmt/u);
 });
 
 test("keeps the immoprofessional defaults and legal copy explicit", () => {

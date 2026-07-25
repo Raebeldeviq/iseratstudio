@@ -1,5 +1,75 @@
 # Änderungsprotokoll
 
+## Version 0.16.0 · Schlanke Grundstücksverwaltung – 25. Juli 2026
+
+### Report
+
+- Der neue erste Arbeitsbereich **Grundstücke** verwaltet Grundstücke als
+  eigene, dauerhaft gespeicherte Datensätze. Suche, Ortsfilter,
+  Mehrfachauswahl, manuelle Anlage, Bearbeitung und logische Archivierung sind
+  direkt in der App verfügbar.
+- Die bestehende Excel-Struktur wird weiterverwendet. Vor jeder Übernahme zeigt
+  die App nun eine Prüfansicht, markiert unvollständige Zeilen und lässt bei
+  möglichen Adressdubletten ausdrücklich zwischen Aktualisieren, neu Anlegen
+  und Überspringen wählen. Ohne Auswahl wird kein bestehender Datensatz
+  überschrieben.
+- Ausgewählte Grundstücke werden gesammelt an den vorhandenen
+  Projektierungs- und Hausverteilungsprozess übergeben. Änderungen an Straße,
+  PLZ, Ort, Grundstücksgröße oder Kaufpreis werden zentral an verknüpfte
+  Projektierungen weitergereicht.
+- PDF-Exposés können per Dateiauswahl oder Drag-and-drop lokal hinterlegt,
+  geöffnet, ersetzt und recoverbar archiviert werden. Die Auslesung beschränkt
+  sich auf Straße, Postleitzahl, Ort, Grundstücksgröße und Kaufpreis; jeder Wert
+  muss in einer Prüfansicht bestätigt oder korrigiert werden.
+- Der Lageverkaufstext wird unabhängig vom PDF erzeugt und entfernt
+  Bebaubarkeits-, Positionierungs- und spätere Abstimmungsformulierungen. Der
+  verbindliche Bebaubarkeitshinweis steht separat in Vorschau und
+  OpenImmo-Export.
+- Bestehende Projektadressen werden durch Datenschema 3 idempotent in die neue
+  Grundstücksstruktur migriert. Inserate, Varianten, Bilder, Aktionsbilder,
+  Scheduler- und Uploaddaten bleiben erhalten.
+
+### Begründung
+
+Das Grundstück ist nun die kanonische Quelle für die fünf im Alltag
+benötigten Kerndaten. Die bisherigen Projektobjekte behalten aus
+Kompatibilitätsgründen ihre Felder, werden jedoch kontrolliert mit dem
+verknüpften Grundstück synchronisiert. So bleiben OpenImmo-Export,
+Hausverteilung und Sammel-Upload unverändert nutzbar, während eine spätere
+Supabase-Persistenz ohne erneute fachliche Modelländerung möglich bleibt.
+PDF-Dateien liegen außerhalb des Katalogmanifests in einer eigenen lokalen,
+sitzungsgeschützten Ablage; dadurch werden sie weder veröffentlicht noch in
+Inseratpakete oder Git-Daten aufgenommen.
+
+### Hürden und Risiken
+
+- Exposé-PDFs besitzen sehr unterschiedliche Textlayouts. Der Reader
+  rekonstruiert deshalb auch einzeln gesetzte und gesperrte Buchstaben, erfindet
+  bei nicht sicher erkannten Angaben jedoch keinen Ersatzwert. Die sichtbare
+  Prüfansicht bleibt zwingend.
+- Archivierte Grundstücke werden nicht mehr angeboten, bereits verknüpfte
+  Projektierungen und Inserate bleiben aber absichtlich bestehen. Eine echte
+  physische Löschung wäre ohne bestätigte Abhängigkeitskette riskant.
+- Die Persistenz bleibt in dieser Version lokal. Das Modell ist backendfähig,
+  enthält aber noch keine Supabase-Tabellen, RLS-Regeln oder Cloud-Dateiablage.
+- macOS blockierte beim ersten Prüflauf einzelne frisch installierte
+  Abhängigkeitsdateien minutenlang im Lesezugriff. Nach vollständigem Laden
+  lief der Produktions-Build reproduzierbar in unter zwei Sekunden; die
+  Quellprüfung wurde deshalb zusätzlich direkt über TypeScript und
+  `node --check` abgesichert.
+
+### Tests
+
+- Idempotente Migration bestehender Projektadressen und Synchronisierung
+- Excel-Vorschau mit gültigen, unvollständigen und doppelten Zeilen
+- explizites Aktualisieren, Neu-Anlegen und Überspringen von Dubletten
+- PDF-Fünf-Felder-Auslesung aus synthetischen PDFs und dem realen
+  `T5721_Kirschallee_in_14469_Potsdam.pdf`
+- lokales Staging, Speichern, Lesen, Pfadschutz und recoverbare Archivierung
+- Trennung des Lageverkaufstextes vom Bebaubarkeitshinweis
+- strikte TypeScript-Prüfung der integrierten App, Node-Syntaxprüfung,
+  Produktions-Build, 113 Gesamttests und Browser-Dry-Run mit aktivem Helfer
+
 ## Version 0.15.0 · Technische Tiefenbereinigung – 25. Juli 2026
 
 ### Report
