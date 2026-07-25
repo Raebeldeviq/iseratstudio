@@ -95,6 +95,7 @@ import {
 } from "../house-distribution.mjs";
 import { planListingRotation } from "../rotation-service.mjs";
 import { cleanupStudioState } from "../data-integrity.mjs";
+import { selectCatalogSnapshot } from "../catalog-snapshot-selection.mjs";
 import {
   applyPlotToProject,
   createProjectFromPlot,
@@ -716,11 +717,6 @@ async function loadDeviceCatalogSnapshot(): Promise<{
   return { state: data.state, savedAt: data.savedAt, source: "device" };
 }
 
-function snapshotTime(value: string): number {
-  const time = new Date(value).getTime();
-  return Number.isNaN(time) ? 0 : time;
-}
-
 export default function InseratStudio() {
   const [tab, setTab] = useState<Tab>("plots");
   const [state, setState] = useState<StudioState>(initialState);
@@ -847,9 +843,8 @@ export default function InseratStudio() {
         for (const result of results) {
           if (result.status === "fulfilled" && result.value) candidates.push(result.value);
         }
-        candidates.sort((left, right) => snapshotTime(right.savedAt) - snapshotTime(left.savedAt));
         knownDeviceCatalogSavedAt = candidates.find((candidate) => candidate.source === "device")?.savedAt ?? "";
-        const selected = candidates[0];
+        const selected = selectCatalogSnapshot(candidates);
         const loaded = normalizeMandatoryListingStandards(
           normalizeProjectOwners(selected?.state ?? initialState()),
         );

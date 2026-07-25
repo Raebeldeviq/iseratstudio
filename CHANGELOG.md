@@ -1,5 +1,45 @@
 # Änderungsprotokoll
 
+## Version 0.16.1 · Katalog-Wiederherstellungsschutz – 25. Juli 2026
+
+### Report
+
+- Die Startlogik schützt den vollständigen macOS-Gerätekatalog jetzt vor einem
+  neueren, aber inhaltlich leeren Browser-Zwischenstand.
+- Ein Browser-Zwischenstand ohne vorbereitete Haustypen oder ohne adressierte
+  Projektierungen darf die jeweils vorhandenen produktiven Gerätedaten nicht
+  mehr verdrängen. Normale, inhaltlich vollständige Browser-Änderungen bleiben
+  weiterhin zeitstempelbasiert und werden wie bisher gespeichert.
+- Der versehentlich verdrängte Gerätestand wurde aus der automatischen
+  Vor-Migrationssicherung wiederhergestellt. Dabei werden neu importierte
+  Grundstücksdatensätze adressbasiert zusammengeführt und die zugehörigen
+  Haus- und Aktionsbilder aus den lokalen Medienquellen rekonstruiert.
+
+### Begründung
+
+Browser- und Gerätesicherung bleiben bewusst zwei lokale Schutzebenen. Ein
+Zeitstempel allein kann jedoch einen frisch angelegten Browser-Speicher nicht
+von einem echten Arbeitsstand unterscheiden. Die zusätzliche Inhaltsprüfung
+greift deshalb nur bei einem vollständigen Verlust einer produktiven
+Katalogkategorie und verändert den üblichen Neuester-Stand-gewinnt-Ablauf
+nicht.
+
+### Hürden und Risiken
+
+- Die Gerätesicherung trennt Bildmetadaten und Binärdateien. Nach der
+  Fehlüberschreibung mussten die Bilddateien anhand stabiler Quellen-IDs und
+  der Aktionsbildnamen neu aufgebaut werden.
+- Ein absichtlich vollständig geleerter Browserkatalog wird nicht automatisch
+  über eine ältere produktive Gerätesicherung geschrieben. Ein solcher
+  Löschvorgang muss über den regulären, synchronisierten App-Workflow erfolgen.
+
+### Tests
+
+- Neuerer leerer Browser-Zwischenstand gegen produktiven Gerätekatalog
+- Neuerer produktiver Browser-Zwischenstand mit regulären Änderungen
+- Reguläre Auswahl eines neueren Gerätekatalogs
+- Vollständiger Produktions-Build und bestehende Node-Test-Suite
+
 ## Version 0.16.0 · Schlanke Grundstücksverwaltung – 25. Juli 2026
 
 ### Report
