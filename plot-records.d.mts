@@ -1,6 +1,6 @@
 import type { AddressOwner, PlotRecord, ProjectInput, StudioState } from "./app/types";
 
-export const PLOT_RECORD_SCHEMA_VERSION: 1;
+export const PLOT_RECORD_SCHEMA_VERSION: 2;
 
 export function plotAddressKey(value: unknown): string;
 export function formatPlotStreet(value: unknown): string;
@@ -13,3 +13,8 @@ export function createProjectFromPlot(plot: PlotRecord, options?: { now?: string
 export function normalizePlotState<T extends StudioState>(state: T, options?: { now?: string }): T & Required<Pick<StudioState, "plots" | "plotSchemaVersion">>;
 export function replacePlotRecord(plots: readonly PlotRecord[], record: PlotRecord, now?: string): PlotRecord[];
 export function archivePlotRecord(plots: readonly PlotRecord[], plotId: string, now?: string): PlotRecord[];
+export function deletePlotRecordCascade(state: StudioState, plotId: string): {
+  state: StudioState;
+  deletedProjectIds: string[];
+  deletedListingIds: string[];
+};

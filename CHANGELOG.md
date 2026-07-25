@@ -1,5 +1,85 @@
 # Änderungsprotokoll
 
+## Version 0.17.0 · Zentrale Grundstücke und Excel-Abgleich – 25. Juli 2026
+
+### Report
+
+- Grundstücksverwaltung und Projektierungsauswahl verwenden nun ausschließlich
+  `state.plots` als zentrale Adressquelle. Der erste Bereich enthält getrennte
+  Unteransichten zum Verwalten und zur gebietsweise gruppierten Mehrfachauswahl;
+  Bereich 03 verarbeitet nur die von dort übergebenen aktiven Grundstücke.
+- Die bisherige manuelle Soft-Löschung wurde durch eine bestätigte, vollständige
+  interne Kaskadenlöschung ersetzt. Verknüpfte Projektierungen, Hausverteilungs-
+  referenzen, Aktionsbildnutzungen, Uploadhistorien und Scheduler-Verweise werden
+  entfernt. Externe Inserate werden dabei technisch nicht angesprochen.
+- Datenschema 4 entfernt einmalig die Altlasten der früheren Soft-Löschung. Im
+  produktiven Katalog wurden 12 archivierte Grundstückshüllen und 11 daran
+  verknüpfte Projektierungsreste entfernt; danach bestanden keine verwaisten
+  Grundstücksreferenzen mehr.
+- Die Auswahl zeigt die Inseratsanzahl je Grundstück: null neutral, eins bis
+  drei gelb, ab vier grün und über vier zusätzlich mit Warnhinweis.
+- Auch frisch aus Excel übernommene Grundstücke werden vor ihrer ersten
+  Projektierung anhand von Postleitzahl und Ort direkt nach Bundesland und
+  Landkreis gruppiert; nur nicht eindeutig auflösbare Adressen nutzen den
+  sichtbaren PLZ-/Ort-Rückfall.
+- SOL 204 V4, SOL 229 V3, SOL 230 V6 und SOL 242 V4 wurden aus der vorhandenen
+  Preis-, Medien- und Grundrissbasis vollständig ergänzt. Der Startkatalog kann
+  diese stabilen Vorlagen jetzt auch in einen bestehenden Katalog nachinstallieren,
+  ohne Benutzerinhalte zu überschreiben.
+- Der lokale Helfer synchronisiert die zentral konfigurierte
+  `KI_Grundstuecke.xlsx` sofort beziehungsweise persistent alle drei Tage um
+  07:00 Uhr in `Europe/Berlin`. Interne ID, normalisierter Inseratslink und eine
+  nur bei fehlenden IDs verwendete eindeutige Adresse bilden den priorisierten
+  Dublettenschutz. Datei- und Prozess-Lock, atomarer Katalog-Commit sowie
+  strukturierte Laufprotokolle schützen vor Parallel- und Teillaufzuständen.
+- `Neu` legt nur fehlende Grundstücke an, `Vorhanden` aktualisiert sichere
+  Treffer und `Nicht mehr vorhanden` deaktiviert Grundstück und Projektierung
+  für neue Abläufe, ohne Historie oder externe Inserate zu löschen.
+- Der Statusbereich zeigt Quelle, letzten Erfolg, nächsten Lauf, Ergebniszahlen,
+  manuellen Dry-Run, manuellen Echtlauf und das letzte Detailprotokoll.
+- Erster produktiver Lauf am 25.07.2026 um 22:23 Uhr MESZ: 10 Zeilen gelesen,
+  5 neu angelegt, 0 aktualisiert, 0 deaktiviert, 0 übersprungen und 5 wegen
+  fehlender vollständiger Straße/Hausnummer nicht verwendet. Ein anschließender
+  Dry-Run erzeugte 0 neue Datensätze, übersprang dieselben 5 sicheren Treffer
+  und verhinderte 5 Dubletten. Die Quelldatei blieb in allen Läufen unverändert.
+
+### Begründung
+
+Die alte Projektliste war eine zweite, langlebige Kopie der Adressdaten. Das
+neue Modell behält Projektobjekte nur als abhängige Arbeits- und Historienebene;
+Sichtbarkeit, Auswahl und neue Abläufe werden immer vom kanonischen Grundstück
+gesteuert. Die Excel-Integration läuft im lokalen Helfer statt im Browser, weil
+nur dieser persistent planen, den iCloud-Pfad lesen, atomar speichern und einen
+prozessübergreifenden Lock halten kann.
+
+### Hürden und Risiken
+
+- Fünf aktuelle Excel-Zeilen enthalten keine vollständige Straße mit
+  Hausnummer. Sie wurden entsprechend der Vorgabe weder ergänzt noch importiert
+  und bleiben als Prüfungsfälle protokolliert.
+- Der lokale macOS-Helfer holt einen während Ausschalten oder Ruhezustand
+  verpassten Termin beim nächsten Start nach. Vercel kann den lokalen iCloud-
+  Pfad nicht lesen; für Cloud-Hosting sind authentifizierter Objektspeicher oder
+  ein gemountetes Laufwerk sowie ein externer Cron erforderlich.
+- Im Integritätsbericht bleiben 18 bereits vorhandene, nur über Varianten
+  referenzierte Steuerdatensätze bewusst als manuelle Prüfpunkte erhalten. Sie
+  wurden nicht automatisch gelöscht, weil sie produktive Historie tragen können.
+
+### Tests
+
+- Kaskadenlöschung samt Reload-/Migrationsschutz und Entfernung aller internen
+  Beziehungen; externe Löschung bleibt ausgeschlossen.
+- Farbgrenzen 0, 1–3, 4 und mehr als 4; bestehende Gebietsgruppierung und
+  PLZ-Sortierung.
+- Alle vier SOL-Häuser mit Preis, Wohnfläche, Zimmern und vollständiger
+  13-Bilder-Sequenz einschließlich versionsgenauer Grundrisse.
+- Status Neu/Vorhanden/Nicht mehr vorhanden, ID-/URL-/Adressabgleich,
+  URL-Normalisierung, unbekannter Status, fehlerhafte Zeile, fehlende Datei,
+  Parallel-Lock, unveränderte Quelle und wiederholter Lauf.
+- 200 Grundstücke plus Wiederholung ohne Dubletten; Zeitzonenprüfung über
+  Sommer-/Winterzeit; vollständiger TypeScript-, ESLint-, Produktions-Build und
+  130 Node-Tests.
+
 ## Version 0.16.1 · Katalog-Wiederherstellungsschutz – 25. Juli 2026
 
 ### Report

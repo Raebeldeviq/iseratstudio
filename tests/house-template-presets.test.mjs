@@ -8,12 +8,12 @@ import {
 } from "../house-template-presets.mjs";
 import { indexMediaLibrary } from "../media-library.mjs";
 
-test("the approved starter catalog contains exactly 18 unique templates", () => {
-  assert.equal(HOUSE_TEMPLATE_PRESETS.length, 18);
-  assert.equal(new Set(HOUSE_TEMPLATE_PRESETS.map((item) => item.key)).size, 18);
+test("the approved starter catalog contains exactly 22 unique templates", () => {
+  assert.equal(HOUSE_TEMPLATE_PRESETS.length, 22);
+  assert.equal(new Set(HOUSE_TEMPLATE_PRESETS.map((item) => item.key)).size, 22);
   assert.deepEqual(
     HOUSE_TEMPLATE_PRESETS.slice(-4).map((item) => item.name),
-    ["SOL 101 V2", "SOL 107 V2", "SOL 110 V2", "SUN 113 V6"],
+    ["SOL 204 V4", "SOL 229 V3", "SOL 230 V6", "SOL 242 V4"],
   );
 });
 
@@ -53,7 +53,7 @@ test("updates only the confirmed SUN 113 master data in a saved template", () =>
   assert.equal(applyConfirmedHouseModelDetails(otherHouse), otherHouse);
 });
 
-test("all 18 templates build from the configured media library when it is available", async (context) => {
+test("all 22 templates build from the configured media library when it is available", async (context) => {
   let mediaItems;
   try {
     mediaItems = await indexMediaLibrary();
@@ -65,7 +65,7 @@ test("all 18 templates build from the configured media library when it is availa
     throw error;
   }
   const houses = buildHouseTemplatePresets(mediaItems, { constructionYear: 2027 });
-  assert.equal(houses.length, 18);
+  assert.equal(houses.length, 22);
   assert.equal(houses.filter((house) => house.floors === 1).length, 3);
   const sun113 = houses.find((house) => house.name === "SUN 113 V6");
   assert.equal(sun113.housePrice, 355_122);
@@ -76,6 +76,15 @@ test("all 18 templates build from the configured media library when it is availa
   assert.equal(sun113.floors, 2);
   assert.equal(houses.find((house) => house.name === "SUN 126 V2").housePrice, 365_073);
   assert.equal(houses.find((house) => house.name === "SUN 165 V2").housePrice, 426_931);
+  assert.deepEqual(
+    houses.slice(-4).map((house) => [house.name, house.housePrice, house.livingArea, house.rooms, house.bedrooms, house.bathrooms]),
+    [
+      ["SOL 204 V4", 573_427, 206.60, 6, 4, 2],
+      ["SOL 229 V3", 623_997, 227.60, 7, 4, 3],
+      ["SOL 230 V6", 629_138, 230.09, 7, 4, 4],
+      ["SOL 242 V4", 655_971, 243.34, 8, 6, 4],
+    ],
+  );
   for (const house of houses) {
     assert.equal(house.images.length, house.floors === 1 ? 12 : 13, house.name);
     assert.equal(house.images[0].role, "cover", house.name);

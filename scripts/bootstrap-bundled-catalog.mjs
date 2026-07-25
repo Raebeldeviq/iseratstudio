@@ -24,16 +24,20 @@ export async function persistBundledStarterCatalog({
   savedAt = BUNDLED_CATALOG_DATE,
 } = {}) {
   const current = await loadCatalogManifest(catalogDirectory);
-  if (current.stored) return { created: false, houses: current.state.houses.length };
+  const existingHouseIds = new Set((current.state?.houses || []).map((house) => house.id));
+  const missingHouses = current.stored ? houses.filter((house) => !existingHouseIds.has(house.id)) : houses;
+  if (current.stored && !missingHouses.length) return { created: false, updated: false, addedHouses: 0, houses: current.state.houses.length };
 
-  const state = createInitialStudioState({ houses });
+  const state = current.stored
+    ? { ...current.state, houses: [...current.state.houses, ...missingHouses] }
+    : createInitialStudioState({ houses });
   const sessionId = `bundled_${Date.now()}`;
   const started = await startCatalogSnapshot(
-    { sessionId, savedAt, expectedSavedAt: "", state },
+    { sessionId, savedAt: current.stored ? new Date().toISOString() : savedAt, expectedSavedAt: current.savedAt || "", state },
     catalogDirectory,
   );
   const sourceByImageId = new Map();
-  for (const house of houses) {
+  for (const house of missingHouses) {
     for (const image of house.images) sourceByImageId.set(image.id, image.sourceId);
   }
   const mediaById = new Map(mediaItems.map((item) => [item.id, item]));
@@ -52,8 +56,10 @@ export async function persistBundledStarterCatalog({
   }
   await commitCatalogSnapshot(sessionId, catalogDirectory);
   return {
-    created: true,
-    houses: houses.length,
+    created: !current.stored,
+    updated: current.stored,
+    addedHouses: missingHouses.length,
+    houses: state.houses.length,
     uniqueImages: sourceByImageId.size,
     copiedImages: started.missingImageIds.length,
     copiedBytes,
@@ -65,8 +71,6 @@ export async function ensureBundledStarterCatalog({
   mediaRoot,
   interiorRoot,
 } = {}) {
-  const current = await loadCatalogManifest(catalogDirectory);
-  if (current.stored) return { created: false, houses: current.state.houses.length };
   const mediaItems = await indexMediaLibrary(mediaRoot, interiorRoot);
   const houses = buildHouseTemplatePresets(mediaItems);
   return persistBundledStarterCatalog({ catalogDirectory, houses, mediaItems });
@@ -75,8 +79,8 @@ export async function ensureBundledStarterCatalog({
 if (import.meta.url === new URL(process.argv[1], "file:").href) {
   try {
     const result = await ensureBundledStarterCatalog();
-    if (result.created) {
-      console.log(`Integrierter Startkatalog installiert: ${result.houses} Häuser, ${result.uniqueImages} eindeutige Bilder.`);
+    if (result.created || result.updated) {
+      console.log(`Integrierter Katalog aktualisiert: ${result.houses} Häuser, ${result.addedHouses || result.houses} ergänzt.`);
     }
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

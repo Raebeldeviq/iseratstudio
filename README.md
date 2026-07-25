@@ -1,6 +1,6 @@
 # Fabian&Pascal Inseratestudio für macOS
 
-Lokale macOS-Anwendung zum Verwalten von bis zu 18 Haustypen, Grundstücksprojekten und
+Lokale macOS-Anwendung zum Verwalten von bis zu 22 Haustypen, Grundstücksprojekten und
 Inseratentwürfen sowie zum kontrollierten OpenImmo-Import in Immoprofessional.
 Die aktuell geöffnete Anwendungsversion steht dauerhaft dezent unten rechts.
 
@@ -36,7 +36,7 @@ mehr erforderlich.
 
 ## Arbeitsablauf
 
-1. Unter **Grundstücke** Grundstücke aus Excel mit Prüfansicht importieren oder
+1. Unter **Grundstücke & Auswahl** Grundstücke aus Excel mit Prüfansicht importieren oder
    manuell anlegen. Mögliche Dubletten werden nie ungefragt überschrieben.
    Grundstücke lassen sich bearbeiten, filtern, mehrfach auswählen und gesammelt
    an die Projektierung übergeben. Ein optionales PDF-Exposé bleibt lokal und
@@ -49,8 +49,8 @@ mehr erforderlich.
    Auszeichnungen, Vertrauensmotiv und QR-Abschluss. Eine nicht eindeutige
    Hausversion oder ein fehlender Grundriss blockiert die Übernahme, statt eine
    möglicherweise falsche Datei zu verwenden.
-3. Unter **Adresse & Auswahl** die übergebenen Grundstücke prüfen, beliebig viele
-   Adressen markieren und einen zentralen Hauspool festlegen. Die gewichtete
+3. Unter **Projektierung** die zentral ausgewählten Grundstücke prüfen und einen
+   zentralen Hauspool festlegen. Die gewichtete
    Vorschau verteilt pro Grundstück genau vier unterschiedliche Häuser. Fabian und Pascal besitzen getrennte Adressansichten;
    einzelne Adressen können gespeichert werden. Importierte Grundstücke werden
    offline aus PLZ und Ort um Bundesland
@@ -65,7 +65,7 @@ mehr erforderlich.
    und FTPS-Zertifikat geprüft.
 5. Texte erzeugen, anschließend unter **Texte & Vorschau** fachlich und rechtlich
    kontrollieren.
-6. Unter **Adresse & Auswahl** Häuser einzeln austauschen, fixieren,
+6. Unter **Projektierung** Häuser einzeln austauschen, fixieren,
    grundstücksbezogen ausschließen oder neu verteilen und die geprüfte
    Vierer-Vorschau übernehmen. Unter
    **Export & Upload** Reihenfolge, Hausvarianten, Aktionsbild, Status,
@@ -77,11 +77,52 @@ bewusste Aktion in Immoprofessional.
 
 ## Grundstücksverwaltung und Exposé-PDFs
 
-Grundstücke sind ab Datenschema 3 eigenständige Datensätze mit interner ID,
+Grundstücke sind ab Datenschema 4 die einzige Adressquelle für Verwaltung,
+Mehrfachauswahl und Projektierung. Sie besitzen interne ID,
 Straße, Hausnummer, PLZ, Ort, Grundstücksgröße, Kaufpreis, Zeitstempeln und
 Aktivstatus. Projektierungen referenzieren den Grundstücksdatensatz; die
 bisherigen Projektfelder bleiben für bestehende Export- und Uploadpfade
-kompatibel und werden aus der zentralen Quelle synchronisiert.
+kompatibel und werden aus der zentralen Quelle synchronisiert. Eine manuelle
+Löschung entfernt den Grundstücksdatensatz und sämtliche internen abhängigen
+Projekt-, Upload-, Aktionsbild- und Rotationsreferenzen. Sie löst niemals eine
+externe Löschung bei Immoprofessional oder einem Immobilienportal aus.
+
+Die Unteransicht **Verwalten** enthält Anlage, Bearbeitung, vollständige
+Löschung, Exposé-Verwaltung und den kontrollierten Excel-Import. Unter **Für
+Projektierung auswählen** werden dieselben aktiven Datensätze nach Bundesland
+und Landkreis gruppiert. Grundstücke mit ein bis drei Inseraten sind gelb,
+Grundstücke ab vier Inseraten grün markiert; bei mehr als vier Varianten steht
+zusätzlich ein deutlicher Hinweis am einzelnen Eintrag.
+
+## Automatischer KI-Grundstücksabgleich
+
+Der lokale Helfer liest `KI_Grundstuecke.xlsx` ausschließlich schreibgeschützt.
+Der Quellpfad steht zentral in `plot-sync-config.mjs` und kann über
+`FPI_PLOT_SYNC_SOURCE_PATH` überschrieben werden. Berücksichtigt werden nur die
+Statuswerte **Neu**, **Vorhanden** und **Nicht mehr vorhanden**. Die Zuordnung
+erfolgt in dieser Reihenfolge über interne ID, normalisierten Inseratslink und –
+nur ohne beide Kennungen – eine eindeutige normalisierte Adresse.
+
+Der Abgleich läuft nach dem ersten erfolgreichen Lauf alle drei Tage um 07:00
+Uhr in `Europe/Berlin`. Status, nächster Termin und Protokoll liegen persistent
+unter `~/Library/Application Support/Fabian-Pascal Inseratestudio`; ein Datei-
+und Prozess-Lock verhindert parallele Läufe. War der Mac zum Termin aus oder im
+Ruhezustand, holt der lokale Helfer den fälligen Lauf beim nächsten Start nach.
+Ein manueller Lauf verschiebt den bestehenden Rhythmus nicht.
+
+`Nicht mehr vorhanden` deaktiviert ein Grundstück und sperrt neue
+Projektierungen sowie Rotationen, erhält aber historische Projekte und externe
+Inserate. Aktive externe Inserate erzeugen einen Prüfhinweis und werden nicht
+automatisch gelöscht. Strukturfehler brechen vor dem atomaren Katalogschreiben
+ab; fehlerhafte Einzelzeilen werden protokolliert und stoppen die übrigen
+gültigen Zeilen nicht.
+
+Eine später auf Vercel gehostete Webanwendung kann nicht direkt auf den lokalen
+iCloud-Pfad des Mac zugreifen. Dafür muss die Excel-Datei über einen für den
+Server erreichbaren, authentifizierten Objektspeicher oder ein eingebundenes
+Netzlaufwerk bereitgestellt und der bestehende Job über einen persistenten
+Server-/Cron-Prozess ausgelöst werden. Der lokale Helfer bleibt für die aktuelle
+Mac-Version die zuständige, persistente Ausführungsumgebung.
 
 Der Excel-Import speichert erst nach einer sichtbaren Vorschau. Ungültige Zeilen
 sind nicht auswählbar. Bei einer Kombination aus gleicher Straße, Hausnummer,
@@ -103,13 +144,15 @@ OpenImmo-Textwert exportiert.
 
 ## Vorinstallierter Hauskatalog
 
-Unter **Haustypen** stehen 18 vollständige Vorlagen bereit:
+Unter **Haustypen** stehen 22 vollständige Vorlagen bereit:
 
 - SUN 126 V2, SUN 130 V2, SUN 136 V4, SUN 142 V2, SUN 143 V4,
   SUN 144 V4 Tag, SUN 151 V8, SUN 154 V3, SUN 157 V2, SUN 164 V2,
   SUN 165 V2, SUN 167 V3, SUN 168 V2 und SUN 210 V2
 - SOL 101 V2, SOL 107 V2 und SOL 110 V2 als eingeschossige Bungalows
 - SUN 113 V6 mit 106,15 m², 4 Zimmern, 3 Schlafzimmern und 355.122 € Hauspreis
+- SOL 204 V4, SOL 229 V3, SOL 230 V6 und SOL 242 V4 als vollständig
+  bebilderte Zweifamilienhäuser mit versionsgenauen EG-/OG- bzw. DG-Grundrissen
 
 Jede Vorlage enthält die festgelegte Bildfolge mit beschriftetem Titelbild,
 sechs unterschiedlichen Innenraumkategorien, emotionalem Catch,
@@ -118,9 +161,9 @@ Mehrere optionale Aktionsbilder können zentral verwaltet und beim Export
 adressbezogen rotiert vor diese Folge gesetzt werden.
 
 Auf einem frischen Mac installiert der Startknopf diesen neutralen Katalog
-automatisch aus den eingebauten Medien. Existiert bereits ein lokaler Katalog,
-wird er nicht überschrieben. Bestehende Projekte, Anbieterdaten, Aktionsbild
-und Zugangsdaten bleiben erhalten.
+automatisch aus den eingebauten Medien. Bei einem bestehenden lokalen Katalog
+werden ausschließlich fehlende, fest freigegebene Vorlagen ergänzt; vorhandene
+Häuser, Projekte, Anbieterdaten, Aktionsbilder und Zugangsdaten bleiben erhalten.
 
 ## Integrierte Medienbibliothek
 

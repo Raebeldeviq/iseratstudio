@@ -48,3 +48,17 @@ test("uses the device snapshot normally when it is newest", () => {
   assert.equal(selectCatalogSnapshot([browser, device]), device);
   assert.deepEqual(catalogSnapshotSummary(device), { preparedHouses: 1, addressedProjects: 0 });
 });
+
+test("keeps the migrated device catalog ahead of a newer stale browser schema", () => {
+  const device = snapshot("device", "2026-07-25T10:00:00.000Z", {
+    dataSchemaVersion: 4,
+    houses: [{ id: "new-house", housePrice: 1, images: [] }],
+    projects: [{ id: "project", street: "Weg" }],
+  });
+  const browser = snapshot("browser", "2026-07-25T11:00:00.000Z", {
+    dataSchemaVersion: 3,
+    houses: [{ id: "old-house", housePrice: 1, images: [] }],
+    projects: [{ id: "project", street: "Weg" }],
+  });
+  assert.equal(selectCatalogSnapshot([browser, device]), device);
+});

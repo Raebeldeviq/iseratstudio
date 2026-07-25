@@ -45,10 +45,11 @@ export function selectCatalogSnapshot(candidates = []) {
 
   const newestSummary = catalogSnapshotSummary(newest);
   const deviceSummary = catalogSnapshotSummary(device);
+  const deviceHasNewerSchema = Number(device.state?.dataSchemaVersion || 0) > Number(newest.state?.dataSchemaVersion || 0);
   const wouldEraseHouseCatalog = newestSummary.preparedHouses === 0
     && deviceSummary.preparedHouses > 0;
   const wouldEraseProjectCatalog = newestSummary.addressedProjects === 0
     && deviceSummary.addressedProjects > 0;
 
-  return wouldEraseHouseCatalog || wouldEraseProjectCatalog ? device : newest;
+  return deviceHasNewerSchema || wouldEraseHouseCatalog || wouldEraseProjectCatalog ? device : newest;
 }

@@ -1,6 +1,6 @@
 import { createListingGroup } from "./listing-groups.mjs";
 
-export const PLOT_RECORD_SCHEMA_VERSION = 1;
+export const PLOT_RECORD_SCHEMA_VERSION = 2;
 
 function text(value) {
   return String(value ?? "").trim();
@@ -59,6 +59,14 @@ export function normalizePlotRecord(value, options = {}) {
     plotSizeSqm: positiveNumber(value?.plotSizeSqm ?? value?.plot_size_sqm ?? value?.plotArea),
     purchasePrice: positiveNumber(value?.purchasePrice ?? value?.purchase_price ?? value?.plotPrice),
     regionalNotes: text(value?.regionalNotes ?? value?.regional_notes),
+    sourceInternalId: text(value?.sourceInternalId ?? value?.source_internal_id),
+    listingUrl: text(value?.listingUrl ?? value?.listing_url),
+    sourceName: text(value?.sourceName ?? value?.source_name),
+    sourceStatus: text(value?.sourceStatus ?? value?.source_status),
+    sourceFirstSeenAt: text(value?.sourceFirstSeenAt ?? value?.source_first_seen_at),
+    sourceLastCheckedAt: text(value?.sourceLastCheckedAt ?? value?.source_last_checked_at),
+    sourceExposeFilename: text(value?.sourceExposeFilename ?? value?.source_expose_filename),
+    syncedAt: text(value?.syncedAt ?? value?.synced_at),
     owner: value?.owner === "pascal" ? "pascal" : value?.owner === "fabian" ? "fabian" : undefined,
     exposeFileReference,
     exposeFilename: exposeFileReference ? exposeFilename : "",
@@ -113,6 +121,7 @@ export function applyPlotToProject(project, plot) {
     city: plot.city,
     plotArea: plot.plotSizeSqm,
     plotPrice: plot.purchasePrice,
+    isActive: plot.isActive !== false,
     name: text(project?.name) || `${address}, ${plot.postalCode} ${plot.city}`.trim(),
   };
 }
@@ -152,6 +161,7 @@ export function createProjectFromPlot(plot, options = {}) {
     county: "",
     plotArea: plot.plotSizeSqm,
     plotPrice: plot.purchasePrice,
+    isActive: plot.isActive !== false,
     additionalCosts: 0,
     locationFacts: plot.regionalNotes,
     transportFacts: "",
@@ -211,4 +221,66 @@ export function archivePlotRecord(plots, plotId, now = new Date().toISOString())
   return (plots || []).map((plot) => plot.id === plotId
     ? normalizePlotRecord({ ...plot, isActive: false, updatedAt: now }, { now, fallbackId: plot.id })
     : plot);
+}
+
+function withoutDeletedIds(values, deletedIds) {
+  return (Array.isArray(values) ? values : []).filter((value) => !deletedIds.has(String(value)));
+}
+
+/**
+ * Removes one plot and every internal record that belongs exclusively to its
+ * projects. This function never calls an external property portal.
+ */
+export function deletePlotRecordCascade(state, plotId) {
+  const id = text(plotId);
+  const projects = Array.isArray(state?.projects) ? state.projects : [];
+  const deletedProjects = projects.filter((project) => text(project?.plotId) === id);
+  const deletedProjectIds = new Set(deletedProjects.map((project) => text(project.id)));
+  const deletedListingIds = new Set(deletedProjects.flatMap((project) =>
+    (Array.isArray(project?.listings) ? project.listings : []).map((listing) => text(listing?.id))));
+  const distribution = state?.houseDistribution && typeof state.houseDistribution === "object"
+    ? state.houseDistribution
+    : null;
+  const scheduler = state?.scheduler && typeof state.scheduler === "object"
+    ? state.scheduler
+    : null;
+  const cleanRun = (run) => ({
+    ...run,
+    selectedListingIds: withoutDeletedIds(run?.selectedListingIds, deletedListingIds),
+    completedListingIds: withoutDeletedIds(run?.completedListingIds, deletedListingIds),
+    failedListingIds: withoutDeletedIds(run?.failedListingIds, deletedListingIds),
+    results: (Array.isArray(run?.results) ? run.results : []).filter((entry) =>
+      !deletedProjectIds.has(text(entry?.projectId)) && !deletedListingIds.has(text(entry?.listingId))),
+  });
+
+  return {
+    state: {
+      ...state,
+      plots: (Array.isArray(state?.plots) ? state.plots : []).filter((plot) => text(plot?.id) !== id),
+      projects: projects.filter((project) => !deletedProjectIds.has(text(project?.id))),
+      promotionUsage: (Array.isArray(state?.promotionUsage) ? state.promotionUsage : []).filter((usage) =>
+        !deletedProjectIds.has(text(usage?.projectId)) && !deletedListingIds.has(text(usage?.listingId))),
+      uploadHistory: (Array.isArray(state?.uploadHistory) ? state.uploadHistory : []).filter((entry) =>
+        !deletedProjectIds.has(text(entry?.projectId)) && !deletedListingIds.has(text(entry?.listingId))),
+      ...(distribution ? {
+        houseDistribution: {
+          ...distribution,
+          projects: (Array.isArray(distribution.projects) ? distribution.projects : []).filter((record) =>
+            !deletedProjectIds.has(text(record?.projectId))),
+          houseUsage: (Array.isArray(distribution.houseUsage) ? distribution.houseUsage : []).map((usage) => ({
+            ...usage,
+            projectIds: withoutDeletedIds(usage?.projectIds, deletedProjectIds),
+            activeProjectIds: withoutDeletedIds(usage?.activeProjectIds, deletedProjectIds),
+          })),
+          combinationUsage: (Array.isArray(distribution.combinationUsage) ? distribution.combinationUsage : []).map((usage) => ({
+            ...usage,
+            lastProjectId: deletedProjectIds.has(text(usage?.lastProjectId)) ? "" : text(usage?.lastProjectId),
+          })),
+        },
+      } : {}),
+      ...(scheduler ? { scheduler: { ...scheduler, runs: (Array.isArray(scheduler.runs) ? scheduler.runs : []).map(cleanRun) } } : {}),
+    },
+    deletedProjectIds: [...deletedProjectIds],
+    deletedListingIds: [...deletedListingIds],
+  };
 }

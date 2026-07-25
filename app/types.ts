@@ -162,6 +162,14 @@ export type PlotRecord = {
   plotSizeSqm: number;
   purchasePrice: number;
   regionalNotes: string;
+  sourceInternalId: string;
+  listingUrl: string;
+  sourceName: string;
+  sourceStatus: string;
+  sourceFirstSeenAt: string;
+  sourceLastCheckedAt: string;
+  sourceExposeFilename: string;
+  syncedAt: string;
   owner?: AddressOwner;
   exposeFileReference: string;
   exposeFilename: string;
@@ -174,6 +182,7 @@ export type PlotRecord = {
 export type ProjectInput = {
   id: string;
   plotId?: string;
+  isActive?: boolean;
   owner: AddressOwner;
   name: string;
   street: string;

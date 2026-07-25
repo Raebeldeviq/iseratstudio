@@ -12,9 +12,9 @@ import {
   WORKFLOW_STATUS,
 } from "./workflow-status.mjs";
 import { enforceSinglePromotionAssignment } from "./promotion-images.mjs";
-import { normalizePlotState } from "./plot-records.mjs";
+import { deletePlotRecordCascade, normalizePlotState } from "./plot-records.mjs";
 
-export const STUDIO_DATA_SCHEMA_VERSION = 3;
+export const STUDIO_DATA_SCHEMA_VERSION = 4;
 
 function normalizedText(value) {
   return String(value ?? "")
@@ -259,6 +259,7 @@ export function auditStudioState(state, options = {}) {
 export function cleanupStudioState(state, options = {}) {
   const apply = options.apply === true;
   const now = String(options.now || new Date().toISOString());
+  const previousSchemaVersion = Math.max(0, Number(state?.dataSchemaVersion) || 0);
   const before = auditStudioState(state, { now });
   if (!apply) return { state, changed: false, report: { mode: "dry-run", before, actions: {} } };
 
@@ -276,6 +277,8 @@ export function cleanupStudioState(state, options = {}) {
     removedStaleControls: 0,
     deactivatedExtraHouseAssignments: 0,
     removedLegacyGroupLeases: 0,
+    removedLegacyArchivedPlots: 0,
+    removedLegacyArchivedProjects: 0,
   };
   const projects = (state.projects || []).map((project) => cleanProject(project, now, counters));
   const promotionImages = dedupeExact(state.promotionImages || [], (image) => image.id || "");
@@ -296,7 +299,18 @@ export function cleanupStudioState(state, options = {}) {
     uploadHistory: uploadHistory.values.slice(-MAX_UPLOAD_LOGS),
     ...(scheduler ? { scheduler: { ...scheduler, runs: schedulerRuns.values.slice(-MAX_SCHEDULER_LOGS) } } : {}),
   };
-  const cleaned = normalizePlotState(cleanedBase, { now });
+  let cleaned = normalizePlotState(cleanedBase, { now });
+  if (previousSchemaVersion < 4) {
+    const legacyArchivedPlotIds = (cleaned.plots || [])
+      .filter((plot) => plot.isActive === false && !plot.sourceStatus && !plot.sourceInternalId && !plot.listingUrl)
+      .map((plot) => plot.id);
+    for (const plotId of legacyArchivedPlotIds) {
+      const deletion = deletePlotRecordCascade(cleaned, plotId);
+      counters.removedLegacyArchivedPlots += 1;
+      counters.removedLegacyArchivedProjects += deletion.deletedProjectIds.length;
+      cleaned = deletion.state;
+    }
+  }
   const after = auditStudioState(cleaned, { now });
   return {
     state: cleaned,

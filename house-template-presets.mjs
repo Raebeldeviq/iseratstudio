@@ -30,6 +30,10 @@ export const HOUSE_TEMPLATE_PRESETS = Object.freeze([
   { key: "sol107-v2", name: "SOL 107 V2", coverFilename: "Sol 107 SD.png", livingArea: 106.85, rooms: 4, bedrooms: 3, bathrooms: 1, floors: 1, houseType: "Bungalow" },
   { key: "sol110-v2", name: "SOL 110 V2", coverFilename: "SOL 110 V2.png", livingArea: 110.45, rooms: 4, bedrooms: 3, bathrooms: 1, floors: 1, houseType: "Bungalow" },
   { key: "sun113-v6", name: "SUN 113 V6", coverFilename: "SUN 113 V6.png", ...CONFIRMED_HOUSE_MODEL_DETAILS.SUN113, bathrooms: 1, floors: 2 },
+  { key: "sol204-v4", name: "SOL 204 V4", coverFilename: "SOL 204 V4.png", livingArea: 206.60, rooms: 6, bedrooms: 4, bathrooms: 2, floors: 2, houseType: "Zweifamilienhaus" },
+  { key: "sol229-v3", name: "SOL 229 V3", coverFilename: "SOL 229 V3.png", livingArea: 227.60, rooms: 7, bedrooms: 4, bathrooms: 3, floors: 2, houseType: "Zweifamilienhaus" },
+  { key: "sol230-v6", name: "SOL 230 V6", coverFilename: "SOL 230 V6.png", livingArea: 230.09, rooms: 7, bedrooms: 4, bathrooms: 4, floors: 2, houseType: "Zweifamilienhaus" },
+  { key: "sol242-v4", name: "SOL 242 V4", coverFilename: "SOL 242 V4.png", livingArea: 243.34, rooms: 8, bedrooms: 6, bathrooms: 4, floors: 2, houseType: "Zweifamilienhaus" },
 ]);
 
 /**

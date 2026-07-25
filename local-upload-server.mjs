@@ -35,6 +35,7 @@ import {
   MAX_PLOT_EXPOSE_BYTES,
   readPlotExpose,
 } from "./plot-expose-store.mjs";
+import { createPlotSyncService } from "./plot-sync-service.mjs";
 
 const HOST = "127.0.0.1";
 const PORT = 43182;
@@ -52,6 +53,7 @@ const allowedOrigins = new Set([
 let credentialCache;
 const writeUploadLog = createStructuredFileLogger(UPLOAD_LOG_PATH, { jobType: "immoprofessional-upload" });
 const uploadJobLedger = createUploadJobLedger(UPLOAD_JOB_LEDGER_PATH);
+const plotSyncService = createPlotSyncService();
 
 async function credentialVault() {
   if (!credentialCache) credentialCache = await loadCredentialVault();
@@ -251,7 +253,10 @@ const server = createServer(async (request, response) => {
   const isPlotExposeCommit = request.method === "POST" && pathname === "/plot-exposes/commit";
   const isPlotExposeLoad = request.method === "GET" && pathname === "/plot-exposes/file";
   const isPlotExposeArchive = request.method === "POST" && pathname === "/plot-exposes/archive";
-  if (!isHealth && !isUpload && !isBinaryUpload && !isLocalSave && !isTextGeneration && !isImageCaptionGeneration && !isOpenAiKeyValidation && !isCredentialLoad && !isCredentialSave && !isCatalogLoad && !isCatalogSave && !isCatalogV2Start && !isCatalogV2ImageSave && !isCatalogV2Commit && !isCatalogV2ManifestLoad && !isCatalogV2ImageLoad && !isMediaLibraryList && !isMediaLibrarySequence && !isMediaLibraryImage && !isPlotExposeAnalyze && !isPlotExposeCommit && !isPlotExposeLoad && !isPlotExposeArchive) {
+  const isPlotSyncStatus = request.method === "GET" && pathname === "/plot-sync/status";
+  const isPlotSyncRun = request.method === "POST" && pathname === "/plot-sync/run";
+  const isPlotSyncLog = request.method === "GET" && pathname === "/plot-sync/log";
+  if (!isHealth && !isUpload && !isBinaryUpload && !isLocalSave && !isTextGeneration && !isImageCaptionGeneration && !isOpenAiKeyValidation && !isCredentialLoad && !isCredentialSave && !isCatalogLoad && !isCatalogSave && !isCatalogV2Start && !isCatalogV2ImageSave && !isCatalogV2Commit && !isCatalogV2ManifestLoad && !isCatalogV2ImageLoad && !isMediaLibraryList && !isMediaLibrarySequence && !isMediaLibraryImage && !isPlotExposeAnalyze && !isPlotExposeCommit && !isPlotExposeLoad && !isPlotExposeArchive && !isPlotSyncStatus && !isPlotSyncRun && !isPlotSyncLog) {
     send(response, 404, { ok: false, message: "Nicht gefunden." }, origin);
     return;
   }
@@ -378,6 +383,16 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (isPlotSyncStatus) {
+      send(response, 200, { ok: true, ...(await plotSyncService.loadStatus()) }, origin);
+      return;
+    }
+
+    if (isPlotSyncLog) {
+      send(response, 200, { ok: true, log: await plotSyncService.lastLog() }, origin);
+      return;
+    }
+
     if (isCatalogV2ImageLoad) {
       const result = await loadCatalogImage(requestUrl.searchParams.get("imageId"));
       response.writeHead(200, {
@@ -494,6 +509,15 @@ const server = createServer(async (request, response) => {
 
     if (isPlotExposeArchive) {
       const result = await archivePlotExpose(body.reference, { allowPending: body.pending === true });
+      send(response, 200, { ok: true, ...result }, origin);
+      return;
+    }
+
+    if (isPlotSyncRun) {
+      const result = await plotSyncService.run({
+        dryRun: body.dryRun === true,
+        trigger: "manual",
+      });
       send(response, 200, { ok: true, ...result }, origin);
       return;
     }
@@ -657,6 +681,15 @@ async function startLocalHelper() {
   server.listen(PORT, HOST, () => {
     console.log(`Fabian&Pascal Helfer: http://${HOST}:${PORT}`);
   });
+  void plotSyncService.runIfDue().catch((error) => {
+    console.error(`Grundstücksabgleich: ${error instanceof Error ? error.message : "Start fehlgeschlagen."}`);
+  });
+  const syncTimer = setInterval(() => {
+    void plotSyncService.runIfDue().catch((error) => {
+      if (error?.code !== "PLOT_SYNC_LOCKED") console.error(`Grundstücksabgleich: ${error instanceof Error ? error.message : "Zeitplan fehlgeschlagen."}`);
+    });
+  }, 60_000);
+  syncTimer.unref();
 }
 
 startLocalHelper().catch((error) => {

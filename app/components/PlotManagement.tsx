@@ -9,13 +9,13 @@ import {
   type PlotImportPreviewRow,
 } from "../lib/address-import";
 import {
-  archivePlotRecord,
   createPlotRecord,
   formatPlotStreet,
   normalizePlotRecord,
   replacePlotRecord,
 } from "../../plot-records.mjs";
 import type { AddressOwner, PlotRecord } from "../types";
+import { plotListingCountAppearance } from "../../plot-selection.mjs";
 
 const MAX_IMPORT_BYTES = 10 * 1024 * 1024;
 const MAX_PDF_BYTES = 30 * 1024 * 1024;
@@ -47,9 +47,39 @@ type Props = {
   helperOnline: boolean;
   helperRequest: HelperRequest;
   linkedProjectCounts: Record<string, number>;
+  selectionMeta: Record<string, { listingCount: number; regionLabel: string }>;
+  syncStatus: PlotSyncStatus | null;
+  syncBusy: boolean;
   onSelectionChange: (ids: string[]) => void;
   onSave: (plots: PlotRecord[], message: string) => void;
+  onDelete: (plot: PlotRecord) => void;
   onHandOff: (plotIds: string[]) => void;
+  onSync: (dryRun: boolean) => void;
+};
+
+type PlotSyncRun = {
+  startedAt: string;
+  status: string;
+  dryRun: boolean;
+  rowsRead: number;
+  created: number;
+  updated: number;
+  deactivated: number;
+  skipped: number;
+  failed: number;
+  duplicatesPrevented: number;
+  message: string;
+  errors?: Array<{ excelRow: number; reason: string }>;
+  warnings?: Array<{ excelRow: number; reason: string }>;
+};
+
+type PlotSyncStatus = {
+  sourceFound: boolean;
+  running: boolean;
+  nextScheduledRunAt: string;
+  config: { sourcePath: string; intervalDays: number; hour: number; timeZone: string };
+  lastRun: PlotSyncRun | null;
+  lastSuccessfulRun: PlotSyncRun | null;
 };
 
 function euro(value: number): string {
@@ -91,10 +121,17 @@ export default function PlotManagement({
   helperOnline,
   helperRequest,
   linkedProjectCounts,
+  selectionMeta,
+  syncStatus,
+  syncBusy,
   onSelectionChange,
   onSave,
+  onDelete,
   onHandOff,
+  onSync,
 }: Props) {
+  const [view, setView] = useState<"manage" | "select">("manage");
+  const [logOpen, setLogOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [cityFilter, setCityFilter] = useState("");
   const [draft, setDraft] = useState<PlotRecord | null>(null);
@@ -122,6 +159,20 @@ export default function PlotManagement({
   }, [activePlots, cityFilter, query]);
   const visibleIds = visiblePlots.map((plot) => plot.id);
   const allVisibleSelected = Boolean(visibleIds.length) && visibleIds.every((id) => selectedPlotIds.includes(id));
+  const selectionGroups = useMemo(() => {
+    const groups = new Map<string, PlotRecord[]>();
+    for (const plot of visiblePlots) {
+      const label = selectionMeta[plot.id]?.regionLabel || "Nicht zugeordnet";
+      groups.set(label, [...(groups.get(label) || []), plot]);
+    }
+    return [...groups.entries()]
+      .sort(([left], [right]) => left.localeCompare(right, "de"))
+      .map(([label, entries]) => ({
+        label,
+        plots: entries.sort((left, right) => [left.postalCode, left.city, formatPlotStreet(left)].join(" ").localeCompare([right.postalCode, right.city, formatPlotStreet(right)].join(" "), "de")),
+      }));
+  }, [selectionMeta, visiblePlots]);
+  const displayedSyncRun = syncStatus?.lastSuccessfulRun || syncStatus?.lastRun;
 
   const beginEdit = (plot?: PlotRecord) => {
     setDraft(plot ? normalizePlotRecord(plot, { fallbackId: plot.id }) as PlotRecord : emptyPlot(defaultOwner));
@@ -308,11 +359,10 @@ export default function PlotManagement({
   const removePlot = (plot: PlotRecord) => {
     const links = linkedProjectCounts[plot.id] || 0;
     const warning = links
-      ? `Mit diesem Grundstück sind ${links} Projektierung${links === 1 ? "" : "en"} verknüpft. Diese bleiben unverändert erhalten. Das Grundstück wird nur aus der Auswahl archiviert. Fortfahren?`
-      : "Soll dieses Grundstück wirklich entfernt werden? Es wird sicher archiviert.";
+      ? `Mit diesem Grundstück sind ${links} interne Projektierung${links === 1 ? "" : "en"} verknüpft. Grundstück, Projektierungen und interne Folgebeziehungen werden vollständig gelöscht. Bereits veröffentlichte externe Inserate bleiben unberührt. Fortfahren?`
+      : "Soll dieses Grundstück wirklich vollständig aus der App gelöscht werden? Externe Inserate bleiben unberührt.";
     if (!window.confirm(warning)) return;
-    onSave(archivePlotRecord(plots, plot.id) as PlotRecord[], "Grundstück wurde archiviert; bestehende Projektierungen bleiben erhalten.");
-    onSelectionChange(selectedPlotIds.filter((id) => id !== plot.id));
+    onDelete(plot);
   };
 
   const importExcel = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -369,20 +419,36 @@ export default function PlotManagement({
           </div>
         </div>
 
+        <div className="plot-view-switch" role="tablist" aria-label="Grundstücksbereich wählen">
+          <button className={view === "manage" ? "active" : ""} onClick={() => setView("manage")}>Verwalten</button>
+          <button className={view === "select" ? "active" : ""} onClick={() => setView("select")}>Für Projektierung auswählen</button>
+        </div>
+
+        <section className="plot-sync-card" aria-label="Automatischer Grundstücksabgleich">
+          <div><span className="eyebrow">Excel-Abgleich · alle 3 Tage um 07:00 Uhr</span><b>{syncStatus?.sourceFound ? "Quelldatei gefunden" : "Quelldatei nicht gefunden"}</b><small>{syncStatus?.config.sourcePath || "Status wird vom lokalen Helfer geladen …"}</small></div>
+          <dl>
+            <div><dt>Letzter Erfolg</dt><dd>{syncStatus?.lastSuccessfulRun ? new Date(syncStatus.lastSuccessfulRun.startedAt).toLocaleString("de-DE") : "–"}</dd></div>
+            <div><dt>Nächster Lauf</dt><dd>{syncStatus?.nextScheduledRunAt ? new Date(syncStatus.nextScheduledRunAt).toLocaleString("de-DE") : "–"}</dd></div>
+            <div><dt>Neu / aktualisiert</dt><dd>{displayedSyncRun ? `${displayedSyncRun.created} / ${displayedSyncRun.updated}` : "–"}</dd></div>
+            <div><dt>Deaktiviert / Fehler</dt><dd>{displayedSyncRun ? `${displayedSyncRun.deactivated} / ${displayedSyncRun.failed}` : "–"}</dd></div>
+          </dl>
+          <div className="button-row"><button className="secondary" disabled={!helperOnline || syncBusy} onClick={() => onSync(true)}>Dry-Run</button><button className="primary" disabled={!helperOnline || syncBusy} onClick={() => onSync(false)}>{syncBusy ? "Abgleich läuft …" : "Jetzt synchronisieren"}</button><button className="secondary" disabled={!syncStatus?.lastRun} onClick={() => setLogOpen((open) => !open)}>Letztes Protokoll öffnen</button></div>
+          {logOpen && syncStatus?.lastRun ? <div className="plot-sync-log"><b>{syncStatus.lastRun.message}</b><span>{syncStatus.lastRun.rowsRead} gelesen · {syncStatus.lastRun.created} neu · {syncStatus.lastRun.updated} aktualisiert · {syncStatus.lastRun.deactivated} deaktiviert · {syncStatus.lastRun.skipped} übersprungen · {syncStatus.lastRun.duplicatesPrevented} Dubletten verhindert · {syncStatus.lastRun.failed} fehlerhaft</span>{syncStatus.lastRun.errors?.length ? <ul>{syncStatus.lastRun.errors.map((error, index) => <li key={`${error.excelRow}-${index}`}>Zeile {error.excelRow || "–"}: {error.reason}</li>)}</ul> : null}</div> : null}
+        </section>
+
         {message ? <div className="plot-inline-message" role="status">{message}</div> : null}
 
         <div className="plot-toolbar">
           <label className="field"><span>Suche</span><input value={query} placeholder="Straße, PLZ oder Ort" onChange={(event) => setQuery(event.target.value)} /></label>
           <label className="field"><span>Ort filtern</span><select value={cityFilter} onChange={(event) => setCityFilter(event.target.value)}><option value="">Alle Orte</option>{cityOptions.map((city) => <option key={city}>{city}</option>)}</select></label>
-          <div className="plot-selection-summary"><b>{selectedPlotIds.length}</b><span>ausgewählt</span></div>
-          <div className="button-row"><button className="secondary" disabled={!visibleIds.length} onClick={toggleAllVisible}>{allVisibleSelected ? "Sichtbare abwählen" : "Alle sichtbaren wählen"}</button><button className="secondary" disabled={!selectedPlotIds.length} onClick={() => onSelectionChange([])}>Auswahl aufheben</button><button className="primary" disabled={!selectedPlotIds.length} onClick={() => onHandOff(selectedPlotIds)}>An Projektierung übergeben</button></div>
+          {view === "select" ? <><div className="plot-selection-summary"><b>{selectedPlotIds.length}</b><span>ausgewählt</span></div>
+          <div className="button-row"><button className="secondary" disabled={!visibleIds.length} onClick={toggleAllVisible}>{allVisibleSelected ? "Sichtbare abwählen" : "Alle sichtbaren wählen"}</button><button className="secondary" disabled={!selectedPlotIds.length} onClick={() => onSelectionChange([])}>Auswahl aufheben</button><button className="primary" disabled={!selectedPlotIds.length} onClick={() => onHandOff(selectedPlotIds)}>An Projektierung übergeben</button></div></> : null}
         </div>
 
-        <div className="plot-table" role="table" aria-label="Grundstücksübersicht">
-          <div className="plot-table-head" role="row"><span>Auswahl</span><span>Straße</span><span>PLZ</span><span>Ort</span><span>Grundstück</span><span>Kaufpreis</span><span>Exposé</span><span>Aktionen</span></div>
+        {view === "manage" ? <div className="plot-table" role="table" aria-label="Grundstücksübersicht">
+          <div className="plot-table-head manage" role="row"><span>Straße</span><span>PLZ</span><span>Ort</span><span>Grundstück</span><span>Kaufpreis</span><span>Exposé</span><span>Aktionen</span></div>
           {visiblePlots.map((plot) => (
-            <div className="plot-table-row" role="row" key={plot.id}>
-              <label className="plot-checkbox"><input type="checkbox" checked={selectedPlotIds.includes(plot.id)} onChange={() => togglePlot(plot.id)} /><span className="sr-only">{formatPlotStreet(plot)} auswählen</span></label>
+            <div className="plot-table-row manage" role="row" key={plot.id}>
               <b>{formatPlotStreet(plot) || "–"}<small>geändert {date(plot.updatedAt)}</small></b>
               <span>{plot.postalCode || "–"}</span><span>{plot.city || "–"}</span><span>{plot.plotSizeSqm ? `${number(plot.plotSizeSqm)} m²` : "–"}</span><span>{plot.purchasePrice ? euro(plot.purchasePrice) : "–"}</span>
               <span className={plot.exposeFileReference ? "plot-expose yes" : "plot-expose"}>{plot.exposeFileReference ? "Ja" : "Nein"}{plot.exposeFilename ? <small>{plot.exposeFilename}</small> : null}</span>
@@ -390,7 +456,11 @@ export default function PlotManagement({
             </div>
           ))}
           {!visiblePlots.length ? <div className="empty-state"><b>Keine Grundstücke gefunden</b><span>Importiere eine Excel-Datei oder lege ein Grundstück manuell an.</span></div> : null}
-        </div>
+        </div> : <div className="plot-region-groups">{selectionGroups.map((group) => <section key={group.label}><header><b>{group.label}</b><span>{group.plots.length} Grundstücke</span></header><div>{group.plots.map((plot) => {
+          const listingCount = selectionMeta[plot.id]?.listingCount || 0;
+          const appearance = plotListingCountAppearance(listingCount);
+          return <label className={`plot-selection-card ${appearance.tone}${selectedPlotIds.includes(plot.id) ? " selected" : ""}`} key={plot.id}><input type="checkbox" checked={selectedPlotIds.includes(plot.id)} onChange={() => togglePlot(plot.id)} /><span><b>{formatPlotStreet(plot)}, {plot.postalCode} {plot.city}</b><small>{number(plot.plotSizeSqm)} m² · {euro(plot.purchasePrice)}</small></span><em>{listingCount} Inserate/Varianten{appearance.detail ? <small>{appearance.detail}</small> : null}</em></label>;
+        })}</div></section>)}</div>}
       </div>
 
       {importRows.length ? (

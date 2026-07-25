@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   archivePlotRecord,
   createProjectFromPlot,
+  deletePlotRecordCascade,
   normalizePlotState,
   patchPlotFromProject,
   plotAddressKey,
@@ -63,4 +64,32 @@ test("creates a project reference from a selected plot", () => {
   assert.equal(project.owner, "pascal");
   assert.equal(project.locationFacts, "seenreich");
   assert.equal(project.listingGroup.projectId, "project-1");
+});
+
+test("manual plot deletion removes all internal project relationships without external deletion", () => {
+  const state = {
+    plots: [{ id: "plot-1" }, { id: "plot-2" }],
+    projects: [
+      { id: "project-1", plotId: "plot-1", listings: [{ id: "listing-1", externalId: "external-1" }] },
+      { id: "project-2", plotId: "plot-2", listings: [{ id: "listing-2" }] },
+    ],
+    promotionUsage: [{ projectId: "project-1", listingId: "listing-1" }, { projectId: "project-2", listingId: "listing-2" }],
+    uploadHistory: [{ projectId: "project-1", listingId: "listing-1" }, { projectId: "project-2", listingId: "listing-2" }],
+    houseDistribution: {
+      projects: [{ projectId: "project-1" }, { projectId: "project-2" }],
+      houseUsage: [{ houseId: "house", projectIds: ["project-1", "project-2"], activeProjectIds: ["project-1", "project-2"] }],
+      combinationUsage: [{ key: "house", lastProjectId: "project-1" }],
+    },
+    scheduler: { runs: [{ selectedListingIds: ["listing-1", "listing-2"], completedListingIds: ["listing-1"], failedListingIds: [] }] },
+  };
+  const result = deletePlotRecordCascade(state, "plot-1");
+  assert.deepEqual(result.state.plots.map((plot) => plot.id), ["plot-2"]);
+  assert.deepEqual(result.state.projects.map((project) => project.id), ["project-2"]);
+  assert.deepEqual(result.state.promotionUsage.map((entry) => entry.projectId), ["project-2"]);
+  assert.deepEqual(result.state.uploadHistory.map((entry) => entry.projectId), ["project-2"]);
+  assert.deepEqual(result.state.houseDistribution.projects.map((entry) => entry.projectId), ["project-2"]);
+  assert.deepEqual(result.state.houseDistribution.houseUsage[0].projectIds, ["project-2"]);
+  assert.equal(result.state.houseDistribution.combinationUsage[0].lastProjectId, "");
+  assert.deepEqual(result.state.scheduler.runs[0].selectedListingIds, ["listing-2"]);
+  assert.equal(Object.hasOwn(result.state, "externalDeletion"), false);
 });

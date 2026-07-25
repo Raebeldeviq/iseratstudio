@@ -228,7 +228,8 @@ function successfulUpdatesToday(project, at) {
 export function selectSchedulerListings(state, at = nowIso(), options = {}) {
   const scheduler = normalizeListingScheduler(state.scheduler, { now: at });
   const windowIssues = options.ignoreWindow ? [] : schedulerWindowBlockReasons(scheduler, at);
-  const completedToday = state.projects.flatMap((project) => successfulUpdatesToday(project, at));
+  const activeProjects = state.projects.filter((project) => project.isActive !== false);
+  const completedToday = activeProjects.flatMap((project) => successfulUpdatesToday(project, at));
   const remainingGlobal = Math.max(0, scheduler.settings.maxUpdatesPerDay - completedToday.length);
   if (windowIssues.length || remainingGlobal === 0) {
     return { scheduler, selections: [], skipped: [], issues: windowIssues.length ? windowIssues : ["Das Tageslimit ist bereits erreicht."] };
@@ -236,12 +237,12 @@ export function selectSchedulerListings(state, at = nowIso(), options = {}) {
 
   const projectQueues = [];
   const skipped = [];
-  const distribution = normalizeHouseDistribution(state.houseDistribution, state.houses || [], state.projects || []);
+  const distribution = normalizeHouseDistribution(state.houseDistribution, state.houses || [], activeProjects);
   const distributionValidation = validateHousePool(distribution, state.houses || [], {
-    projects: state.projects || [],
+    projects: activeProjects,
     normalized: true,
   });
-  for (const project of state.projects) {
+  for (const project of activeProjects) {
     const group = normalizeListingGroup(project.listingGroup, project.id, { now: at });
     const usedForAddress = successfulUpdatesToday(project, at).length;
     const reservedForAddress = group.listingControls.filter((control) =>

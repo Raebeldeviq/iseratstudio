@@ -96,3 +96,22 @@ test("cleanup enforces one current promotion assignment without deleting usage h
   assert.equal(assigned[0].id, "listing-2");
   assert.equal(cleaned.state.promotionUsage.length, 1);
 });
+
+test("schema four removes legacy soft-delete ghosts but preserves Excel-deactivated history", () => {
+  const base = fixture();
+  base.dataSchemaVersion = 3;
+  base.plots = [
+    { id: "legacy-inactive", street: "Altweg", houseNumber: "1", postalCode: "12345", city: "Ort", isActive: false },
+    { id: "source-inactive", street: "Quellweg", houseNumber: "2", postalCode: "12345", city: "Ort", isActive: false, sourceStatus: "Nicht mehr vorhanden", sourceInternalId: "KI-2" },
+  ];
+  base.projects = [
+    { ...base.projects[0], id: "legacy-project", plotId: "legacy-inactive", street: "Altweg", houseNumber: "1" },
+    { ...base.projects[0], id: "source-project", plotId: "source-inactive", street: "Quellweg", houseNumber: "2" },
+  ];
+  const cleaned = cleanupStudioState(base, { apply: true, now: "2026-07-25T12:00:00.000Z" });
+  assert.deepEqual(cleaned.state.plots.map((plot) => plot.id), ["source-inactive"]);
+  assert.deepEqual(cleaned.state.projects.map((project) => project.id), ["source-project"]);
+  assert.equal(cleaned.state.projects[0].isActive, false);
+  assert.equal(cleaned.report.actions.removedLegacyArchivedPlots, 1);
+  assert.equal(cleaned.report.actions.removedLegacyArchivedProjects, 1);
+});

@@ -99,6 +99,7 @@ import { selectCatalogSnapshot } from "../catalog-snapshot-selection.mjs";
 import {
   applyPlotToProject,
   createProjectFromPlot,
+  deletePlotRecordCascade,
   normalizePlotState,
   patchPlotFromProject,
   plotAddressKey,
@@ -111,7 +112,9 @@ import {
   groupProjectsByRegion,
   loadPostalRegionIndex,
   projectRegionLabel,
+  resolvePostalRegion,
 } from "./lib/postal-regions";
+import type { PostalRegionIndex } from "./lib/postal-regions";
 import { ADDRESS_OWNERS, normalizeProjectOwners, projectOwner } from "./lib/project-owners";
 import { completeListingTexts, generateListingTexts, totalPrice } from "./lib/text-generator";
 import { loadStudioSnapshot, saveStudioState, STORAGE_ID } from "./lib/storage";
@@ -187,9 +190,35 @@ type BatchUploadProgress = {
   status: string;
 };
 
+type PlotSyncRun = {
+  startedAt: string;
+  status: string;
+  dryRun: boolean;
+  rowsRead: number;
+  created: number;
+  updated: number;
+  deactivated: number;
+  skipped: number;
+  duplicatesPrevented: number;
+  failed: number;
+  message: string;
+  errors?: Array<{ excelRow: number; reason: string }>;
+  warnings?: Array<{ excelRow: number; reason: string }>;
+};
+
+type PlotSyncStatus = {
+  sourceFound: boolean;
+  running: boolean;
+  nextScheduledRunAt: string;
+  catalogSavedAt: string;
+  config: { sourcePath: string; intervalDays: number; hour: number; timeZone: string };
+  lastRun: PlotSyncRun | null;
+  lastSuccessfulRun: PlotSyncRun | null;
+};
+
 const MIN_HOUSE_IMAGES = 4;
 const MAX_HOUSE_IMAGES = 14;
-const MAX_HOUSE_TEMPLATES = 18;
+const MAX_HOUSE_TEMPLATES = 22;
 const MAX_PROMOTION_IMAGE_BYTES = 25 * 1024 * 1024;
 const HELPER_BASE_URL = "http://127.0.0.1:43182";
 const HOUSE_PRICE_ENTRIES = housePriceCatalogEntries();
@@ -786,6 +815,9 @@ export default function InseratStudio() {
     issues: string[];
   } | null>(null);
   const [managerVariantOverrides, setManagerVariantOverrides] = useState<Record<string, string>>({});
+  const [plotSyncStatus, setPlotSyncStatus] = useState<PlotSyncStatus | null>(null);
+  const [plotSyncBusy, setPlotSyncBusy] = useState(false);
+  const [postalRegionIndex, setPostalRegionIndex] = useState<PostalRegionIndex>({});
 
   useEffect(() => {
     let releaseLock: (() => void) | undefined;
@@ -831,6 +863,35 @@ export default function InseratStudio() {
       releaseLock?.();
     };
   }, []);
+
+  useEffect(() => {
+    if (!helperOnline || !ready) return;
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const response = await helperFetch("/plot-sync/status");
+        const data = await response.json() as PlotSyncStatus & { ok?: boolean; message?: string };
+        if (!response.ok || !data.ok) throw new Error(data.message || "Synchronisationsstatus ist nicht verfügbar.");
+        if (cancelled) return;
+        setPlotSyncStatus(data);
+        if (data.catalogSavedAt && data.catalogSavedAt !== knownDeviceCatalogSavedAt) {
+          const snapshot = await loadDeviceCatalogSnapshot();
+          if (cancelled || !snapshot || snapshot.savedAt !== data.catalogSavedAt) return;
+          knownDeviceCatalogSavedAt = snapshot.savedAt;
+          const loaded = normalizeMandatoryListingStandards(normalizeProjectOwners(snapshot.state));
+          setState(loaded);
+          setSelectedPlotIds((ids) => ids.filter((id) => (loaded.plots || []).some((plot) => plot.id === id && plot.isActive !== false)));
+          setSelectedBatchProjectIds((ids) => ids.filter((id) => loaded.projects.some((project) => project.id === id && project.isActive !== false)));
+          setNotice("Der automatische Grundstücksabgleich wurde in die geöffnete App übernommen.");
+        }
+      } catch {
+        if (!cancelled) setPlotSyncStatus(null);
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(refresh, 30_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [helperOnline, ready]);
 
   useEffect(() => {
     Promise.allSettled([loadStudioSnapshot(), loadDeviceCatalogSnapshot()])
@@ -942,6 +1003,7 @@ export default function InseratStudio() {
     void loadPostalRegionIndex()
       .then((index) => {
         if (cancelled) return;
+        setPostalRegionIndex(index);
         setState((current) => {
           let changed = false;
           const projects = current.projects.map((project) => {
@@ -981,13 +1043,15 @@ export default function InseratStudio() {
       })
     : [];
   const plotRecords = (state.plots || []) as PlotRecord[];
+  const activePlotIds = new Set(plotRecords.filter((plot) => plot.isActive !== false).map((plot) => plot.id));
   const linkedProjectCounts = state.projects.reduce<Record<string, number>>((counts, project) => {
     if (project.plotId) counts[project.plotId] = (counts[project.plotId] || 0) + 1;
     return counts;
   }, {});
-  const ownerProjects = state.projects
-    .filter((project) => projectOwner(project) === activeOwner)
-    .sort(compareProjectsByRegion);
+  const activePlotProjects = state.projects.filter((project) => project.isActive !== false && Boolean(project.plotId) && activePlotIds.has(project.plotId || ""));
+  const projectSource = activePlotProjects.length ? activePlotProjects : state.projects.filter((project) => project.isActive !== false);
+  const projectsForOwner = projectSource.filter((project) => projectOwner(project) === activeOwner);
+  const ownerProjects = (projectsForOwner.length ? projectsForOwner : projectSource).sort(compareProjectsByRegion);
   const ownerProjectGroups = groupProjectsByRegion(ownerProjects);
   const activeProject =
     ownerProjects.find((project) => project.id === activeProjectId) ??
@@ -1012,6 +1076,22 @@ export default function InseratStudio() {
   const houseDistributionByProject = new Map(
     houseDistribution.projects.map((record) => [record.projectId, record]),
   );
+  const plotSelectionMeta = Object.fromEntries(plotRecords.map((plot) => {
+    const linked = activePlotProjects.filter((project) => project.plotId === plot.id);
+    const resolvedRegion = resolvePostalRegion(postalRegionIndex, plot.postalCode, plot.city);
+    const listingCount = linked.reduce((sum, project) => {
+      const group = normalizeListingGroup(project.listingGroup, project.id) as ListingGroup;
+      return sum + Math.max(project.listings.length, group.variants.filter((variant) => variant.active && variant.templateId).length);
+    }, 0);
+    return [plot.id, {
+      listingCount,
+      regionLabel: linked[0]
+        ? projectRegionLabel(linked[0])
+        : resolvedRegion
+          ? `${resolvedRegion.federalState} · ${resolvedRegion.county}`
+          : [plot.postalCode, plot.city].filter(Boolean).join(" · ") || "Nicht zugeordnet",
+    }];
+  }));
   const listingVariants = activeListingGroup?.variants.slice(0, HOUSES_PER_PROJECT) ?? [];
   const selectedVariantEntries = listingVariants
     .filter((variant) => variant.active && variant.templateId)
@@ -1060,7 +1140,7 @@ export default function InseratStudio() {
       })
     : [];
   const effectiveBatchProjectIds = selectedBatchProjectIds
-    .filter((id) => state.projects.some((project) => project.id === id));
+    .filter((id) => activePlotProjects.some((project) => project.id === id));
   const batchOverviewPlan = createBatchUploadPlan(state, effectiveBatchProjectIds, {
     promotionOverrides,
   });
@@ -1071,7 +1151,7 @@ export default function InseratStudio() {
   const selectedUploadIds = batchPlan.addresses.flatMap((address: { items: Array<{ listingId: string }> }) =>
     address.items.map((item) => item.listingId));
   const scheduler = normalizeListingScheduler(state.scheduler) as NonNullable<StudioState["scheduler"]>;
-  const managedListings = state.projects.flatMap((project) => {
+  const managedListings = activePlotProjects.flatMap((project) => {
     const group = normalizeListingGroup(project.listingGroup, project.id) as ListingGroup;
     return project.listings.map((listing) => {
       const rotationPlan = planListingRotation(state, project.id, listing.id, {
@@ -1190,6 +1270,59 @@ export default function InseratStudio() {
   const savePlotRecords = (plots: PlotRecord[], message: string) => {
     setState((current) => normalizePlotState({ ...current, plots }) as StudioState);
     setNotice(message);
+  };
+
+  const deletePlot = (plot: PlotRecord) => {
+    const deletion = deletePlotRecordCascade(state, plot.id);
+    let nextState = normalizePlotState(deletion.state) as StudioState;
+    if (!nextState.projects.length) nextState = { ...nextState, projects: [newProject(activeOwner)] };
+    const nextProject = nextState.projects.find((project) => project.isActive !== false && project.plotId && (nextState.plots || []).some((entry) => entry.id === project.plotId && entry.isActive !== false))
+      || nextState.projects[0];
+    setState(nextState);
+    setSelectedPlotIds((ids) => ids.filter((id) => id !== plot.id));
+    setSelectedBatchProjectIds((ids) => ids.filter((id) => !deletion.deletedProjectIds.includes(id)));
+    setActiveProjectId(nextProject?.id || "");
+    if (nextProject) setActiveOwner(projectOwner(nextProject));
+    setNotice(`Grundstück vollständig gelöscht. ${deletion.deletedProjectIds.length} interne Projektierung${deletion.deletedProjectIds.length === 1 ? "" : "en"} und ${deletion.deletedListingIds.length} interne Inseratsreferenz${deletion.deletedListingIds.length === 1 ? "" : "en"} wurden bereinigt. Externe Inserate blieben unberührt.`);
+    if (plot.exposeFileReference && helperOnline) {
+      void helperFetch("/plot-exposes/archive", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reference: plot.exposeFileReference }),
+      }).catch(() => setNotice("Das Grundstück wurde vollständig gelöscht; die lokale Exposé-Datei konnte noch nicht archiviert werden."));
+    }
+  };
+
+  const runPlotSync = async (dryRun: boolean) => {
+    if (!helperOnline || plotSyncBusy) return;
+    setPlotSyncBusy(true);
+    try {
+      const response = await helperFetch("/plot-sync/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dryRun }),
+      });
+      const data = await response.json() as PlotSyncStatus & { ok?: boolean; message?: string };
+      if (!response.ok || !data.ok) throw new Error(data.message || "Der Grundstücksabgleich ist fehlgeschlagen.");
+      setPlotSyncStatus(data);
+      if (!dryRun && data.catalogSavedAt) {
+        const snapshot = await loadDeviceCatalogSnapshot();
+        if (!snapshot) throw new Error("Der aktualisierte lokale Katalog konnte nicht neu geladen werden.");
+        knownDeviceCatalogSavedAt = snapshot.savedAt;
+        const loaded = normalizeMandatoryListingStandards(normalizeProjectOwners(snapshot.state));
+        setState(loaded);
+        const availableProjects = loaded.projects.filter((project) => project.isActive !== false && project.plotId && (loaded.plots || []).some((plot) => plot.id === project.plotId && plot.isActive !== false));
+        setSelectedPlotIds((ids) => ids.filter((id) => (loaded.plots || []).some((plot) => plot.id === id && plot.isActive !== false)));
+        setSelectedBatchProjectIds((ids) => ids.filter((id) => availableProjects.some((project) => project.id === id)));
+        if (activeProjectId && !availableProjects.some((project) => project.id === activeProjectId) && availableProjects[0]) setActiveProjectId(availableProjects[0].id);
+      }
+      const run = data.lastRun;
+      setNotice(run ? `${dryRun ? "Dry-Run" : "Abgleich"}: ${run.created} neu, ${run.updated} aktualisiert, ${run.deactivated} deaktiviert, ${run.failed} fehlerhaft.` : "Grundstücksabgleich abgeschlossen.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Der Grundstücksabgleich ist fehlgeschlagen.");
+    } finally {
+      setPlotSyncBusy(false);
+    }
   };
 
   const handOffPlotsToProjects = async (plotIds: string[]) => {
@@ -1807,32 +1940,8 @@ export default function InseratStudio() {
       setSelectedBatchProjectIds([existingProject.id]);
       return;
     }
-    const project = newProject(owner);
-    setState((current) => ({
-      ...current,
-      projects: [project, ...current.projects],
-    }));
-    setActiveProjectId(project.id);
-    setSelectedBatchProjectIds([project.id]);
-    setNotice(`Der Adressbereich für ${owner === "pascal" ? "Pascal" : "Fabian"} wurde angelegt.`);
-  };
-
-  const addProject = () => {
-    const project = newProject(activeOwner);
-    setState((current) => ({
-      ...current,
-      projects: [project, ...current.projects],
-    }));
-    setActiveProjectId(project.id);
-    setSelectedBatchProjectIds([project.id]);
-  };
-
-  const toggleBatchProject = (projectId: string, selected: boolean) => {
-    setSelectedBatchProjectIds((current) => {
-      return selected
-        ? [...new Set([...current, projectId])]
-        : current.filter((id) => id !== projectId);
-    });
+    setNotice(`Für ${owner === "pascal" ? "Pascal" : "Fabian"} ist noch kein aktives Grundstück ausgewählt. Bitte im zentralen Grundstücksbereich auswählen.`);
+    setTab("plots");
   };
 
   const toggleHousePoolEntry = (houseId: string, selected: boolean) => {
@@ -3288,9 +3397,9 @@ export default function InseratStudio() {
 
       <nav className="step-nav" aria-label="Arbeitsbereiche">
         {([
-          ["plots", "01", "Grundstücke"],
+          ["plots", "01", "Grundstücke & Auswahl"],
           ["houses", "02", "Haustypen"],
-          ["project", "03", "Adresse & Auswahl"],
+          ["project", "03", "Projektierung"],
           ["preview", "04", "Texte & Vorschau"],
           ["manager", "05", "Inseratsmanager"],
           ["settings", "06", "Export & Upload"],
@@ -3316,9 +3425,14 @@ export default function InseratStudio() {
           helperOnline={helperOnline}
           helperRequest={helperFetch}
           linkedProjectCounts={linkedProjectCounts}
+          selectionMeta={plotSelectionMeta}
+          syncStatus={plotSyncStatus}
+          syncBusy={plotSyncBusy}
           onSelectionChange={setSelectedPlotIds}
           onSave={savePlotRecords}
+          onDelete={deletePlot}
           onHandOff={handOffPlotsToProjects}
+          onSync={runPlotSync}
         />
       ) : null}
 
@@ -3676,9 +3790,9 @@ export default function InseratStudio() {
           <div className="content-card">
             <div className="address-owner-panel">
               <div>
-                <span className="eyebrow">Getrennte Adressbücher</span>
-                <h2>Wer bearbeitet diese Grundstücksadresse?</h2>
-                <p>Fabian und Pascal verwalten jeweils ihre eigenen gespeicherten Adressen und können sie jederzeit erneut auswählen.</p>
+                <span className="eyebrow">Zentrale Projektierungszuordnung</span>
+                <h2>Wer bearbeitet die ausgewählten Grundstücke?</h2>
+                <p>Die Grundstücke stammen ausschließlich aus dem zentralen Bereich „Grundstücke &amp; Auswahl“.</p>
               </div>
               <div className="owner-switch" role="group" aria-label="Benutzer für Grundstücksadressen wählen">
                 {ADDRESS_OWNERS.map((owner) => (
@@ -3708,13 +3822,12 @@ export default function InseratStudio() {
             <section className="batch-address-selection" aria-label="Adressen für den Sammel-Upload auswählen">
               <div className="section-heading compact">
                 <div>
-                  <span className="eyebrow">Projektierungen erstellen</span>
-                  <h3>{effectiveBatchProjectIds.length} Adresse{effectiveBatchProjectIds.length === 1 ? "" : "n"} für den Sammel-Upload</h3>
-                  <small className="section-note">Beliebig viele Adressen auswählen. Der zentrale Hauspool verteilt anschließend je Grundstück genau vier unterschiedliche Häuser und berücksichtigt dabei die dauerhaft gespeicherte Nutzungshistorie.</small>
+                  <span className="eyebrow">Aus Grundstücksverwaltung übernommen</span>
+                  <h3>{effectiveBatchProjectIds.length} Grundstück{effectiveBatchProjectIds.length === 1 ? "" : "e"} für den Sammel-Upload</h3>
+                  <small className="section-note">Die Auswahl wird zentral im ersten Bereich gepflegt. Der Hauspool verteilt anschließend je Grundstück genau vier unterschiedliche Häuser.</small>
                 </div>
                 <div className="button-row">
-                  <button className="secondary" onClick={() => setSelectedBatchProjectIds(ownerProjects.map((project) => project.id))}>Alle auswählen</button>
-                  <button className="secondary" onClick={() => setSelectedBatchProjectIds([])}>Auswahl leeren</button>
+                  <button className="secondary" onClick={() => setTab("plots")}>Auswahl ändern</button>
                 </div>
               </div>
               <div className="batch-address-groups">
@@ -3727,10 +3840,9 @@ export default function InseratStudio() {
                         const groupValue = normalizeListingGroup(project.listingGroup, project.id) as ListingGroup;
                         const listingCount = project.listings.length || groupValue.variants.filter((variant) => variant.active && variant.templateId).length;
                         return (
-                          <label className={selected ? "selected" : ""} key={project.id}>
-                            <input type="checkbox" checked={selected} onChange={(event) => toggleBatchProject(project.id, event.target.checked)} />
+                          <div className={selected ? "selected" : ""} key={project.id}>
                             <span><b>{projectSelectionLabel(project)}</b><small>{listingCount} Inserate/Varianten · {projectRegionLabel(project)}</small></span>
-                          </label>
+                          </div>
                         );
                       })}
                     </div>
@@ -3880,7 +3992,7 @@ export default function InseratStudio() {
               </div>
             </section>
             <div className="section-heading">
-              <div><span className="eyebrow">Adressbuch {activeOwner === "pascal" ? "Pascal" : "Fabian"}</span><h2>Grundstück speichern &amp; wiederverwenden</h2></div>
+              <div><span className="eyebrow">Projektierung {activeOwner === "pascal" ? "Pascal" : "Fabian"}</span><h2>Übernommenes Grundstück ausarbeiten</h2></div>
               <div className="button-row">
                 <select value={activeProject.id} onChange={(event) => setActiveProjectId(event.target.value)} aria-label="Gespeicherte Grundstücksadresse wählen">
                   {ownerProjectGroups.map((group) => (
@@ -3889,8 +4001,7 @@ export default function InseratStudio() {
                     </optgroup>
                   ))}
                 </select>
-                <button className="secondary" onClick={addProject}>Neue Adresse</button>
-                <button className="primary" disabled={savingAddress} onClick={saveAddressNow}>{savingAddress ? "Wird gespeichert …" : "Adresse speichern"}</button>
+                <button className="primary" disabled={savingAddress} onClick={saveAddressNow}>{savingAddress ? "Wird gespeichert …" : "Projektierung speichern"}</button>
               </div>
             </div>
             <div className="form-grid three">
