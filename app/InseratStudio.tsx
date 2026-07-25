@@ -29,19 +29,14 @@ import {
   addListingGroupVariant,
   assignListingGroupVariant,
   claimListingOperation,
-  clearListingGroupVariant,
   listingControl,
-  listingDeletionBlockReasons,
-  moveListingGroupVariant,
   normalizeListingGroup,
   recordListingGroupCopy,
   recordListingGroupFailure,
   releaseListingOperation,
-  removeListingGroupVariant,
   replaceListingGroupVariantListing,
   setListingGroupVariantActive,
   updateListingControl,
-  updateListingGroupAutomation,
   validateListingGroupVariant,
 } from "../listing-groups.mjs";
 import {
@@ -109,13 +104,12 @@ import { normalizeWorkflowStatus, workflowStatusLabel, WORKFLOW_STATUS } from ".
 import {
   compareProjectsByRegion,
   enrichProjectWithPostalRegion,
-  groupProjectsByRegion,
   loadPostalRegionIndex,
   projectRegionLabel,
   resolvePostalRegion,
 } from "./lib/postal-regions";
 import type { PostalRegionIndex } from "./lib/postal-regions";
-import { ADDRESS_OWNERS, normalizeProjectOwners, projectOwner } from "./lib/project-owners";
+import { normalizeProjectOwners, projectOwner } from "./lib/project-owners";
 import { completeListingTexts, generateListingTexts, totalPrice } from "./lib/text-generator";
 import { loadStudioSnapshot, saveStudioState, STORAGE_ID } from "./lib/storage";
 import type {
@@ -151,10 +145,11 @@ function normalizePromotionLibrary(value: StudioState): PromotionLibraryState {
   return normalizePromotionLibraryValue(value) as PromotionLibraryState;
 }
 
-type Tab = "plots" | "houses" | "project" | "preview" | "manager" | "settings";
+type Tab = "plots" | "houses" | "preview" | "manager" | "settings";
 type AiModel = "gpt-5.6-luna" | "gpt-5.6-terra" | "gpt-5.6-sol";
 type FtpSecurity = "explicit" | "implicit" | "none";
 type MediaLibraryKind = "house" | "floorplan" | "interior" | "location" | "marketing";
+type ManagerSortKey = "city" | "uploadDate" | "lastUpdate" | "nextUpdate" | "health" | "status";
 
 type MediaLibraryItem = {
   id: string;
@@ -763,8 +758,6 @@ export default function InseratStudio() {
   const [hasStoredOpenAiKey, setHasStoredOpenAiKey] = useState(false);
   const [hasStoredFtpCredentials, setHasStoredFtpCredentials] = useState(false);
   const [excludedUploadIds, setExcludedUploadIds] = useState<string[]>([]);
-  const [selectedBatchProjectIds, setSelectedBatchProjectIds] = useState<string[]>([]);
-  const [selectedPlotIds, setSelectedPlotIds] = useState<string[]>([]);
   const [promotionOverrides, setPromotionOverrides] = useState<Record<string, PromotionOverride>>({});
   const [batchItemStatuses, setBatchItemStatuses] = useState<Record<string, { status: string; error: string }>>({});
   const [batchUploadProgress, setBatchUploadProgress] = useState<BatchUploadProgress>({
@@ -788,7 +781,6 @@ export default function InseratStudio() {
   const [credentialsReady, setCredentialsReady] = useState(false);
   const [credentialSaveLabel, setCredentialSaveLabel] = useState("Verschlüsselter Zugangstresor wird vorbereitet …");
   const [savingHouses, setSavingHouses] = useState(false);
-  const [savingAddress, setSavingAddress] = useState(false);
   const [savingCredentials, setSavingCredentials] = useState(false);
   const [captioningImageIds, setCaptioningImageIds] = useState<string[]>([]);
   const [replacingAllImageCaptions, setReplacingAllImageCaptions] = useState(false);
@@ -808,13 +800,10 @@ export default function InseratStudio() {
   const [mediaLibraryError, setMediaLibraryError] = useState("");
   const [selectedMediaItems, setSelectedMediaItems] = useState<MediaLibraryItem[]>([]);
   const [importingMedia, setImportingMedia] = useState(false);
-  const [groupOperationRunning, setGroupOperationRunning] = useState(false);
-  const [lastGroupDryRun, setLastGroupDryRun] = useState<{
-    ok: boolean;
-    variantName: string;
-    issues: string[];
-  } | null>(null);
   const [managerVariantOverrides, setManagerVariantOverrides] = useState<Record<string, string>>({});
+  const [managerSortKey, setManagerSortKey] = useState<ManagerSortKey>("health");
+  const [managerSortDirection, setManagerSortDirection] = useState<"asc" | "desc">("desc");
+  const [groupManagerByPlot, setGroupManagerByPlot] = useState(false);
   const [plotSyncStatus, setPlotSyncStatus] = useState<PlotSyncStatus | null>(null);
   const [plotSyncBusy, setPlotSyncBusy] = useState(false);
   const [postalRegionIndex, setPostalRegionIndex] = useState<PostalRegionIndex>({});
@@ -881,7 +870,6 @@ export default function InseratStudio() {
           const loaded = normalizeMandatoryListingStandards(normalizeProjectOwners(snapshot.state));
           setState(loaded);
           setSelectedPlotIds((ids) => ids.filter((id) => (loaded.plots || []).some((plot) => plot.id === id && plot.isActive !== false)));
-          setSelectedBatchProjectIds((ids) => ids.filter((id) => loaded.projects.some((project) => project.id === id && project.isActive !== false)));
           setNotice("Der automatische Grundstücksabgleich wurde in die geöffnete App übernommen.");
         }
       } catch {
@@ -915,7 +903,6 @@ export default function InseratStudio() {
         setState(next);
         setActiveHouseId(next.houses[0]?.id ?? "");
         setActiveProjectId(next.projects[0]?.id ?? "");
-        setSelectedBatchProjectIds(next.projects[0]?.id ? [next.projects[0].id] : []);
         setActiveOwner(projectOwner(next.projects[0]));
         setSaveLabel(selected?.source === "device" ? "Aus lokaler macOS-Sicherung geladen" : "Doppelt lokal gespeichert");
       })
@@ -1044,15 +1031,27 @@ export default function InseratStudio() {
     : [];
   const plotRecords = (state.plots || []) as PlotRecord[];
   const activePlotIds = new Set(plotRecords.filter((plot) => plot.isActive !== false).map((plot) => plot.id));
+  const selectedPlotIds = [...new Set((state.selectedPlotIds || []).filter((id) => activePlotIds.has(id)))];
+  const setSelectedPlotIds = (next: string[] | ((ids: string[]) => string[])) => {
+    setState((current) => {
+      const activeIds = new Set((current.plots || []).filter((plot) => plot.isActive !== false).map((plot) => plot.id));
+      const currentIds = (current.selectedPlotIds || []).filter((id) => activeIds.has(id));
+      const resolved = typeof next === "function" ? next(currentIds) : next;
+      return { ...current, selectedPlotIds: [...new Set(resolved.filter((id) => activeIds.has(id)))] };
+    });
+  };
   const linkedProjectCounts = state.projects.reduce<Record<string, number>>((counts, project) => {
     if (project.plotId) counts[project.plotId] = (counts[project.plotId] || 0) + 1;
     return counts;
   }, {});
   const activePlotProjects = state.projects.filter((project) => project.isActive !== false && Boolean(project.plotId) && activePlotIds.has(project.plotId || ""));
-  const projectSource = activePlotProjects.length ? activePlotProjects : state.projects.filter((project) => project.isActive !== false);
-  const projectsForOwner = projectSource.filter((project) => projectOwner(project) === activeOwner);
-  const ownerProjects = (projectsForOwner.length ? projectsForOwner : projectSource).sort(compareProjectsByRegion);
-  const ownerProjectGroups = groupProjectsByRegion(ownerProjects);
+  const selectedWorkflowProjects = activePlotProjects.filter((project) => selectedPlotIds.includes(project.plotId || ""));
+  const projectSource = selectedWorkflowProjects.length
+    ? selectedWorkflowProjects
+    : activePlotProjects.length
+      ? activePlotProjects
+      : state.projects.filter((project) => project.isActive !== false);
+  const ownerProjects = [...projectSource].sort(compareProjectsByRegion);
   const activeProject =
     ownerProjects.find((project) => project.id === activeProjectId) ??
     ownerProjects[0];
@@ -1079,12 +1078,16 @@ export default function InseratStudio() {
   const plotSelectionMeta = Object.fromEntries(plotRecords.map((plot) => {
     const linked = activePlotProjects.filter((project) => project.plotId === plot.id);
     const resolvedRegion = resolvePostalRegion(postalRegionIndex, plot.postalCode, plot.city);
+    const uploadDate = linked.flatMap((project) => project.listings.map((listing) => listing.lastUploadedAt || ""))
+      .filter(Boolean)
+      .sort((left, right) => Date.parse(right) - Date.parse(left))[0] || "";
     const listingCount = linked.reduce((sum, project) => {
       const group = normalizeListingGroup(project.listingGroup, project.id) as ListingGroup;
       return sum + Math.max(project.listings.length, group.variants.filter((variant) => variant.active && variant.templateId).length);
     }, 0);
     return [plot.id, {
       listingCount,
+      uploadDate,
       regionLabel: linked[0]
         ? projectRegionLabel(linked[0])
         : resolvedRegion
@@ -1100,27 +1103,6 @@ export default function InseratStudio() {
       return house ? [{ variant, house }] : [];
     });
   const selectedHouses = selectedVariantEntries.map((entry) => entry.house);
-  const activeRotationSourceListing = activeProject?.listings.find((listing) => {
-    if (!activeListingGroup) return false;
-    const control = listingControl(activeListingGroup, listing);
-    return control.automaticUpdateEnabled && !listing.rotationArchivedAt;
-  }) ?? null;
-  const activeRotationPlan = activeProject && activeRotationSourceListing
-    ? planListingRotation(state, activeProject.id, activeRotationSourceListing.id, {
-        project: activeProject,
-        listing: activeRotationSourceListing,
-        group: activeListingGroup,
-        distribution: houseDistribution,
-        distributionValidation: housePoolValidation,
-      })
-    : null;
-  const currentRotationHouse = activeRotationSourceListing
-    ? state.houses.find((house) => house.id === activeRotationSourceListing.templateId) ?? null
-    : null;
-  const nextRotationHouse = activeRotationPlan?.house ?? null;
-  const premiumLockCount = activeListingGroup?.listingControls.filter(
-    (control) => control.premiumPlacement,
-  ).length ?? 0;
   const secondStepTextPreviews = activeProject
     ? listingVariants.filter((variant) => variant.active && variant.templateId).flatMap((variant) => {
         const house = state.houses.find((item) => item.id === variant.templateId);
@@ -1139,8 +1121,10 @@ export default function InseratStudio() {
         };
       })
     : [];
-  const effectiveBatchProjectIds = selectedBatchProjectIds
-    .filter((id) => activePlotProjects.some((project) => project.id === id));
+  const effectiveBatchProjectIds = selectedPlotIds.flatMap((plotId) => {
+    const project = activePlotProjects.find((item) => item.plotId === plotId);
+    return project ? [project.id] : [];
+  });
   const batchOverviewPlan = createBatchUploadPlan(state, effectiveBatchProjectIds, {
     promotionOverrides,
   });
@@ -1151,7 +1135,7 @@ export default function InseratStudio() {
   const selectedUploadIds = batchPlan.addresses.flatMap((address: { items: Array<{ listingId: string }> }) =>
     address.items.map((item) => item.listingId));
   const scheduler = normalizeListingScheduler(state.scheduler) as NonNullable<StudioState["scheduler"]>;
-  const managedListings = activePlotProjects.flatMap((project) => {
+  const managedListings = selectedWorkflowProjects.flatMap((project) => {
     const group = normalizeListingGroup(project.listingGroup, project.id) as ListingGroup;
     return project.listings.map((listing) => {
       const rotationPlan = planListingRotation(state, project.id, listing.id, {
@@ -1171,7 +1155,28 @@ export default function InseratStudio() {
         nextHouse: state.houses.find((house) => house.id === rotationPlan.houseId) || null,
       };
     });
-  }).sort((left, right) => right.health.score - left.health.score || left.listing.id.localeCompare(right.listing.id));
+  });
+  const sortedManagedListings = [...managedListings].sort((left, right) => {
+    const collator = new Intl.Collator("de-DE", { numeric: true, sensitivity: "base" });
+    const dateValue = (value: string | undefined) => Date.parse(value || "") || 0;
+    const compared = managerSortKey === "health"
+      ? left.health.score - right.health.score
+      : managerSortKey === "uploadDate"
+        ? dateValue(left.listing.lastUploadedAt) - dateValue(right.listing.lastUploadedAt)
+        : managerSortKey === "lastUpdate"
+          ? dateValue(left.control.lastSuccessAt || left.control.lastUpdatedAt) - dateValue(right.control.lastSuccessAt || right.control.lastUpdatedAt)
+          : managerSortKey === "nextUpdate"
+            ? dateValue(left.control.nextUpdatedAt) - dateValue(right.control.nextUpdatedAt)
+            : managerSortKey === "status"
+              ? collator.compare(left.control.statusMessage || workflowStatusLabel(left.control.status), right.control.statusMessage || workflowStatusLabel(right.control.status))
+              : collator.compare(left.project.city, right.project.city);
+    const stable = compared || collator.compare(projectSelectionLabel(left.project), projectSelectionLabel(right.project)) || collator.compare(left.listing.id, right.listing.id);
+    return managerSortDirection === "asc" ? stable : -stable;
+  });
+  const managerListingGroups = groupManagerByPlot
+    ? [...new Map(sortedManagedListings.map((entry) => [entry.project.id, entry.project])).values()]
+      .map((project) => ({ id: project.id, label: projectSelectionLabel(project), items: sortedManagedListings.filter((entry) => entry.project.id === project.id) }))
+    : [{ id: "all", label: "Alle Inserate", items: sortedManagedListings }];
 
   const saveHousesNow = async () => {
     const savedAt = new Date().toISOString();
@@ -1193,28 +1198,6 @@ export default function InseratStudio() {
       setNotice(error instanceof Error ? error.message : "Haustypen und Bilder konnten nicht gespeichert werden.");
     } finally {
       setSavingHouses(false);
-    }
-  };
-
-  const saveAddressNow = async () => {
-    if (!activeProject) return;
-    const savedAt = new Date().toISOString();
-    setSavingAddress(true);
-    try {
-      await saveStudioState(state, savedAt);
-      if (helperOnline) {
-        await queueDeviceCatalogSnapshot(state, savedAt);
-        setSaveLabel("Browser + macOS-Sicherung aktuell");
-      } else {
-        setSaveLabel("Lokal im Browser gespeichert");
-      }
-      const ownerLabel = activeOwner === "pascal" ? "Pascal" : "Fabian";
-      setNotice(`Die Grundstücksadresse „${activeProject.name}“ wurde für ${ownerLabel} gespeichert und kann wieder ausgewählt werden.`);
-    } catch (error) {
-      setSaveLabel("Speichern fehlgeschlagen");
-      setNotice(error instanceof Error ? error.message : "Die Grundstücksadresse konnte nicht gespeichert werden.");
-    } finally {
-      setSavingAddress(false);
     }
   };
 
@@ -1280,10 +1263,9 @@ export default function InseratStudio() {
       || nextState.projects[0];
     setState(nextState);
     setSelectedPlotIds((ids) => ids.filter((id) => id !== plot.id));
-    setSelectedBatchProjectIds((ids) => ids.filter((id) => !deletion.deletedProjectIds.includes(id)));
     setActiveProjectId(nextProject?.id || "");
     if (nextProject) setActiveOwner(projectOwner(nextProject));
-    setNotice(`Grundstück vollständig gelöscht. ${deletion.deletedProjectIds.length} interne Projektierung${deletion.deletedProjectIds.length === 1 ? "" : "en"} und ${deletion.deletedListingIds.length} interne Inseratsreferenz${deletion.deletedListingIds.length === 1 ? "" : "en"} wurden bereinigt. Externe Inserate blieben unberührt.`);
+    setNotice(`Grundstück vollständig gelöscht. ${deletion.deletedProjectIds.length} interne Arbeitsstände und ${deletion.deletedListingIds.length} interne Inseratsreferenz${deletion.deletedListingIds.length === 1 ? "" : "en"} wurden bereinigt. Externe Inserate blieben unberührt.`);
     if (plot.exposeFileReference && helperOnline) {
       void helperFetch("/plot-exposes/archive", {
         method: "POST",
@@ -1313,7 +1295,6 @@ export default function InseratStudio() {
         setState(loaded);
         const availableProjects = loaded.projects.filter((project) => project.isActive !== false && project.plotId && (loaded.plots || []).some((plot) => plot.id === project.plotId && plot.isActive !== false));
         setSelectedPlotIds((ids) => ids.filter((id) => (loaded.plots || []).some((plot) => plot.id === id && plot.isActive !== false)));
-        setSelectedBatchProjectIds((ids) => ids.filter((id) => availableProjects.some((project) => project.id === id)));
         if (activeProjectId && !availableProjects.some((project) => project.id === activeProjectId) && availableProjects[0]) setActiveProjectId(availableProjects[0].id);
       }
       const run = data.lastRun;
@@ -1325,13 +1306,14 @@ export default function InseratStudio() {
     }
   };
 
-  const handOffPlotsToProjects = async (plotIds: string[]) => {
-    const selectedPlots = plotRecords.filter((plot) => plotIds.includes(plot.id) && plot.isActive !== false);
+  const updateCentralPlotSelection = (plotIds: string[]) => {
+    const activeIds = [...new Set(plotIds.filter((id) => activePlotIds.has(id)))];
+    const selectedPlots = plotRecords.filter((plot) => activeIds.includes(plot.id) && plot.isActive !== false);
     if (!selectedPlots.length) {
-      setNotice("Bitte mindestens ein aktives Grundstück auswählen.");
+      setSelectedPlotIds([]);
+      setNotice("Die zentrale Grundstücksauswahl wurde geleert.");
       return;
     }
-    const postalRegionIndex = await loadPostalRegionIndex().catch(() => ({}));
     const nextProjects = [...state.projects];
     const projectIds: string[] = [];
     for (const plot of selectedPlots) {
@@ -1352,16 +1334,15 @@ export default function InseratStudio() {
     }
     const nextState = normalizePlotState({
       ...state,
+      selectedPlotIds: activeIds,
       projects: nextProjects,
       houseDistribution: normalizeHouseDistribution(state.houseDistribution, state.houses, nextProjects) as HouseDistributionState,
     }) as StudioState;
     setState(nextState);
-    setSelectedBatchProjectIds(projectIds);
     setActiveProjectId(projectIds[0]);
     const firstProject = nextProjects.find((project) => project.id === projectIds[0]);
     setActiveOwner(projectOwner(firstProject));
-    setTab("project");
-    setNotice(`${projectIds.length} Grundstück${projectIds.length === 1 ? " wurde" : "e wurden"} an die Projektierung übergeben.`);
+    setNotice(`${projectIds.length} Grundstück${projectIds.length === 1 ? " ist" : "e sind"} zentral ausgewählt. Diese Auswahl gilt jetzt für Texte, Inseratsmanager und Upload.`);
   };
 
   const addHouse = () => {
@@ -1930,20 +1911,6 @@ export default function InseratStudio() {
     setNotice("Das Aktionsbild wurde aus der Rotation entfernt.");
   };
 
-  const selectOwner = (owner: AddressOwner) => {
-    const existingProject = state.projects.find(
-      (project) => projectOwner(project) === owner,
-    );
-    setActiveOwner(owner);
-    if (existingProject) {
-      setActiveProjectId(existingProject.id);
-      setSelectedBatchProjectIds([existingProject.id]);
-      return;
-    }
-    setNotice(`Für ${owner === "pascal" ? "Pascal" : "Fabian"} ist noch kein aktives Grundstück ausgewählt. Bitte im zentralen Grundstücksbereich auswählen.`);
-    setTab("plots");
-  };
-
   const toggleHousePoolEntry = (houseId: string, selected: boolean) => {
     setState((current) => {
       const distribution = normalizeHouseDistribution(
@@ -2155,125 +2122,9 @@ export default function InseratStudio() {
       projects,
       houseDistribution: committed.distribution as HouseDistributionState,
     });
-    setSelectedBatchProjectIds(projectIds);
     setBatchItemStatuses({});
-    setTab("settings");
-    setNotice(`${projectIds.length} Adresse${projectIds.length === 1 ? " wurde" : "n wurden"} mit gewichteter Vierer-Verteilung vorbereitet · ${preparedListings} Inserate mit Standardwerten und Bildern.${issues.length ? ` ${issues.length} Adresse(n) benötigen Nacharbeit: ${issues.slice(0, 2).join(" · ")}` : " Die Uploadübersicht ist bereit."}`);
-  };
-
-  const projectPatchForListingGroup = (listingGroup: ListingGroup) => {
-    if (!activeProject) return null;
-    const sourceListings = listingGroup.variants
-      .filter((variant) => variant.active && variant.listing)
-      .slice(0, HOUSES_PER_PROJECT)
-      .map((variant) => variant.listing as GeneratedListing);
-    const rotationCopies = activeProject.listings.filter((listing) => listing.listingOrigin === "rotation-copy");
-    return {
-      listingGroup,
-      selectedHouseIds: listingGroup.variants
-        .filter((variant) => variant.active && variant.templateId)
-        .slice(0, HOUSES_PER_PROJECT)
-        .map((variant) => variant.templateId),
-      listings: [...sourceListings, ...rotationCopies],
-    };
-  };
-
-  const assignHouseToVariant = (variantId: string, houseId: string) => {
-    if (!activeProject || !activeListingGroup) return;
-    const currentVariant = activeListingGroup.variants.find((variant) => variant.id === variantId);
-    if (!currentVariant) return;
-    if (!houseId) {
-      const listingGroup = clearListingGroupVariant(activeListingGroup, variantId) as ListingGroup;
-      const patch = projectPatchForListingGroup(listingGroup);
-      if (patch) updateProject(patch);
-      return;
-    }
-    if (!houseDistribution.poolHouseIds.includes(houseId)) {
-      setNotice("Dieser Haustyp gehört nicht zum zentral freigegebenen Hauspool.");
-      return;
-    }
-    if (activeListingGroup.variants.some((variant) =>
-      variant.id !== variantId && variant.active && variant.templateId === houseId)) {
-      setNotice("Dasselbe Haus darf innerhalb eines Grundstücks nicht doppelt aktiv sein.");
-      return;
-    }
-    const house = approvedHouses.find((item) => item.id === houseId);
-    if (!house) {
-      setNotice("Dieser Haustyp ist nicht vorhanden oder nicht für Inserate freigegeben.");
-      return;
-    }
-    const previous = currentVariant.listing;
-    const listing = createVariantListing(
-      house,
-      activeProject,
-      state.provider,
-      currentVariant.id,
-      currentVariant.order,
-      previous,
-    );
-    const listingGroup = assignListingGroupVariant(
-      activeListingGroup,
-      variantId,
-      house,
-      listing,
-    ) as ListingGroup;
-    const patch = projectPatchForListingGroup(listingGroup);
-    if (patch) updateProject(patch);
-  };
-
-  const removeVariant = (variantId: string) => {
-    if (!activeListingGroup) return;
-    try {
-      const listingGroup = removeListingGroupVariant(activeListingGroup, variantId) as ListingGroup;
-      const patch = projectPatchForListingGroup(listingGroup);
-      if (patch) updateProject(patch);
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Die Variante konnte nicht entfernt werden.");
-    }
-  };
-
-  const setVariantActive = (variantId: string, active: boolean) => {
-    if (!activeListingGroup) return;
-    const listingGroup = setListingGroupVariantActive(
-      activeListingGroup,
-      variantId,
-      active,
-    ) as ListingGroup;
-    const patch = projectPatchForListingGroup(listingGroup);
-    if (patch) updateProject(patch);
-  };
-
-  const moveVariant = (variantId: string, direction: "up" | "down") => {
-    if (!activeListingGroup) return;
-    const listingGroup = moveListingGroupVariant(
-      activeListingGroup,
-      variantId,
-      direction,
-    ) as ListingGroup;
-    const patch = projectPatchForListingGroup(listingGroup);
-    if (patch) updateProject(patch);
-  };
-
-  const updateGroupAutomation = (patch: Partial<ListingGroup["automation"]>) => {
-    if (!activeListingGroup) return;
-    const listingGroup = updateListingGroupAutomation(
-      activeListingGroup,
-      patch,
-    ) as ListingGroup;
-    updateProject({ listingGroup });
-  };
-
-  const updateGroupListingControl = (
-    listing: GeneratedListing,
-    patch: Partial<ListingGroup["listingControls"][number]>,
-  ) => {
-    if (!activeListingGroup) return;
-    const listingGroup = updateListingControl(
-      activeListingGroup,
-      listing,
-      patch,
-    ) as ListingGroup;
-    updateProject({ listingGroup });
+    setTab("preview");
+    setNotice(`${projectIds.length} Adresse${projectIds.length === 1 ? " wurde" : "n wurden"} mit gewichteter Vierer-Verteilung vorbereitet · ${preparedListings} Inserate mit Standardwerten und Bildern.${issues.length ? ` ${issues.length} Adresse(n) benötigen Nacharbeit: ${issues.slice(0, 2).join(" · ")}` : " Die Texte und Vorschauen sind bereit."}`);
   };
 
   const updateScheduler = (patch: Partial<SchedulerSettings>) => {
@@ -2436,8 +2287,9 @@ export default function InseratStudio() {
   };
 
   const runGlobalSchedulerDryRun = () => {
+    const selectedState = { ...state, projects: state.projects.filter((project) => effectiveBatchProjectIds.includes(project.id)) };
     const result = runSchedulerDryRun(
-      state,
+      selectedState,
       state.houses,
       (project: ProjectInput, house: HouseTemplate) => totalPrice(house, project),
       { ignoreWindow: true },
@@ -2451,7 +2303,8 @@ export default function InseratStudio() {
   };
 
   const prepareGlobalDailyRun = () => {
-    const selection = selectSchedulerListings(state);
+    const selectedState = { ...state, projects: state.projects.filter((project) => effectiveBatchProjectIds.includes(project.id)) };
+    const selection = selectSchedulerListings(selectedState);
     if (!selection.selections.length) {
       setNotice(`Kein Tageslauf vorbereitet: ${selection.issues.join(" · ") || "Kein fälliges, ungesperrtes Inserat."}`);
       return;
@@ -2486,102 +2339,13 @@ export default function InseratStudio() {
     setNotice(`${completed} Inserate wurden einzeln vorbereitet; ${failures.length} wurden isoliert übersprungen. Es wurde nichts automatisch gelöscht.${failures.length ? ` ${failures.slice(0, 2).join(" · ")}` : ""}`);
   };
 
-  const runExclusiveGroupAction = async (action: () => Promise<void> | void, listingId = "selection") => {
-    if (!activeProject || groupOperationRunning) return;
-    setGroupOperationRunning(true);
-    try {
-      if (!navigator.locks) {
-        await action();
-        return;
-      }
-      const completed = await navigator.locks.request(
-        `fpi-listing-${activeProject.id}-${listingId}`,
-        { ifAvailable: true, mode: "exclusive" },
-        async (lock) => {
-          if (!lock) return false;
-          await action();
-          return true;
-        },
-      );
-      if (!completed) setNotice("Diese Inseratsgruppe wird bereits in einem anderen Vorgang verarbeitet.");
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Die Inseratsgruppe konnte nicht verarbeitet werden.");
-    } finally {
-      setGroupOperationRunning(false);
-    }
-  };
-
-  const runGroupDryRun = async () => {
-    if (!activeProject || !activeListingGroup) return;
-    const sourceListing = activeProject.listings.find((listing) =>
-      listingControl(activeListingGroup, listing).automaticUpdateEnabled);
-    if (!sourceListing) {
-      setNotice("Dry Run blockiert: Es ist kein aktives Ausgangsinserat vorhanden.");
-      return;
-    }
-    await runExclusiveGroupAction(() => {
-      try {
-        const result = planListingRotation(state, activeProject.id, sourceListing.id);
-        const issues = [...result.issues];
-        if (result.ok && result.house && result.sourceVariant) {
-          const targetSeed = createVariantListing(
-            result.house,
-            activeProject,
-            state.provider,
-            result.sourceVariant.id,
-            result.sourceVariant.order,
-          );
-          const previewGroup = assignListingGroupVariant(
-            result.group,
-            result.sourceVariant.id,
-            result.house,
-            targetSeed,
-          ) as ListingGroup;
-          const previewVariant = previewGroup.variants.find((variant) => variant.id === result.sourceVariant.id);
-          if (previewVariant) {
-            issues.push(...validateListingGroupVariant(previewVariant, result.house, {
-              expectedPrice: totalPrice(result.house, activeProject),
-            }) as string[]);
-          }
-        }
-        const uniqueIssues = [...new Set(issues)];
-        setLastGroupDryRun({
-          ok: result.ok && uniqueIssues.length === 0,
-          variantName: result.house?.name || "Keine Variante",
-          issues: uniqueIssues,
-        });
-        setNotice(result.ok && uniqueIssues.length === 0
-          ? `Dry Run erfolgreich: Als Nächstes ist „${result.house?.name}“ vorgesehen. Es wurde nichts veröffentlicht oder gelöscht.`
-          : `Dry Run blockiert: ${uniqueIssues.join(" · ")}`);
-      } catch (error) {
-        setNotice(error instanceof Error ? error.message : "Der Dry Run konnte nicht ausgeführt werden.");
-      }
-    }, sourceListing.id);
-  };
-
-  const prepareNextVariantCopy = async () => {
-    if (!activeProject || !activeListingGroup) return;
-    const sourceListing = activeProject.listings.find((listing) => {
-      const control = listingControl(activeListingGroup, listing);
-      return control.automaticUpdateEnabled
-        && !control.premiumPlacement
-        && !control.manualLock
-        && !listing.rotationArchivedAt;
-    });
-    if (!sourceListing) {
-      setNotice("Kopieren blockiert: Es ist kein freies, aktives Ausgangsinserat vorhanden.");
-      return;
-    }
-    await prepareManagedListing(activeProject.id, sourceListing.id, "copy-without-delete");
-  };
-
   const generationInputIsValid = () => {
     if (!activeProject || selectedHouses.length === 0) {
       setNotice("Bitte zuerst mindestens eine freigegebene Inseratsvariante auswählen.");
       return false;
     }
     if (!activeProject.city || !activeProject.zip || !activeProject.street || !activeProject.plotArea) {
-      setNotice("Für das Projekt benötigen wir Straße, PLZ, Ort und Grundstücksfläche. Straße, Hausnummer und PLZ werden nicht in die KI-Texte übernommen.");
+      setNotice("Für das Grundstück benötigen wir Straße, PLZ, Ort und Grundstücksfläche. Straße, Hausnummer und PLZ werden nicht in die KI-Texte übernommen.");
       return false;
     }
     return true;
@@ -3291,7 +3055,6 @@ export default function InseratStudio() {
         setState(next);
         setActiveHouseId(next.houses[0]?.id ?? "");
         setActiveProjectId(next.projects[0]?.id ?? "");
-        setSelectedBatchProjectIds(next.projects[0]?.id ? [next.projects[0].id] : []);
         setActiveOwner(projectOwner(next.projects[0]));
         setNotice("Fabian&Pascal-Sicherung wurde lokal eingelesen.");
       } catch {
@@ -3308,7 +3071,10 @@ export default function InseratStudio() {
       setState((current) => {
         const currentScheduler = normalizeListingScheduler(current.scheduler);
         if (!currentScheduler.settings.enabled || currentScheduler.settings.paused) return current;
-        const selection = selectSchedulerListings(current);
+        const selectedIds = new Set(current.selectedPlotIds || []);
+        if (!selectedIds.size) return current;
+        const selectedState = { ...current, projects: current.projects.filter((project) => project.plotId && selectedIds.has(project.plotId)) };
+        const selection = selectSchedulerListings(selectedState);
         if (!selection.selections.length) return current;
         let nextState = current;
         const completedIds: string[] = [];
@@ -3341,6 +3107,76 @@ export default function InseratStudio() {
       window.clearInterval(interval);
     };
   }, [ready, isPrimaryTab]);
+
+  const centralHousePoolPanel = (
+    <section className="workspace central-house-pool-workspace" aria-label="Gemeinsamer Hauspool">
+      <div className="content-card">
+        <div className="section-heading">
+          <div>
+            <span className="eyebrow">Schritt 01 · gemeinsame Auswahl</span>
+            <h2>Hauspool für {effectiveBatchProjectIds.length} ausgewählte{effectiveBatchProjectIds.length === 1 ? "s" : ""} Grundstück{effectiveBatchProjectIds.length === 1 ? "" : "e"}</h2>
+            <small className="section-note">Dieser eine Pool gilt für alle oben ausgewählten Grundstücke. Die gewichtete Rotation und ihre Nutzungshistorie bleiben unverändert erhalten.</small>
+          </div>
+          <b className="fixed-copy-badge">{houseDistribution.poolHouseIds.length} Häuser im Pool</b>
+        </div>
+        {!effectiveBatchProjectIds.length ? (
+          <div className="empty-state large"><b>Noch kein Grundstück ausgewählt</b><span>Markiere oben mindestens ein Grundstück. Der gemeinsame Hauspool und die automatische Verteilung werden anschließend direkt hier aktiv.</span></div>
+        ) : (
+          <>
+            <div className="central-selected-plots" aria-label="Zentral ausgewählte Grundstücke">
+              {effectiveBatchProjectIds.map((projectId) => {
+                const project = state.projects.find((item) => item.id === projectId);
+                return project ? <span key={project.id}>{projectSelectionLabel(project)}</span> : null;
+              })}
+            </div>
+            <div className="house-pool-card">
+              <div className="section-heading compact">
+                <div><span className="eyebrow">Zentraler Rotationspool</span><h3>Gemeinsame Hausbibliothek auswählen</h3><small className="section-note">Selten verwendete Häuser und neue Vierer-Kombinationen werden weiterhin bevorzugt.</small></div>
+                <div className="button-row">
+                  <button className="secondary" onClick={() => setState((current) => ({ ...current, houseDistribution: setHouseDistributionPool(current.houseDistribution, housePoolValidation.eligibleHouseIds, current.houses, current.projects) as HouseDistributionState }))}>Alle vollständigen</button>
+                  <button className="secondary" onClick={() => setState((current) => ({ ...current, houseDistribution: setHouseDistributionPool(current.houseDistribution, [], current.houses, current.projects) as HouseDistributionState }))}>Pool leeren</button>
+                </div>
+              </div>
+              <div className="house-pool-grid">
+                {[...approvedHouses].sort((left, right) => left.name.localeCompare(right.name, "de", { numeric: true })).map((house) => {
+                  const usage = houseDistribution.houseUsage.find((entry) => entry.houseId === house.id);
+                  const rejected = rejectedPoolHouses.get(house.id) || [];
+                  const selected = houseDistribution.poolHouseIds.includes(house.id);
+                  return <label className={`${selected ? "selected" : ""}${rejected.length ? " rejected" : ""}`} key={house.id}><input type="checkbox" checked={selected} disabled={Boolean(rejected.length)} onChange={(event) => toggleHousePoolEntry(house.id, event.target.checked)} /><span><b>{house.name}</b><small>{house.livingArea} m² · {house.rooms} Zimmer · {usage?.totalUses || 0} Nutzungen</small>{rejected.length ? <em>{rejected.join(" · ")}</em> : null}</span></label>;
+                })}
+              </div>
+              {!housePoolValidation.ok ? <p className="house-pool-error">{housePoolValidation.issues.join(" · ")}</p> : null}
+              <div className="house-pool-actions">
+                <label className="compact-field">Nutzungszeitraum<span><input type="number" min={1} value={houseDistribution.settings.usageWindowDays} onChange={(event) => setState((current) => { const distribution = normalizeHouseDistribution(current.houseDistribution, current.houses, current.projects); return { ...current, houseDistribution: { ...distribution, settings: { ...distribution.settings, usageWindowDays: Math.max(1, Number(event.target.value) || 1) } } as HouseDistributionState }; })} /> Tage</span></label>
+                <button className="primary" disabled={!housePoolValidation.ok} onClick={() => generateHousePreviews()}>Alle Grundstücke intelligent verteilen</button>
+              </div>
+            </div>
+            <div className="house-distribution-preview">
+              <div className="section-heading compact"><div><span className="eyebrow">Automatische Verteilung</span><h3>Vier Häuser je Grundstück</h3><small className="section-note">Die Vorschläge können weiterhin einzeln neu verteilt, sortiert, fixiert oder ausgeschlossen werden.</small></div></div>
+              {effectiveBatchProjectIds.map((projectId) => {
+                const project = state.projects.find((item) => item.id === projectId);
+                const record = houseDistributionByProject.get(projectId);
+                if (!project || !record) return null;
+                const promotionImage = choosePromotionImage(promotionLibrary, { projectId });
+                const projectPromotionUses = promotionLibrary.promotionUsage.filter((entry) => entry.projectId === projectId).length;
+                const actionIndex = record.previewHouseIds.length ? projectPromotionUses % record.previewHouseIds.length : -1;
+                return <article className="house-distribution-card" key={projectId}>
+                  <header><div><b>{projectSelectionLabel(project)}</b><small>{projectRegionLabel(project)}</small></div><button className="secondary" onClick={() => generateSingleHousePreview(projectId)}>Neu verteilen</button></header>
+                  {record.previewHouseIds.length === HOUSES_PER_PROJECT ? <div className="house-distribution-slots">{record.previewHouseIds.map((houseId, index) => {
+                    const house = state.houses.find((item) => item.id === houseId);
+                    if (!house) return null;
+                    return <div className="house-distribution-slot" key={`${projectId}-${index}`}><span className="slot-order">{index + 1}</span><div className="slot-house"><select value={houseId} onChange={(event) => updateHousePreviewSlot(projectId, index, event.target.value)}>{houseDistribution.poolHouseIds.filter((id) => eligiblePoolHouseIds.has(id)).map((id) => { const option = state.houses.find((item) => item.id === id); return option ? <option key={id} value={id}>{option.name}</option> : null; })}</select><small>{house.livingArea} m² · {house.rooms} Zimmer · {euro(totalPrice(house, project))}</small></div><label className="pin-house"><input type="checkbox" checked={record.pinnedHouseIds.includes(houseId)} onChange={(event) => togglePinnedPreviewHouse(projectId, houseId, event.target.checked)} /> fixieren</label><div className="slot-move"><button className="secondary" disabled={index === 0} onClick={() => moveHousePreviewSlot(projectId, index, "up")}>↑</button><button className="secondary" disabled={index === record.previewHouseIds.length - 1} onClick={() => moveHousePreviewSlot(projectId, index, "down")}>↓</button></div>{index === actionIndex && promotionImage ? <span className="slot-promotion">Aktionsbild · {promotionImage.name}</span> : <span className="slot-normal">normale Bildfolge</span>}</div>;
+                  })}</div> : <div className="empty-state compact"><b>Noch keine vollständige Verteilung</b><span>Mit „intelligent verteilen“ werden vier unterschiedliche Häuser vorgeschlagen.</span></div>}
+                  <details className="project-house-exclusions"><summary>Häuser für dieses Grundstück ausschließen ({record.excludedHouseIds.length})</summary><div>{houseDistribution.poolHouseIds.filter((id) => eligiblePoolHouseIds.has(id)).map((houseId) => { const house = state.houses.find((item) => item.id === houseId); return house ? <label key={houseId}><input type="checkbox" checked={record.excludedHouseIds.includes(houseId)} onChange={(event) => toggleExcludedProjectHouse(projectId, houseId, event.target.checked)} /> {house.name}</label> : null; })}</div></details>
+                </article>;
+              })}
+            </div>
+            <div className="batch-selection-action"><div><b>Verteilung übernehmen</b><span>Die ausgewählten Grundstücke und ihre vier Hausvarianten werden ohne weitere Grundstücksauswahl an Texte, Inseratsmanager und Upload übergeben.</span></div><button className="primary" disabled={!housePoolValidation.ok} onClick={prepareBatchSelection}>Verteilung übernehmen &amp; Texte öffnen</button></div>
+          </>
+        )}
+      </div>
+    </section>
+  );
 
   if (isPrimaryTab === false) {
     return (
@@ -3399,10 +3235,9 @@ export default function InseratStudio() {
         {([
           ["plots", "01", "Grundstücke & Auswahl"],
           ["houses", "02", "Haustypen"],
-          ["project", "03", "Projektierung"],
-          ["preview", "04", "Texte & Vorschau"],
-          ["manager", "05", "Inseratsmanager"],
-          ["settings", "06", "Export & Upload"],
+          ["preview", "03", "Texte & Vorschau"],
+          ["manager", "04", "Inseratsmanager"],
+          ["settings", "05", "Export & Upload"],
         ] as Array<[Tab, string, string]>).map(([id, number, label]) => (
           <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>
             <span>{number}</span>{label}
@@ -3418,7 +3253,7 @@ export default function InseratStudio() {
       ) : null}
 
       {tab === "plots" ? (
-        <PlotManagement
+        <><PlotManagement
           plots={plotRecords}
           selectedPlotIds={selectedPlotIds}
           defaultOwner={activeOwner}
@@ -3428,12 +3263,11 @@ export default function InseratStudio() {
           selectionMeta={plotSelectionMeta}
           syncStatus={plotSyncStatus}
           syncBusy={plotSyncBusy}
-          onSelectionChange={setSelectedPlotIds}
+          onSelectionChange={updateCentralPlotSelection}
           onSave={savePlotRecords}
           onDelete={deletePlot}
-          onHandOff={handOffPlotsToProjects}
           onSync={runPlotSync}
-        />
+        />{centralHousePoolPanel}</>
       ) : null}
 
       {tab === "houses" ? (
@@ -3501,7 +3335,7 @@ export default function InseratStudio() {
               <button className="icon-button" onClick={addHouse} aria-label="Haustyp hinzufügen">+</button>
             </div>
             <div className="house-list">
-              {state.houses.map((house, index) => (
+              {[...state.houses].sort((left, right) => left.name.localeCompare(right.name, "de", { numeric: true, sensitivity: "base" })).map((house, index) => (
                 <button
                   key={house.id}
                   className={house.id === activeHouse.id ? "house-row active" : "house-row"}
@@ -3785,493 +3619,87 @@ export default function InseratStudio() {
         </>
       ) : null}
 
-      {tab === "project" ? (
-        <section className="workspace">
-          <div className="content-card">
-            <div className="address-owner-panel">
-              <div>
-                <span className="eyebrow">Zentrale Projektierungszuordnung</span>
-                <h2>Wer bearbeitet die ausgewählten Grundstücke?</h2>
-                <p>Die Grundstücke stammen ausschließlich aus dem zentralen Bereich „Grundstücke &amp; Auswahl“.</p>
-              </div>
-              <div className="owner-switch" role="group" aria-label="Benutzer für Grundstücksadressen wählen">
-                {ADDRESS_OWNERS.map((owner) => (
-                  <button
-                    key={owner.id}
-                    className={activeOwner === owner.id ? "active" : ""}
-                    onClick={() => selectOwner(owner.id)}
-                    aria-pressed={activeOwner === owner.id}
-                  >
-                    <span>{owner.label.slice(0, 1)}</span>
-                    <b>{owner.label}</b>
-                    <small>{state.projects.filter((project) => projectOwner(project) === owner.id).length} gespeichert</small>
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="address-import-bar">
-              <div>
-                <b>Grundstücke zentral verwalten</b>
-                <span>Excel-Import, Dublettenprüfung, Bearbeitung und Mehrfachauswahl erfolgen jetzt sicher im Grundstücksbereich.</span>
-              </div>
-              <div className="button-row">
-                <a className="secondary" href="/Fabian-Pascal-Adressimport-Vorlage.xlsx" download>Excel-Vorlage herunterladen</a>
-                <button className="primary" onClick={() => setTab("plots")}>Zur Grundstücksverwaltung</button>
-              </div>
-            </div>
-            <section className="batch-address-selection" aria-label="Adressen für den Sammel-Upload auswählen">
-              <div className="section-heading compact">
-                <div>
-                  <span className="eyebrow">Aus Grundstücksverwaltung übernommen</span>
-                  <h3>{effectiveBatchProjectIds.length} Grundstück{effectiveBatchProjectIds.length === 1 ? "" : "e"} für den Sammel-Upload</h3>
-                  <small className="section-note">Die Auswahl wird zentral im ersten Bereich gepflegt. Der Hauspool verteilt anschließend je Grundstück genau vier unterschiedliche Häuser.</small>
-                </div>
-                <div className="button-row">
-                  <button className="secondary" onClick={() => setTab("plots")}>Auswahl ändern</button>
-                </div>
-              </div>
-              <div className="batch-address-groups">
-                {ownerProjectGroups.map((group) => (
-                  <section key={group.label}>
-                    <header><b>{group.label}</b><span>{group.projects.length} Adressen</span></header>
-                    <div>
-                      {group.projects.map((project) => {
-                        const selected = effectiveBatchProjectIds.includes(project.id);
-                        const groupValue = normalizeListingGroup(project.listingGroup, project.id) as ListingGroup;
-                        const listingCount = project.listings.length || groupValue.variants.filter((variant) => variant.active && variant.templateId).length;
-                        return (
-                          <div className={selected ? "selected" : ""} key={project.id}>
-                            <span><b>{projectSelectionLabel(project)}</b><small>{listingCount} Inserate/Varianten · {projectRegionLabel(project)}</small></span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </section>
-                ))}
-              </div>
-              <div className="house-pool-card">
-                <div className="section-heading compact">
-                  <div>
-                    <span className="eyebrow">Zentraler Rotationspool</span>
-                    <h3>{houseDistribution.poolHouseIds.length} Häuser im Hauspool</h3>
-                    <small className="section-note">Der Pool gilt für die Ersterstellung und für alle späteren inseratsweisen Aktualisierungen. Selten verwendete Häuser und neue Kombinationen werden bevorzugt.</small>
-                  </div>
-                  <div className="button-row">
-                    <button className="secondary" onClick={() => setState((current) => ({
-                      ...current,
-                      houseDistribution: setHouseDistributionPool(
-                        current.houseDistribution,
-                        housePoolValidation.eligibleHouseIds,
-                        current.houses,
-                        current.projects,
-                      ) as HouseDistributionState,
-                    }))}>Alle vollständigen</button>
-                    <button className="secondary" onClick={() => setState((current) => ({
-                      ...current,
-                      houseDistribution: setHouseDistributionPool(
-                        current.houseDistribution,
-                        [],
-                        current.houses,
-                        current.projects,
-                      ) as HouseDistributionState,
-                    }))}>Pool leeren</button>
-                  </div>
-                </div>
-                <div className="house-pool-grid">
-                  {approvedHouses.map((house) => {
-                    const usage = houseDistribution.houseUsage.find((entry) => entry.houseId === house.id);
-                    const rejected = rejectedPoolHouses.get(house.id) || [];
-                    const selected = houseDistribution.poolHouseIds.includes(house.id);
-                    return (
-                      <label className={`${selected ? "selected" : ""}${rejected.length ? " rejected" : ""}`} key={house.id}>
-                        <input
-                          type="checkbox"
-                          checked={selected}
-                          disabled={Boolean(rejected.length)}
-                          onChange={(event) => toggleHousePoolEntry(house.id, event.target.checked)}
-                        />
-                        <span>
-                          <b>{house.name}</b>
-                          <small>{house.livingArea} m² · {house.rooms} Zimmer · {usage?.totalUses || 0} Nutzungen · {usage?.activeProjectIds.length || 0} aktiv</small>
-                          {rejected.length ? <em>{rejected.join(" · ")}</em> : null}
-                        </span>
-                      </label>
-                    );
-                  })}
-                </div>
-                {!housePoolValidation.ok ? <p className="house-pool-error">{housePoolValidation.issues.join(" · ")}</p> : null}
-                <div className="house-pool-actions">
-                  <label className="compact-field">Nutzungszeitraum
-                    <span><input
-                      type="number"
-                      min={1}
-                      value={houseDistribution.settings.usageWindowDays}
-                      onChange={(event) => setState((current) => {
-                        const distribution = normalizeHouseDistribution(current.houseDistribution, current.houses, current.projects);
-                        return {
-                          ...current,
-                          houseDistribution: {
-                            ...distribution,
-                            settings: { ...distribution.settings, usageWindowDays: Math.max(1, Number(event.target.value) || 1) },
-                          } as HouseDistributionState,
-                        };
-                      })}
-                    /> Tage</span>
-                  </label>
-                  <button
-                    className="primary"
-                    disabled={!effectiveBatchProjectIds.length || !housePoolValidation.ok}
-                    onClick={() => generateHousePreviews()}
-                  >Alle Grundstücke gewichtet neu verteilen</button>
-                </div>
-              </div>
-
-              <div className="house-distribution-preview">
-                <div className="section-heading compact">
-                  <div>
-                    <span className="eyebrow">Bearbeitbare Vorschau</span>
-                    <h3>Vier Häuser je Grundstück</h3>
-                    <small className="section-note">Reihenfolge, einzelne Häuser, Fixierungen und grundstücksbezogene Ausschlüsse können vor dem Upload angepasst werden.</small>
-                  </div>
-                </div>
-                {effectiveBatchProjectIds.map((projectId) => {
-                  const project = state.projects.find((item) => item.id === projectId);
-                  const record = houseDistributionByProject.get(projectId);
-                  if (!project || !record) return null;
-                  const promotionImage = choosePromotionImage(promotionLibrary, { projectId });
-                  const projectPromotionUses = promotionLibrary.promotionUsage.filter((entry) => entry.projectId === projectId).length;
-                  const actionIndex = record.previewHouseIds.length ? projectPromotionUses % record.previewHouseIds.length : -1;
-                  return (
-                    <article className="house-distribution-card" key={projectId}>
-                      <header>
-                        <div><b>{projectSelectionLabel(project)}</b><small>{projectRegionLabel(project)}</small></div>
-                        <div className="button-row"><button className="secondary" onClick={() => generateSingleHousePreview(projectId)}>Grundstück neu verteilen</button></div>
-                      </header>
-                      {record.previewHouseIds.length === HOUSES_PER_PROJECT ? (
-                        <div className="house-distribution-slots">
-                          {record.previewHouseIds.map((houseId, index) => {
-                            const house = state.houses.find((item) => item.id === houseId);
-                            if (!house) return null;
-                            return (
-                              <div className="house-distribution-slot" key={`${projectId}-${index}`}>
-                                <span className="slot-order">{index + 1}</span>
-                                <div className="slot-house">
-                                  <select value={houseId} onChange={(event) => updateHousePreviewSlot(projectId, index, event.target.value)}>
-                                    {houseDistribution.poolHouseIds.filter((id) => eligiblePoolHouseIds.has(id)).map((id) => {
-                                      const option = state.houses.find((item) => item.id === id);
-                                      return option ? <option key={id} value={id}>{option.name}</option> : null;
-                                    })}
-                                  </select>
-                                  <small>{house.livingArea} m² · {house.rooms} Zimmer · {euro(totalPrice(house, project))}</small>
-                                </div>
-                                <label className="pin-house"><input type="checkbox" checked={record.pinnedHouseIds.includes(houseId)} onChange={(event) => togglePinnedPreviewHouse(projectId, houseId, event.target.checked)} /> fixieren</label>
-                                <div className="slot-move">
-                                  <button className="secondary" disabled={index === 0} onClick={() => moveHousePreviewSlot(projectId, index, "up")}>↑</button>
-                                  <button className="secondary" disabled={index === record.previewHouseIds.length - 1} onClick={() => moveHousePreviewSlot(projectId, index, "down")}>↓</button>
-                                </div>
-                                {index === actionIndex && promotionImage ? <span className="slot-promotion">Aktionsbild · {promotionImage.name}</span> : <span className="slot-normal">normale Bildfolge</span>}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ) : <div className="empty-state compact"><b>Noch keine vollständige Verteilung</b><span>Mit „gewichtet neu verteilen“ werden vier unterschiedliche Häuser vorgeschlagen.</span></div>}
-                      <details className="project-house-exclusions">
-                        <summary>Häuser nur für dieses Grundstück ausschließen ({record.excludedHouseIds.length})</summary>
-                        <div>{houseDistribution.poolHouseIds.filter((id) => eligiblePoolHouseIds.has(id)).map((houseId) => {
-                          const house = state.houses.find((item) => item.id === houseId);
-                          return house ? <label key={houseId}><input type="checkbox" checked={record.excludedHouseIds.includes(houseId)} onChange={(event) => toggleExcludedProjectHouse(projectId, houseId, event.target.checked)} /> {house.name}</label> : null;
-                        })}</div>
-                      </details>
-                    </article>
-                  );
-                })}
-              </div>
-              <div className="batch-selection-action">
-                <div><b>Geprüfte Vorschau übernehmen</b><span>Genau vier unterschiedliche Häuser, vollständige Hausdaten, Standardwerte, Bilder und genau eine Aktionsbild-Zuordnung je Adresse werden für den Upload zusammengestellt.</span></div>
-                <button className="primary" disabled={!effectiveBatchProjectIds.length || !housePoolValidation.ok} onClick={prepareBatchSelection}>Vorschau übernehmen &amp; Uploadübersicht öffnen</button>
-              </div>
-            </section>
-            <div className="section-heading">
-              <div><span className="eyebrow">Projektierung {activeOwner === "pascal" ? "Pascal" : "Fabian"}</span><h2>Übernommenes Grundstück ausarbeiten</h2></div>
-              <div className="button-row">
-                <select value={activeProject.id} onChange={(event) => setActiveProjectId(event.target.value)} aria-label="Gespeicherte Grundstücksadresse wählen">
-                  {ownerProjectGroups.map((group) => (
-                    <optgroup key={group.label} label={group.label}>
-                      {group.projects.map((project) => <option key={project.id} value={project.id}>{projectSelectionLabel(project)}</option>)}
-                    </optgroup>
-                  ))}
-                </select>
-                <button className="primary" disabled={savingAddress} onClick={saveAddressNow}>{savingAddress ? "Wird gespeichert …" : "Projektierung speichern"}</button>
-              </div>
-            </div>
-            <div className="form-grid three">
-              <Field label="Projektname" value={activeProject.name} onChange={(value) => updateProject({ name: value })} />
-              <Field label="Straße" value={activeProject.street} onChange={(value) => updateProject({ street: value })} />
-              <Field label="Hausnummer" value={activeProject.houseNumber} onChange={(value) => updateProject({ houseNumber: value })} />
-              <Field label="PLZ" value={activeProject.zip} onChange={(value) => updateProject({ zip: value, federalState: "", county: "" })} />
-              <Field label="Ort" value={activeProject.city} onChange={(value) => updateProject({ city: value, federalState: "", county: "" })} />
-              <Field label="Ortsteil" value={activeProject.district} onChange={(value) => updateProject({ district: value })} />
-              <Field label="Bundesland · aus Excel-PLZ" value={activeProject.federalState || "Nicht zugeordnet"} readOnly onChange={() => undefined} />
-              <Field label="Landkreis · aus Excel-PLZ" value={activeProject.county || "Nicht zugeordnet"} readOnly onChange={() => undefined} />
-              <Field label="Grundstücksfläche" type="number" min={0} suffix="m²" value={activeProject.plotArea} onChange={(value) => updateProject({ plotArea: Number(value) })} />
-              <Field label="Grundstückspreis" type="number" min={0} suffix="€" value={activeProject.plotPrice} onChange={(value) => updateProject({ plotPrice: Number(value) })} />
-              <Field label="Berücksichtigte Nebenkosten" type="number" min={0} suffix="€" value={activeProject.additionalCosts} onChange={(value) => updateProject({ additionalCosts: Number(value) })} />
-            </div>
-
-            <div className="fixed-project-copy">
-              <div className="section-heading compact">
-                <div>
-                  <span className="eyebrow">Bereits im Inserat integriert</span>
-                  <h3>Vorgeschriebene Texte</h3>
-                  <small className="section-note">Diese Felder sind vollständig vorbefüllt und werden weder von der KI neu geschrieben noch beim Export leer gelassen.</small>
-                </div>
-                <b className="fixed-copy-badge">automatisch befüllt</b>
-              </div>
-              <div className="fixed-copy-fields">
-                <TextField label="Fester Abschluss der Objektbeschreibung" rows={4} value={FIXED_DESCRIPTION_CTA} readOnly />
-                <TextField label="Ausstattung" rows={12} value={FIXED_EQUIPMENT_TEXT} readOnly />
-                <TextField label="Sonstiges" rows={9} value={FIXED_OTHER_TEXT} readOnly />
-                <TextField label="Provision" rows={3} value={FIXED_PROVISION_TEXT} readOnly />
-                <TextField label="Anmerkung" rows={5} value={FIXED_ANNOTATION_TEXT} readOnly />
-                <TextField label="Allgemeine Geschäftsbedingungen" rows={4} value={FIXED_TERMS_TEXT} readOnly />
-                <TextField label="Freier Textblock für Empfehlungen" rows={9} value={FIXED_RECOMMENDATION_TEXT} readOnly />
-              </div>
-            </div>
-
-            <details className="optional-project-facts">
-              <summary>
-                <span>Optionale geprüfte Zusatzinformationen für den Lagetext</span>
-                <small>Nur öffnen, wenn zum vorgeprüften Grundstück weitere belastbare Angaben vorliegen.</small>
-              </summary>
-              <div className="optional-project-facts-grid">
-                <TextField label="Geprüfte Lagefakten" value={activeProject.locationFacts} placeholder="z. B. gewachsenes Wohngebiet, ruhige Seitenstraße …" onChange={(value) => updateProject({ locationFacts: value })} />
-                <TextField label="Verkehr & Erreichbarkeit" value={activeProject.transportFacts} placeholder="Nur bestätigte Angaben eintragen." onChange={(value) => updateProject({ transportFacts: value })} />
-                <TextField label="Familie & Versorgung" value={activeProject.familyFacts} placeholder="Schulen, Kitas, Einkauf – nur geprüfte Fakten." onChange={(value) => updateProject({ familyFacts: value })} />
-                <TextField label="Natur & Freizeit" value={activeProject.natureFacts} placeholder="Wald, Seen, Wege oder Freizeitangebote." onChange={(value) => updateProject({ natureFacts: value })} />
-              </div>
-            </details>
-
-            <div className="selection-section listing-group-editor">
-              <div className="section-heading compact">
-                <div>
-                  <span className="eyebrow">Aktive Inseratsgruppe</span>
-                  <h3>Maximal vier Inserate für diese Adresse</h3>
-                  <small className="section-note">Die vier aktiven Häuser stammen aus dem zentralen Hauspool. Der gesamte Pool bleibt unabhängig davon für spätere gewichtete Rotationen erhalten.</small>
-                </div>
-                <div className="button-row">
-                  <b>{listingVariants.filter((variant) => variant.templateId).length} von {HOUSES_PER_PROJECT} belegt</b>
-                </div>
-              </div>
-              <div className="listing-variant-columns dynamic">
-                <section className="listing-variant-column">
-                  <header><b>Aktive Hausvarianten</b><span>{listingVariants.length} von maximal {HOUSES_PER_PROJECT}</span></header>
-                  {listingVariants.map((variant, index) => {
-                    const house = approvedHouses.find((item) => item.id === variant.templateId);
-                    return (
-                      <article className={`listing-variant-row${variant.templateId ? " assigned" : ""}${variant.active ? " active" : " inactive"}`} key={variant.id}>
-                        <div className="variant-order"><span>Variante</span><b>{variant.order}</b></div>
-                        <div className="variant-main">
-                          <select value={variant.templateId} onChange={(event) => assignHouseToVariant(variant.id, event.target.value)} aria-label={`Inseratsvariante ${index + 1}`}>
-                            <option value="">Haustyp auswählen</option>
-                            {approvedHouses.filter((item) => houseDistribution.poolHouseIds.includes(item.id) && eligiblePoolHouseIds.has(item.id)).map((item) => (
-                              <option key={item.id} value={item.id}>{item.name} · {item.livingArea} m² · {item.rooms} Zi. · {euro(totalPrice(item, activeProject))}</option>
-                            ))}
-                          </select>
-                          {house ? (
-                            <small>{house.houseType} · {house.images.length} Bilder · {house.images.filter((image) => image.isFloorplan).length} Grundrissbilder · vollständiger Variantenstand</small>
-                          ) : <small>Freie Vorschlagszeile – auswählen oder entfernen.</small>}
-                        </div>
-                        <label className="variant-active-toggle" title="Variante in der Rotation verwenden">
-                          <input type="checkbox" checked={variant.active} disabled={!variant.templateId} onChange={(event) => setVariantActive(variant.id, event.target.checked)} />
-                          <span>aktiv</span>
-                        </label>
-                        <div className="variant-order-buttons">
-                          <button className="icon-button" disabled={index === 0} onClick={() => moveVariant(variant.id, "up")} aria-label="Variante nach oben">↑</button>
-                          <button className="icon-button" disabled={index === listingVariants.length - 1} onClick={() => moveVariant(variant.id, "down")} aria-label="Variante nach unten">↓</button>
-                          <button className="icon-button danger" onClick={() => removeVariant(variant.id)} aria-label="Variante entfernen">×</button>
-                        </div>
-                      </article>
-                    );
-                  })}
-                  {!listingVariants.length ? <div className="empty-state compact"><b>Noch keine Variante</b><span>Mit „Variante hinzufügen“ entsteht eine neue freie Zeile.</span></div> : null}
-                </section>
-              </div>
-            </div>
-
-            {activeListingGroup ? (
-              <div className="listing-group-management">
-                <div className="section-heading compact">
-                  <div>
-                    <span className="eyebrow">Sichere Rotationsverwaltung</span>
-                    <h3>Aktualisierung, Sperren und Protokoll</h3>
-                    <small className="section-note">Jedes Inserat wird unabhängig rotiert, gesperrt und protokolliert. Vollautomatisches Löschen bleibt bis zur bestätigten Immoprofessional-Löschschnittstelle gesperrt.</small>
-                  </div>
-                  <span className="status online">Löschschutz aktiv</span>
-                </div>
-
-                <div className="listing-group-overview">
-                  <div><span>Adresse</span><b>{projectSelectionLabel(activeProject)}</b></div>
-                  <div><span>Aktuelles Ausgangshaus</span><b>{currentRotationHouse?.name || "Noch keines"}</b></div>
-                  <div><span>Gewichtetes nächstes Haus</span><b>{nextRotationHouse?.name || "Nicht verfügbar"}</b></div>
-                  <div><span>Aktive Inserate</span><b>{activeProject.listings.length}</b></div>
-                  <div><span>Premium-Sperren</span><b>{premiumLockCount}</b></div>
-                  <div><span>Nächster Termin</span><b>{localDateTime(activeListingGroup.automation.nextUpdatedAt)}</b></div>
-                  <div><span>Letzter Status</span><b>{activeListingGroup.lastStatusMessage || workflowStatusLabel(activeListingGroup.lastStatus)}</b></div>
-                  <div><span>Letzter Fehler</span><b>{activeListingGroup.lastError || "–"}</b></div>
-                </div>
-
-                <div className="automation-settings-grid">
-                  <label className="standard-package">
-                    <input type="checkbox" checked={activeListingGroup.automation.rotationEnabled} onChange={(event) => updateGroupAutomation({ rotationEnabled: event.target.checked })} />
-                    <span><b>Gewichtete Hausrotation aktiv</b><small>Wählt je Inserat zentral nach Nutzung, Historie und eindeutiger Vierer-Kombination.</small></span>
-                  </label>
-                  <label className="standard-package locked-setting">
-                    <input type="checkbox" checked={false} disabled />
-                    <span><b>Automatisches Löschen deaktiviert</b><small>Bleibt bis zur bestätigten Immoprofessional-Löschschnittstelle technisch gesperrt.</small></span>
-                  </label>
-                </div>
-
-                <div className="rotation-actions">
-                  <button className="primary" disabled={groupOperationRunning} onClick={runGroupDryRun}>{groupOperationRunning ? "Prüfung läuft …" : "Dry Run starten"}</button>
-                  <button className="secondary" disabled={groupOperationRunning} onClick={prepareNextVariantCopy}>Nächste Variante vorbereiten</button>
-                  <button className="secondary" onClick={() => setTab("manager")}>Zum globalen Inseratsmanager</button>
-                </div>
-                <p className="helper-text">Zeitfenster, Tageslimit, Adresslimit, Priorität und Automatikmodus werden zentral im Inseratsmanager gesteuert. Erst ein bestätigter Upload zählt die Variante als verwendet; bestehende Anzeigen werden nicht automatisch gelöscht.</p>
-                {lastGroupDryRun ? (
-                  <div className={`dry-run-result ${lastGroupDryRun.ok ? "ready" : "blocked"}`}>
-                    <b>{lastGroupDryRun.ok ? "Dry Run bestanden" : "Dry Run blockiert"} · {lastGroupDryRun.variantName}</b>
-                    <span>{lastGroupDryRun.issues.length ? lastGroupDryRun.issues.join(" · ") : "Alle Pflichtfelder, Hausdaten, Preise, Bilder und Standardwerte sind konsistent. Keine Veröffentlichung und keine Löschung ausgeführt."}</span>
-                  </div>
-                ) : null}
-
-                <details className="listing-locks" open={activeProject.listings.length > 0}>
-                  <summary>Inseratsbezogene Sperrliste ({activeProject.listings.length})</summary>
-                  <div className="listing-lock-list">
-                    {activeProject.listings.length ? activeProject.listings.map((listing) => {
-                      const control = listingControl(activeListingGroup, listing);
-                      const blockReasons = listingDeletionBlockReasons(activeListingGroup, listing);
-                      return (
-                        <article key={listing.id} className="listing-lock-row">
-                          <header><div><b>{listing.externalId}</b><span>{listing.templateName}</span></div><small>{blockReasons.join(" · ")}</small></header>
-                          <div className="listing-lock-options">
-                            <label><input type="checkbox" checked={control.automaticUpdateEnabled} onChange={(event) => updateGroupListingControl(listing, { automaticUpdateEnabled: event.target.checked })} /> Aktualisierung</label>
-                            <label><input type="checkbox" checked={control.premiumPlacement} onChange={(event) => updateGroupListingControl(listing, { premiumPlacement: event.target.checked })} /> Premium-Sperre</label>
-                            <label><input type="checkbox" checked={control.manualLock} onChange={(event) => updateGroupListingControl(listing, { manualLock: event.target.checked })} /> Löschung sperren</label>
-                            <label className="lock-date">Gesperrt bis<input type="datetime-local" value={control.lockedUntil ? control.lockedUntil.slice(0, 16) : ""} onChange={(event) => updateGroupListingControl(listing, { lockedUntil: event.target.value ? new Date(event.target.value).toISOString() : "" })} /></label>
-                            <label className="lock-reason">Sperrgrund<input value={control.lockReason} placeholder="z. B. Premium-Platzierung" onChange={(event) => updateGroupListingControl(listing, { lockReason: event.target.value })} /></label>
-                          </div>
-                        </article>
-                      );
-                    }) : <div className="empty-state compact"><b>Noch keine aktiven Inseratentwürfe</b><span>Nach der Erstellung der ausgewählten Hausvarianten erscheinen hier die objektspezifischen Sperren.</span></div>}
-                  </div>
-                </details>
-
-                <details className="listing-group-log">
-                  <summary>Prozessprotokoll ({activeListingGroup.logs.length})</summary>
-                  <div className="listing-group-log-list">
-                    {activeListingGroup.logs.length ? [...activeListingGroup.logs].reverse().slice(0, 12).map((log) => (
-                      <article key={log.id}>
-                        <div><b>{log.message || workflowStatusLabel(log.processStatus)}</b><span>{localDateTime(log.timestamp)} · {log.mode}</span></div>
-                        <p>{log.oldVariantName || "Start"} → {log.newVariantName || "keine Variante"} · Alt: {log.oldExternalId || "–"} · Neu: {log.newExternalId || "–"}</p>
-                        <small>{log.checkResult}</small>
-                      </article>
-                    )) : <span>Noch keine Vorgänge protokolliert.</span>}
-                  </div>
-                </details>
-              </div>
-            ) : null}
-            <div className="project-text-preview">
-              <div className="section-heading compact">
-                <div>
-                  <span className="eyebrow">Bereits vorbefüllt</span>
-                  <h3>Nur Haus und Lage werden individuell</h3>
-                  <small className="section-note">Nach der Hausauswahl siehst du hier sofort Überschrift, Hausbeschreibung und Lagetext. Nur diese beiden Fließtexte werden anschließend durch die KI verfeinert.</small>
-                </div>
-                <b>{secondStepTextPreviews.length} Vorschau{secondStepTextPreviews.length === 1 ? "" : "en"}</b>
-              </div>
-              {secondStepTextPreviews.length ? (
-                <div className="project-copy-list">
-                  {secondStepTextPreviews.map(({ house, texts }, index) => (
-                    <details className="project-copy-item" key={house.id} open={index === 0}>
-                      <summary>
-                        <span>{house.name}</span>
-                        <b>{texts.title}</b>
-                      </summary>
-                      <div className="project-copy-fields">
-                        <TextField label="Überschrift" rows={2} value={texts.title} readOnly />
-                        <TextField label="Objektbeschreibung · wird hausbezogen verfeinert" rows={9} value={texts.description} readOnly />
-                        <TextField label="Lage · wird ortsbezogen verfeinert" rows={9} value={texts.location} readOnly />
-                        <TextField label="Sachlicher Hinweis zur Bebaubarkeit · fest" rows={3} value={FACTUAL_BUILDABILITY_NOTE} readOnly />
-                      </div>
-                    </details>
-                  ))}
-                </div>
-              ) : (
-                <div className="empty-state compact"><b>Noch keine Textvorschau</b><span>Wähle mindestens einen Haustyp aus; danach erscheinen die vorbefüllten Texte direkt hier im zweiten Schritt.</span></div>
-              )}
-            </div>
-            <div className="action-bar">
-              <div><b>Bereit für neue Inserattexte?</b><span>Die App kombiniert einen emotionalen Checklisten-Vorteil mit Ort, gerundeter Wohnfläche und Zimmerzahl. Objektbeschreibung und Lage werden individuell geschrieben; die vorgeschriebenen Textblöcke bleiben geschützt.</span></div>
-              <div className="button-row action-buttons">
-                <button className="primary" disabled={generatingAi} onClick={generateAiListings}>{generatingAi ? "Haus & Lage werden geschrieben …" : "Nur Haus- & Lagetexte erzeugen"}</button>
-              </div>
-            </div>
-          </div>
-        </section>
-      ) : null}
-
       {tab === "preview" ? (
         <section className="workspace">
-          <div className="content-card">
-              <div className="section-heading">
-                <div><span className="eyebrow">Prüfen und bearbeiten</span><h2>{activeProject.listings.length || "Keine"} Inseratentwürfe</h2></div>
-                <div className="button-row">
-                  <button className="primary" disabled={generatingAi} onClick={generateAiListings}>{generatingAi ? "Haus & Lage werden geschrieben …" : "Haus- & Lagetexte neu schreiben"}</button>
-              </div>
-            </div>
-            {activeProject.listings.length ? (
-              <div className="listing-stack">
-                {activeProject.listings.map((listing) => {
-                  const house = state.houses.find((item) => item.id === listing.templateId);
-                  const plannedItem = batchOverviewPlan.addresses
-                    .find((address: { projectId: string }) => address.projectId === activeProject.id)
-                    ?.items.find((item: { listingId: string }) => item.listingId === listing.id);
-                  const promotionImageId = plannedItem?.promotionImageId || listing.promotionImageId || "";
-                  const promotionImage = promotionLibrary.promotionImages.find((image) => image.id === promotionImageId);
-                  const displayImages = house
-                    ? promotionImage
-                      ? [{ ...promotionImage, role: "promotion" as ImageRole }, ...orderHouseImages(house.images)]
-                      : orderHouseImages(house.images)
-                    : [];
-                  const displayImage = displayImages[0];
-                  return (
-                    <article className="listing-card" key={listing.id}>
-                      <header>
-                        <div className="listing-thumb">
-                          {displayImage ? <img src={displayImage.dataUrl} alt={displayImage.caption} /> : <span>F&amp;P</span>}
-                        </div>
-                        <div><span className="eyebrow">Inserat-Überschrift · Version {listing.version}</span><h3>{listing.texts.title}</h3><p>{listing.templateName} · {house?.livingArea} m² · {house?.rooms} Zimmer · {activeProject.city}</p></div>
-                        <div className="price-tag"><span>Angebotspreis</span><b>{euro(listing.price)}</b></div>
-                      </header>
-                      <div className="listing-fields">
-                        <TextField label="Überschrift · unverändert aus Schritt 2" rows={2} value={listing.texts.title} readOnly />
-                        <TextField label="1 · Objektbeschreibung" rows={8} value={listing.texts.description} onChange={(value) => updateListingText(listing.id, "description", value)} />
-                        <TextField label="2 · Ausstattung · fest" rows={8} value={listing.texts.equipment} readOnly />
-                        <TextField label="3 · Lage" rows={7} value={listing.texts.location} onChange={(value) => updateListingText(listing.id, "location", value)} />
-                        <TextField label="Sachlicher Hinweis zur Bebaubarkeit · getrennt vom Lagetext" rows={3} value={FACTUAL_BUILDABILITY_NOTE} readOnly />
-                        <TextField label="4 · Sonstiges · fest" rows={7} value={listing.texts.other} readOnly />
-                        <TextField label="5 · Provision · fest" rows={2} value={FIXED_PROVISION_TEXT} readOnly />
-                        <TextField label="6 · Anmerkung · fest" rows={4} value={FIXED_ANNOTATION_TEXT} readOnly />
-                        <TextField label="7 · Allgemeine Geschäftsbedingungen · fest" rows={3} value={FIXED_TERMS_TEXT} readOnly />
-                        <TextField label="8 · Freier Textblock für Empfehlungen · fest" rows={7} value={FIXED_RECOMMENDATION_TEXT} readOnly />
-                      </div>
-                      <footer><span>{displayImages.length} Bilder automatisch zugeordnet{promotionImage ? " · Aktionsbild an Position 1" : " · normale Bildfolge"}</span><span>Weitergabe an Portale: <b>deaktiviert</b></span></footer>
-                    </article>
-                  );
-                })}
+          <div className="content-card text-workspace">
+            {!effectiveBatchProjectIds.length ? (
+              <div className="empty-state large">
+                <b>Keine Grundstücke für Texte ausgewählt</b>
+                <span>Die Grundstücksauswahl erfolgt ausschließlich in Schritt 01. Wähle dort die gewünschten Grundstücke und den gemeinsamen Hauspool.</span>
+                <button className="primary" onClick={() => setTab("plots")}>Zu Grundstücke &amp; Auswahl</button>
               </div>
             ) : (
-              <div className="empty-state large"><b>Noch keine Entwürfe</b><span>Erfasse eine Adresse, ordne mindestens eine Hausvariante zu und erzeuge anschließend die Texte.</span><button className="primary" onClick={() => setTab("project")}>Zur Adresseingabe</button></div>
+              <>
+                <div className="section-heading">
+                  <div><span className="eyebrow">Alle Textfunktionen an einem Ort</span><h2>Texte &amp; Vorschau</h2><small className="section-note">{effectiveBatchProjectIds.length} zentral ausgewählte Grundstück{effectiveBatchProjectIds.length === 1 ? "" : "e"} · keine erneute Auswahl erforderlich</small></div>
+                  <div className="button-row">
+                    <label className="compact-field">Bearbeitete Adresse<select value={activeProject.id} onChange={(event) => setActiveProjectId(event.target.value)}>{effectiveBatchProjectIds.map((projectId) => { const project = state.projects.find((item) => item.id === projectId); return project ? <option key={project.id} value={project.id}>{projectSelectionLabel(project)}</option> : null; })}</select></label>
+                    <button className="secondary" onClick={() => setTab("plots")}>Zentrale Auswahl ändern</button>
+                    <button className="primary" disabled={generatingAi} onClick={generateAiListings}>{generatingAi ? "Texte werden geschrieben …" : "Haus- &amp; Lagetexte neu schreiben"}</button>
+                  </div>
+                </div>
+
+                <details className="optional-project-facts" open>
+                  <summary><span>Lageinformationen für {projectSelectionLabel(activeProject)}</span><small>Nur bestätigte Angaben werden als Grundlage für den Lagetext verwendet.</small></summary>
+                  <div className="optional-project-facts-grid">
+                    <TextField label="Geprüfte Lagefakten" value={activeProject.locationFacts} placeholder="z. B. gewachsenes Wohngebiet, ruhige Seitenstraße …" onChange={(value) => updateProject({ locationFacts: value })} />
+                    <TextField label="Verkehr & Erreichbarkeit" value={activeProject.transportFacts} placeholder="Nur bestätigte Angaben eintragen." onChange={(value) => updateProject({ transportFacts: value })} />
+                    <TextField label="Familie & Versorgung" value={activeProject.familyFacts} placeholder="Schulen, Kitas, Einkauf – nur geprüfte Fakten." onChange={(value) => updateProject({ familyFacts: value })} />
+                    <TextField label="Natur & Freizeit" value={activeProject.natureFacts} placeholder="Wald, Seen, Wege oder Freizeitangebote." onChange={(value) => updateProject({ natureFacts: value })} />
+                  </div>
+                </details>
+
+                <div className="fixed-project-copy">
+                  <div className="section-heading compact"><div><span className="eyebrow">Geschützte Langtexte</span><h3>Vorgeschriebene Textbausteine</h3><small className="section-note">Diese Inhalte bleiben vollständig vorbefüllt und werden von der KI nicht überschrieben.</small></div><b className="fixed-copy-badge">automatisch befüllt</b></div>
+                  <div className="fixed-copy-fields">
+                    <TextField label="Fester Abschluss der Objektbeschreibung" rows={4} value={FIXED_DESCRIPTION_CTA} readOnly />
+                    <TextField label="Ausstattung" rows={12} value={FIXED_EQUIPMENT_TEXT} readOnly />
+                    <TextField label="Sonstiges" rows={9} value={FIXED_OTHER_TEXT} readOnly />
+                    <TextField label="Provision" rows={3} value={FIXED_PROVISION_TEXT} readOnly />
+                    <TextField label="Anmerkung" rows={5} value={FIXED_ANNOTATION_TEXT} readOnly />
+                    <TextField label="Allgemeine Geschäftsbedingungen" rows={4} value={FIXED_TERMS_TEXT} readOnly />
+                    <TextField label="Freier Textblock für Empfehlungen" rows={9} value={FIXED_RECOMMENDATION_TEXT} readOnly />
+                  </div>
+                </div>
+
+                <div className="project-text-preview">
+                  <div className="section-heading compact"><div><span className="eyebrow">Textgrundlagen</span><h3>Vorbefüllte Haus- und Lagetexte</h3><small className="section-note">Überschrift, Objektbeschreibung und Lage werden hier vorbereitet; alle festen Blöcke bleiben geschützt.</small></div><b>{secondStepTextPreviews.length} Vorschau{secondStepTextPreviews.length === 1 ? "" : "en"}</b></div>
+                  {secondStepTextPreviews.length ? <div className="project-copy-list">{secondStepTextPreviews.map(({ house, texts }, index) => <details className="project-copy-item" key={house.id} open={index === 0}><summary><span>{house.name}</span><b>{texts.title}</b></summary><div className="project-copy-fields"><TextField label="Überschrift" rows={2} value={texts.title} readOnly /><TextField label="Objektbeschreibung" rows={9} value={texts.description} readOnly /><TextField label="Lage" rows={9} value={texts.location} readOnly /><TextField label="Sachlicher Hinweis zur Bebaubarkeit" rows={3} value={FACTUAL_BUILDABILITY_NOTE} readOnly /></div></details>)}</div> : <div className="empty-state compact"><b>Noch keine Textgrundlage</b><span>Übernimm in Schritt 01 zuerst eine vollständige Hausverteilung.</span></div>}
+                </div>
+
+                <div className="section-heading text-draft-heading"><div><span className="eyebrow">Kurztexte, Langtexte und Portalvorschau</span><h3>{activeProject.listings.length || "Keine"} Inseratentwürfe für diese Adresse</h3></div></div>
+                {activeProject.listings.length ? (
+                  <div className="listing-stack">
+                    {activeProject.listings.map((listing) => {
+                      const house = state.houses.find((item) => item.id === listing.templateId);
+                      const plannedItem = batchOverviewPlan.addresses.find((address: { projectId: string }) => address.projectId === activeProject.id)?.items.find((item: { listingId: string }) => item.listingId === listing.id);
+                      const promotionImageId = plannedItem?.promotionImageId || listing.promotionImageId || "";
+                      const promotionImage = promotionLibrary.promotionImages.find((image) => image.id === promotionImageId);
+                      const displayImages = house ? promotionImage ? [{ ...promotionImage, role: "promotion" as ImageRole }, ...orderHouseImages(house.images)] : orderHouseImages(house.images) : [];
+                      const displayImage = displayImages[0];
+                      const shortPreview = [listing.texts.title, listing.texts.description].filter(Boolean).join(" — ").slice(0, 280);
+                      return <article className="listing-card" key={listing.id}>
+                        <header><div className="listing-thumb">{displayImage ? <img src={displayImage.dataUrl} alt={displayImage.caption} /> : <span>F&amp;P</span>}</div><div><span className="eyebrow">Portalvorschau · Version {listing.version}</span><h3>{listing.texts.title}</h3><p>{listing.templateName} · {house?.livingArea} m² · {house?.rooms} Zimmer · {activeProject.city}</p></div><div className="price-tag"><span>Angebotspreis</span><b>{euro(listing.price)}</b></div></header>
+                        <div className="listing-fields">
+                          <TextField label="Überschrift" rows={2} value={listing.texts.title} onChange={(value) => updateListingText(listing.id, "title", value)} />
+                          <TextField label="Kurztext · automatisch aus Überschrift und Beschreibung" rows={3} value={shortPreview} readOnly />
+                          <TextField label="Objektbeschreibung · Langtext" rows={8} value={listing.texts.description} onChange={(value) => updateListingText(listing.id, "description", value)} />
+                          <TextField label="Ausstattung · fest" rows={8} value={listing.texts.equipment} readOnly />
+                          <TextField label="Lage · Langtext" rows={7} value={listing.texts.location} onChange={(value) => updateListingText(listing.id, "location", value)} />
+                          <TextField label="Energie · fest" rows={3} value="Fußbodenheizung · Wärmepumpe · KfW40 und KfW55 · Energieklasse A++ · GEG 2022 A+" readOnly />
+                          <TextField label="Sachlicher Hinweis zur Bebaubarkeit" rows={3} value={FACTUAL_BUILDABILITY_NOTE} readOnly />
+                          <TextField label="Sonstiges · fest" rows={7} value={listing.texts.other} readOnly />
+                          <TextField label="Provision · fest" rows={2} value={FIXED_PROVISION_TEXT} readOnly />
+                          <TextField label="Anmerkung · fest" rows={4} value={FIXED_ANNOTATION_TEXT} readOnly />
+                          <TextField label="Allgemeine Geschäftsbedingungen · fest" rows={3} value={FIXED_TERMS_TEXT} readOnly />
+                          <TextField label="Freier Textblock für Empfehlungen · fest" rows={7} value={FIXED_RECOMMENDATION_TEXT} readOnly />
+                        </div>
+                        <footer><span>{displayImages.length} Bilder automatisch zugeordnet{promotionImage ? " · Aktionsbild an Position 1" : " · normale Bildfolge"}</span><span>Weitergabe an Portale: <b>deaktiviert</b></span></footer>
+                      </article>;
+                    })}
+                  </div>
+                ) : <div className="empty-state large"><b>Noch keine Entwürfe</b><span>Übernimm in Schritt 01 die gewichtete Hausverteilung. Danach erscheinen hier alle Text- und Vorschaufunktionen.</span><button className="primary" onClick={() => setTab("plots")}>Hausverteilung öffnen</button></div>}
+              </>
             )}
           </div>
         </section>
@@ -4317,9 +3745,14 @@ export default function InseratStudio() {
           </div>
 
           <div className="content-card manager-list-card">
-            <div className="section-heading compact"><div><span className="eyebrow">Alle Adressen</span><h3>{managedListings.length} verwaltete{managedListings.length === 1 ? "s" : ""} Inserat{managedListings.length === 1 ? "" : "e"}</h3></div><b>Health Score sortiert</b></div>
+            <div className="section-heading compact"><div><span className="eyebrow">Alle Adressen</span><h3>{managedListings.length} verwaltete{managedListings.length === 1 ? "s" : ""} Inserat{managedListings.length === 1 ? "" : "e"}</h3></div></div>
+            <div className="manager-view-controls">
+              <label className="field"><span>Sortieren nach</span><select value={managerSortKey} onChange={(event) => setManagerSortKey(event.target.value as ManagerSortKey)}><option value="city">Ort</option><option value="uploadDate">Upload-Datum</option><option value="lastUpdate">Letzte Aktualisierung</option><option value="nextUpdate">Nächste Aktualisierung</option><option value="health">Health Score</option><option value="status">Status</option></select></label>
+              <button className="secondary" onClick={() => setManagerSortDirection((direction) => direction === "asc" ? "desc" : "asc")}>{managerSortDirection === "asc" ? "↑ Aufsteigend" : "↓ Absteigend"}</button>
+              <label className="standard-package manager-group-toggle"><input type="checkbox" checked={groupManagerByPlot} onChange={(event) => setGroupManagerByPlot(event.target.checked)} /><span><b>Nach Grundstück gruppieren</b><small>Alle Inserate einer Adresse zusammen anzeigen.</small></span></label>
+            </div>
             <div className="manager-table" role="table" aria-label="Verwaltete Inserate">
-              {managedListings.map(({ project, listing, control, health, rotationPlan, nextHouse }) => (
+              {managerListingGroups.map((managerGroup) => <section className="manager-property-group" key={managerGroup.id}>{groupManagerByPlot ? <header><b>{managerGroup.label}</b><span>{managerGroup.items.length} Inserate</span></header> : null}{managerGroup.items.map(({ project, listing, control, health, rotationPlan, nextHouse }) => (
                 <article className={`manager-row${control.premiumPlacement || control.manualLock || listing.rotationArchivedAt ? " locked" : ""}`} key={`${project.id}-${listing.id}`}>
                   <div className="manager-row-main">
                     <div><span>Adresse</span><b>{projectSelectionLabel(project)}</b></div>
@@ -4349,8 +3782,8 @@ export default function InseratStudio() {
                     <button className="secondary" disabled={Boolean(listing.rotationArchivedAt)} onClick={() => prepareManagedListing(project.id, listing.id, "copy-without-delete")}>Nur kopieren</button>
                   </div>
                 </article>
-              ))}
-              {!managedListings.length ? <div className="empty-state large"><b>Noch keine verwalteten Inserate</b><span>Wähle unter „Adresse &amp; Auswahl“ mindestens eine Hausvariante aus und erzeuge den Entwurf.</span></div> : null}
+              ))}</section>)}
+              {!managedListings.length ? <div className="empty-state large"><b>Noch keine verwalteten Inserate</b><span>Wähle in Schritt 01 mindestens ein Grundstück und eine vollständige Hausverteilung aus.</span></div> : null}
             </div>
           </div>
         </section>
@@ -4480,7 +3913,7 @@ export default function InseratStudio() {
                   </details>
                 );
               })}
-              {!batchOverviewPlan.addresses.length ? <div className="batch-empty">Unter „Adresse &amp; Auswahl“ zuerst Grundstücke für den Sammel-Upload markieren und vorbereiten.</div> : null}
+              {!batchOverviewPlan.addresses.length ? <div className="batch-empty">In Schritt 01 zuerst Grundstücke auswählen und die gemeinsame Hausverteilung übernehmen.</div> : null}
             </div>
             {batchUploadProgress.total ? (
               <div className="batch-progress" aria-live="polite">
@@ -4503,12 +3936,12 @@ export default function InseratStudio() {
               <div><span>Veröffentlichung</span><b>manuell in Immoprofessional</b></div>
             </div>
             <button className="primary full" disabled={uploading || !selectedUploadIds.length} onClick={uploadPackage}>{uploading ? uploadStatus || "Wird übertragen …" : "Sammel-Upload bestätigen & starten"}</button>
-            <button className="secondary full" disabled={uploading || !activeProject.listings.length || !effectiveBatchProjectIds.includes(activeProject.id)} onClick={downloadPackage}>Aktives Projekt nur herunterladen</button>
+            <button className="secondary full" disabled={uploading || !activeProject.listings.length || !effectiveBatchProjectIds.includes(activeProject.id)} onClick={downloadPackage}>Aktives Inseratspaket nur herunterladen</button>
             <p className="first-test">Der erste Upload sollte mit einem einzelnen, nicht veröffentlichten Testobjekt geprüft werden. Immoprofessional kann eigene Importregeln anwenden.</p>
           </aside>
 
           <div className="content-card backup-card">
-            <div><span className="eyebrow">Strikt getrennte Speicherung</span><h3>Fabian&amp;Pascal-Sicherung</h3><p>Haustypen, Bilder und Adressprojekte werden doppelt lokal gespeichert: im Speicher <code>{STORAGE_ID}</code> und unter <code>~/Library/Application Support</code>. Zugangsdaten liegen separat im macOS-Schlüsselbund. deviq und Plotverium werden weder gelesen noch beschrieben.</p></div>
+            <div><span className="eyebrow">Strikt getrennte Speicherung</span><h3>Fabian&amp;Pascal-Sicherung</h3><p>Haustypen, Bilder, Grundstücks- und Inseratsdaten werden doppelt lokal gespeichert: im Speicher <code>{STORAGE_ID}</code> und unter <code>~/Library/Application Support</code>. Zugangsdaten liegen separat im macOS-Schlüsselbund. deviq und Plotverium werden weder gelesen noch beschrieben.</p></div>
             <div className="button-row"><button className="secondary" onClick={exportCatalog}>Sicherung herunterladen</button><label className="secondary file-label">Sicherung einlesen<input type="file" accept="application/json" onChange={importCatalog} /></label></div>
           </div>
         </section>

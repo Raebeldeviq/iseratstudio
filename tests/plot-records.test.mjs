@@ -69,6 +69,7 @@ test("creates a project reference from a selected plot", () => {
 test("manual plot deletion removes all internal project relationships without external deletion", () => {
   const state = {
     plots: [{ id: "plot-1" }, { id: "plot-2" }],
+    selectedPlotIds: ["plot-1", "plot-2"],
     projects: [
       { id: "project-1", plotId: "plot-1", listings: [{ id: "listing-1", externalId: "external-1" }] },
       { id: "project-2", plotId: "plot-2", listings: [{ id: "listing-2" }] },
@@ -84,6 +85,7 @@ test("manual plot deletion removes all internal project relationships without ex
   };
   const result = deletePlotRecordCascade(state, "plot-1");
   assert.deepEqual(result.state.plots.map((plot) => plot.id), ["plot-2"]);
+  assert.deepEqual(result.state.selectedPlotIds, ["plot-2"]);
   assert.deepEqual(result.state.projects.map((project) => project.id), ["project-2"]);
   assert.deepEqual(result.state.promotionUsage.map((entry) => entry.projectId), ["project-2"]);
   assert.deepEqual(result.state.uploadHistory.map((entry) => entry.projectId), ["project-2"]);
@@ -92,4 +94,16 @@ test("manual plot deletion removes all internal project relationships without ex
   assert.equal(result.state.houseDistribution.combinationUsage[0].lastProjectId, "");
   assert.deepEqual(result.state.scheduler.runs[0].selectedListingIds, ["listing-2"]);
   assert.equal(Object.hasOwn(result.state, "externalDeletion"), false);
+});
+
+test("keeps one persisted workflow selection and removes inactive or unknown plots", () => {
+  const state = normalizePlotState({
+    selectedPlotIds: ["plot-active", "plot-inactive", "plot-active", "missing"],
+    plots: [
+      { id: "plot-active", street: "A", houseNumber: "1", postalCode: "14469", city: "Potsdam", isActive: true },
+      { id: "plot-inactive", street: "B", houseNumber: "2", postalCode: "14469", city: "Potsdam", isActive: false },
+    ],
+    projects: [],
+  }, { now: "2026-07-25T10:00:00.000Z" });
+  assert.deepEqual(state.selectedPlotIds, ["plot-active"]);
 });

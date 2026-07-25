@@ -437,6 +437,7 @@ export type StudioState = {
   plotSchemaVersion?: number;
   houses: HouseTemplate[];
   plots?: PlotRecord[];
+  selectedPlotIds?: string[];
   projects: ProjectInput[];
   provider: ProviderSettings;
   promotionImage: HouseImage | null;

@@ -205,6 +205,9 @@ export function normalizePlotState(state, options = {}) {
     ...state,
     plotSchemaVersion: PLOT_RECORD_SCHEMA_VERSION,
     plots,
+    selectedPlotIds: [...new Set((Array.isArray(state?.selectedPlotIds) ? state.selectedPlotIds : [])
+      .map(text)
+      .filter((id) => plotById.get(id)?.isActive === true))],
     projects,
   };
 }
@@ -257,6 +260,7 @@ export function deletePlotRecordCascade(state, plotId) {
     state: {
       ...state,
       plots: (Array.isArray(state?.plots) ? state.plots : []).filter((plot) => text(plot?.id) !== id),
+      selectedPlotIds: (Array.isArray(state?.selectedPlotIds) ? state.selectedPlotIds : []).filter((selectedId) => text(selectedId) !== id),
       projects: projects.filter((project) => !deletedProjectIds.has(text(project?.id))),
       promotionUsage: (Array.isArray(state?.promotionUsage) ? state.promotionUsage : []).filter((usage) =>
         !deletedProjectIds.has(text(usage?.projectId)) && !deletedListingIds.has(text(usage?.listingId))),

@@ -47,15 +47,16 @@ type Props = {
   helperOnline: boolean;
   helperRequest: HelperRequest;
   linkedProjectCounts: Record<string, number>;
-  selectionMeta: Record<string, { listingCount: number; regionLabel: string }>;
+  selectionMeta: Record<string, { listingCount: number; regionLabel: string; uploadDate: string }>;
   syncStatus: PlotSyncStatus | null;
   syncBusy: boolean;
   onSelectionChange: (ids: string[]) => void;
   onSave: (plots: PlotRecord[], message: string) => void;
   onDelete: (plot: PlotRecord) => void;
-  onHandOff: (plotIds: string[]) => void;
   onSync: (dryRun: boolean) => void;
 };
+
+type PlotSortKey = "city" | "postalCode" | "plotSizeSqm" | "purchasePrice" | "uploadDate" | "listingCount";
 
 type PlotSyncRun = {
   startedAt: string;
@@ -127,13 +128,13 @@ export default function PlotManagement({
   onSelectionChange,
   onSave,
   onDelete,
-  onHandOff,
   onSync,
 }: Props) {
-  const [view, setView] = useState<"manage" | "select">("manage");
   const [logOpen, setLogOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [cityFilter, setCityFilter] = useState("");
+  const [sortKey, setSortKey] = useState<PlotSortKey>("city");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [draft, setDraft] = useState<PlotRecord | null>(null);
   const [pdfReview, setPdfReview] = useState<PdfReview | null>(null);
   const [pdfBusy, setPdfBusy] = useState(false);
@@ -160,6 +161,22 @@ export default function PlotManagement({
   const visibleIds = visiblePlots.map((plot) => plot.id);
   const allVisibleSelected = Boolean(visibleIds.length) && visibleIds.every((id) => selectedPlotIds.includes(id));
   const selectionGroups = useMemo(() => {
+    const collator = new Intl.Collator("de-DE", { numeric: true, sensitivity: "base" });
+    const compare = (left: PlotRecord, right: PlotRecord) => {
+      const leftMeta = selectionMeta[left.id] || { listingCount: 0, uploadDate: "" };
+      const rightMeta = selectionMeta[right.id] || { listingCount: 0, uploadDate: "" };
+      const numeric = sortKey === "plotSizeSqm"
+        ? left.plotSizeSqm - right.plotSizeSqm
+        : sortKey === "purchasePrice"
+          ? left.purchasePrice - right.purchasePrice
+          : sortKey === "listingCount"
+            ? leftMeta.listingCount - rightMeta.listingCount
+            : sortKey === "uploadDate"
+              ? (Date.parse(leftMeta.uploadDate) || 0) - (Date.parse(rightMeta.uploadDate) || 0)
+              : collator.compare(sortKey === "city" ? left.city : left.postalCode, sortKey === "city" ? right.city : right.postalCode);
+      const ordered = numeric || collator.compare([left.city, left.postalCode, formatPlotStreet(left)].join(" "), [right.city, right.postalCode, formatPlotStreet(right)].join(" "));
+      return sortDirection === "asc" ? ordered : -ordered;
+    };
     const groups = new Map<string, PlotRecord[]>();
     for (const plot of visiblePlots) {
       const label = selectionMeta[plot.id]?.regionLabel || "Nicht zugeordnet";
@@ -169,9 +186,9 @@ export default function PlotManagement({
       .sort(([left], [right]) => left.localeCompare(right, "de"))
       .map(([label, entries]) => ({
         label,
-        plots: entries.sort((left, right) => [left.postalCode, left.city, formatPlotStreet(left)].join(" ").localeCompare([right.postalCode, right.city, formatPlotStreet(right)].join(" "), "de")),
+        plots: entries.sort(compare),
       }));
-  }, [selectionMeta, visiblePlots]);
+  }, [selectionMeta, sortDirection, sortKey, visiblePlots]);
   const displayedSyncRun = syncStatus?.lastSuccessfulRun || syncStatus?.lastRun;
 
   const beginEdit = (plot?: PlotRecord) => {
@@ -359,7 +376,7 @@ export default function PlotManagement({
   const removePlot = (plot: PlotRecord) => {
     const links = linkedProjectCounts[plot.id] || 0;
     const warning = links
-      ? `Mit diesem Grundstück sind ${links} interne Projektierung${links === 1 ? "" : "en"} verknüpft. Grundstück, Projektierungen und interne Folgebeziehungen werden vollständig gelöscht. Bereits veröffentlichte externe Inserate bleiben unberührt. Fortfahren?`
+      ? `Mit diesem Grundstück sind ${links} interne Arbeitsstände verknüpft. Grundstück, Arbeitsstände und interne Folgebeziehungen werden vollständig gelöscht. Bereits veröffentlichte externe Inserate bleiben unberührt. Fortfahren?`
       : "Soll dieses Grundstück wirklich vollständig aus der App gelöscht werden? Externe Inserate bleiben unberührt.";
     if (!window.confirm(warning)) return;
     onDelete(plot);
@@ -411,17 +428,12 @@ export default function PlotManagement({
     <section className="workspace plot-workspace">
       <div className="content-card plot-management-card">
         <div className="section-heading">
-          <div><span className="eyebrow">Zentrale Datenbasis</span><h2>{activePlots.length} Grundstücke</h2><small className="section-note">Bearbeitungen gelten direkt für alle verknüpften Projektierungen. Exposés bleiben ausschließlich lokal.</small></div>
+          <div><span className="eyebrow">Zentrale Datenbasis und einzige Auswahl</span><h2>{activePlots.length} Grundstücke</h2><small className="section-note">Bearbeitung, Mehrfachauswahl und Exposés befinden sich ausschließlich hier. Änderungen gelten direkt für alle nachfolgenden Schritte.</small></div>
           <div className="button-row">
             <input ref={excelInput} type="file" accept=".xlsx,.xls" hidden onChange={importExcel} />
             <button className="secondary" disabled={importBusy} onClick={() => excelInput.current?.click()}>{importBusy ? "Excel wird gelesen …" : "Excel importieren"}</button>
             <button className="primary" onClick={() => beginEdit()}>Neues Grundstück</button>
           </div>
-        </div>
-
-        <div className="plot-view-switch" role="tablist" aria-label="Grundstücksbereich wählen">
-          <button className={view === "manage" ? "active" : ""} onClick={() => setView("manage")}>Verwalten</button>
-          <button className={view === "select" ? "active" : ""} onClick={() => setView("select")}>Für Projektierung auswählen</button>
         </div>
 
         <section className="plot-sync-card" aria-label="Automatischer Grundstücksabgleich">
@@ -441,26 +453,24 @@ export default function PlotManagement({
         <div className="plot-toolbar">
           <label className="field"><span>Suche</span><input value={query} placeholder="Straße, PLZ oder Ort" onChange={(event) => setQuery(event.target.value)} /></label>
           <label className="field"><span>Ort filtern</span><select value={cityFilter} onChange={(event) => setCityFilter(event.target.value)}><option value="">Alle Orte</option>{cityOptions.map((city) => <option key={city}>{city}</option>)}</select></label>
-          {view === "select" ? <><div className="plot-selection-summary"><b>{selectedPlotIds.length}</b><span>ausgewählt</span></div>
-          <div className="button-row"><button className="secondary" disabled={!visibleIds.length} onClick={toggleAllVisible}>{allVisibleSelected ? "Sichtbare abwählen" : "Alle sichtbaren wählen"}</button><button className="secondary" disabled={!selectedPlotIds.length} onClick={() => onSelectionChange([])}>Auswahl aufheben</button><button className="primary" disabled={!selectedPlotIds.length} onClick={() => onHandOff(selectedPlotIds)}>An Projektierung übergeben</button></div></> : null}
+          <label className="field"><span>Innerhalb der Gebiete sortieren</span><select value={sortKey} onChange={(event) => setSortKey(event.target.value as PlotSortKey)}><option value="city">Ort</option><option value="postalCode">PLZ</option><option value="plotSizeSqm">Grundstücksgröße</option><option value="purchasePrice">Kaufpreis</option><option value="uploadDate">Upload-Datum</option><option value="listingCount">Inseratsanzahl</option></select></label>
+          <button className="secondary plot-sort-direction" onClick={() => setSortDirection((direction) => direction === "asc" ? "desc" : "asc")} aria-label={sortDirection === "asc" ? "Absteigend sortieren" : "Aufsteigend sortieren"}>{sortDirection === "asc" ? "↑ Aufsteigend" : "↓ Absteigend"}</button>
+          <div className="plot-selection-summary"><b>{selectedPlotIds.length}</b><span>zentral ausgewählt</span></div>
+          <div className="button-row"><button className="secondary" disabled={!visibleIds.length} onClick={toggleAllVisible}>{allVisibleSelected ? "Sichtbare abwählen" : "Alle sichtbaren wählen"}</button><button className="secondary" disabled={!selectedPlotIds.length} onClick={() => onSelectionChange([])}>Auswahl aufheben</button></div>
         </div>
 
-        {view === "manage" ? <div className="plot-table" role="table" aria-label="Grundstücksübersicht">
-          <div className="plot-table-head manage" role="row"><span>Straße</span><span>PLZ</span><span>Ort</span><span>Grundstück</span><span>Kaufpreis</span><span>Exposé</span><span>Aktionen</span></div>
-          {visiblePlots.map((plot) => (
-            <div className="plot-table-row manage" role="row" key={plot.id}>
-              <b>{formatPlotStreet(plot) || "–"}<small>geändert {date(plot.updatedAt)}</small></b>
-              <span>{plot.postalCode || "–"}</span><span>{plot.city || "–"}</span><span>{plot.plotSizeSqm ? `${number(plot.plotSizeSqm)} m²` : "–"}</span><span>{plot.purchasePrice ? euro(plot.purchasePrice) : "–"}</span>
-              <span className={plot.exposeFileReference ? "plot-expose yes" : "plot-expose"}>{plot.exposeFileReference ? "Ja" : "Nein"}{plot.exposeFilename ? <small>{plot.exposeFilename}</small> : null}</span>
-              <div className="plot-actions"><button onClick={() => beginEdit(plot)}>Bearbeiten</button>{plot.exposeFileReference ? <button onClick={() => openExpose(plot)}>Öffnen</button> : null}<button className="danger-link" onClick={() => removePlot(plot)}>Entfernen</button></div>
-            </div>
-          ))}
-          {!visiblePlots.length ? <div className="empty-state"><b>Keine Grundstücke gefunden</b><span>Importiere eine Excel-Datei oder lege ein Grundstück manuell an.</span></div> : null}
-        </div> : <div className="plot-region-groups">{selectionGroups.map((group) => <section key={group.label}><header><b>{group.label}</b><span>{group.plots.length} Grundstücke</span></header><div>{group.plots.map((plot) => {
+        <div className="plot-region-groups">{selectionGroups.map((group) => <section key={group.label}><header><b>{group.label}</b><span>{group.plots.length} Grundstücke</span></header><div>{group.plots.map((plot) => {
           const listingCount = selectionMeta[plot.id]?.listingCount || 0;
+          const uploadDate = selectionMeta[plot.id]?.uploadDate || "";
           const appearance = plotListingCountAppearance(listingCount);
-          return <label className={`plot-selection-card ${appearance.tone}${selectedPlotIds.includes(plot.id) ? " selected" : ""}`} key={plot.id}><input type="checkbox" checked={selectedPlotIds.includes(plot.id)} onChange={() => togglePlot(plot.id)} /><span><b>{formatPlotStreet(plot)}, {plot.postalCode} {plot.city}</b><small>{number(plot.plotSizeSqm)} m² · {euro(plot.purchasePrice)}</small></span><em>{listingCount} Inserate/Varianten{appearance.detail ? <small>{appearance.detail}</small> : null}</em></label>;
-        })}</div></section>)}</div>}
+          return <article className={`plot-selection-card ${appearance.tone}${selectedPlotIds.includes(plot.id) ? " selected" : ""}`} key={plot.id}>
+            <label className="plot-selection-main"><input type="checkbox" checked={selectedPlotIds.includes(plot.id)} onChange={() => togglePlot(plot.id)} /><span><b>{formatPlotStreet(plot) || "–"}</b><small>{plot.postalCode || "–"} {plot.city || "–"}</small></span></label>
+            <div className="plot-selection-facts"><span><small>Grundstück</small><b>{plot.plotSizeSqm ? `${number(plot.plotSizeSqm)} m²` : "–"}</b></span><span><small>Kaufpreis</small><b>{plot.purchasePrice ? euro(plot.purchasePrice) : "–"}</b></span><span><small>Plattform-Upload</small><b>{uploadDate ? date(uploadDate) : "Noch nicht hochgeladen"}</b></span></div>
+            <em>{listingCount} Inserate{appearance.detail ? <small>{appearance.detail}</small> : null}</em>
+            <div className="plot-actions"><button onClick={() => beginEdit(plot)}>Bearbeiten</button>{plot.exposeFileReference ? <button onClick={() => openExpose(plot)}>Exposé öffnen</button> : null}<button className="danger-link" onClick={() => removePlot(plot)}>Löschen</button></div>
+          </article>;
+        })}</div></section>)}</div>
+        {!visiblePlots.length ? <div className="empty-state"><b>Keine Grundstücke gefunden</b><span>Importiere eine Excel-Datei oder lege ein Grundstück manuell an.</span></div> : null}
       </div>
 
       {importRows.length ? (
@@ -511,7 +521,7 @@ export default function PlotManagement({
               }} /><small>{pdfReview.fields.reviewRequired[row.key] ? "Prüfung erforderlich" : "erkannt"}</small></label>)}<div className="button-row"><button className="secondary" onClick={() => setPdfReview({ ...pdfReview, accepted: { street: false, postalCode: false, city: false, plotSizeSqm: false, purchasePrice: false } })}>Alle verwerfen</button><button className="primary" onClick={applyPdfValues}>Ausgewählte Werte übernehmen</button></div></div> : null}
 
             {message ? <div className="plot-inline-message" role="status">{message}</div> : null}
-            <div className="action-bar"><span>Änderungen werden zentral gespeichert und an verknüpfte Projektierungen weitergereicht.</span><div className="button-row"><button className="secondary" onClick={closeEditor}>Abbrechen</button><button className="primary" disabled={pdfBusy} onClick={saveDraft}>Grundstück speichern</button></div></div>
+            <div className="action-bar"><span>Änderungen werden zentral gespeichert und an alle verknüpften Inseratsarbeitsstände weitergereicht.</span><div className="button-row"><button className="secondary" onClick={closeEditor}>Abbrechen</button><button className="primary" disabled={pdfBusy} onClick={saveDraft}>Grundstück speichern</button></div></div>
           </div>
         </div>
       ) : null}

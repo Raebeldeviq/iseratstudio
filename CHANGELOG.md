@@ -1,5 +1,61 @@
 # Änderungsprotokoll
 
+## Version 0.18.0 · Grundstücksauswahl als zentraler Workflow-Einstieg – 25. Juli 2026
+
+### Report
+
+- Die Navigation auf fünf eindeutige Bereiche reduziert: **Grundstücke &
+  Auswahl**, **Haustypen**, **Texte & Vorschau**, **Inseratsmanager** und
+  **Export & Upload**. Der frühere sichtbare Projektierungsschritt samt seiner
+  doppelten Grundstücksauswahl wurde entfernt.
+- Grundstücksverwaltung, Excel-/PDF-Import, Exposé-Verwaltung und persistierte
+  Mehrfachauswahl in einer regional gruppierten Liste zusammengeführt. Jeder
+  Eintrag zeigt Adresse, Fläche, Kaufpreis, letztes Plattform-Uploaddatum,
+  Inseratsanzahl und die unveränderte neutrale/gelbe/grüne Statuslogik.
+- Den gemeinsamen Hauspool und die vorhandene gewichtete Vierer-Rotation direkt
+  unter die zentrale Auswahl verschoben. Nachgelagerte Text-, Manager-,
+  Scheduler- und Upload-Funktionen verwenden ausschließlich dieselben
+  Grundstücks-IDs.
+- Sämtliche Textfunktionen einschließlich Überschrift, Kurz-/Langtext,
+  Lagefakten, festen Textbausteinen, Energieangaben, KI-Erzeugung und
+  Portalvorschau im dritten Schritt gebündelt.
+- Die Hausbibliothek alphabetisch sortiert. Den Inseratsmanager um optionale
+  Gruppierung je Grundstück sowie Sortierung nach Ort, Upload, letzter und
+  nächster Aktualisierung, Health Score und Status ergänzt.
+
+### Begründung
+
+`StudioState.selectedPlotIds` ist jetzt die persistierte, kanonische Auswahl.
+Interne Arbeitsstände bleiben aus Kompatibilitätsgründen erhalten, werden aber
+nur noch als abhängige Inseratsdaten aus den gewählten Grundstücken erzeugt.
+Dadurch gibt es keinen zweiten langlebigen Auswahlzustand und keinen Übergabe-
+Dialog mehr; alle späteren Schritte filtern gegen dieselben Grundstücks-IDs.
+
+### Hürden und Risiken
+
+- Historische Arbeitsstände und Rotationsprotokolle durften nicht gelöscht
+  werden. Die Oberfläche wurde deshalb entfernt, während das bestehende interne
+  Datenmodell für Export-, Upload- und Verlaufskompatibilität erhalten bleibt.
+- Eine gespeicherte Auswahl kann auf inzwischen gelöschte oder deaktivierte
+  Grundstücke zeigen. Die zentrale Normalisierung entfernt solche IDs beim
+  Laden und nach einer Kaskadenlöschung, ohne aktive Benutzerdaten zu verändern.
+- Bereits veröffentlichte Inserate werden weiterhin niemals automatisch extern
+  gelöscht; die Änderung betrifft ausschließlich Auswahl und Darstellung.
+- Der vorhandene Next.js-ESLint-Konfigurationsimport bleibt in dieser lokalen
+  Installation beim Laden hängen. Die geänderten MJS-Tests wurden deshalb
+  zusätzlich mit einer isolierten ESLint-Prüfung validiert; TypeScript,
+  Produktions-Build und Testsuite sind davon nicht betroffen.
+
+### Tests
+
+- Auswahlmigration, unbekannte/deaktivierte Grundstücks-IDs und Kaskadenlöschung.
+- Vertragstests für die fünf Navigationsschritte, genau eine Grundstücksauswahl,
+  gemeinsamen Hauspool, alle Sortieroptionen und alphabetische Hausbibliothek.
+- Vollständige Node-Test-Suite mit 136 Tests (135 bestanden, ein ausschließlich
+  unter Windows ausführbarer Test übersprungen), TypeScript-Prüfung, isolierter
+  ESLint-Lauf der geänderten MJS-Tests, Vinext-Produktions-Build und visueller
+  Browser-Dry-Test der lokalen Mac-App ohne Browser-Konsolenfehler.
+
 ## Version 0.17.0 · Zentrale Grundstücke und Excel-Abgleich – 25. Juli 2026
 
 ### Report

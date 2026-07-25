@@ -1,6 +1,6 @@
 # Fabian&Pascal Inseratestudio für macOS
 
-Lokale macOS-Anwendung zum Verwalten von bis zu 22 Haustypen, Grundstücksprojekten und
+Lokale macOS-Anwendung zum Verwalten von bis zu 22 Haustypen, Grundstücken und
 Inseratentwürfen sowie zum kontrollierten OpenImmo-Import in Immoprofessional.
 Die aktuell geöffnete Anwendungsversion steht dauerhaft dezent unten rechts.
 
@@ -36,40 +36,32 @@ mehr erforderlich.
 
 ## Arbeitsablauf
 
-1. Unter **Grundstücke & Auswahl** Grundstücke aus Excel mit Prüfansicht importieren oder
-   manuell anlegen. Mögliche Dubletten werden nie ungefragt überschrieben.
-   Grundstücke lassen sich bearbeiten, filtern, mehrfach auswählen und gesammelt
-   an die Projektierung übergeben. Ein optionales PDF-Exposé bleibt lokal und
-   liefert nach manueller Prüfung ausschließlich Straße, PLZ, Ort,
-   Grundstücksgröße und Kaufpreis.
-2. Unter **Haustypen** Hausdaten pflegen und in der **integrierten Medienbibliothek**
-   genau eine versionsbezeichnete SUN-/SOL-Hausansicht mit LivingHaus-Logo
-   auswählen. **Komplette Bildfolge erstellen** ergänzt automatisch die sechs
-   Innenräume, den emotionalen Catch, die zur Version passenden Grundrisse,
-   Auszeichnungen, Vertrauensmotiv und QR-Abschluss. Eine nicht eindeutige
-   Hausversion oder ein fehlender Grundriss blockiert die Übernahme, statt eine
-   möglicherweise falsche Datei zu verwenden.
-3. Unter **Projektierung** die zentral ausgewählten Grundstücke prüfen und einen
-   zentralen Hauspool festlegen. Die gewichtete
-   Vorschau verteilt pro Grundstück genau vier unterschiedliche Häuser. Fabian und Pascal besitzen getrennte Adressansichten;
-   einzelne Adressen können gespeichert werden. Importierte Grundstücke werden
-   offline aus PLZ und Ort um Bundesland
-   sowie Landkreis ergänzt, entsprechend gruppiert und innerhalb der Gruppen
-   nach PLZ sortiert. Die vorgeschriebenen Texte stehen direkt unter den Grundstücksdaten
-   vollständig in vergrößerten Feldern. Unter der Hausauswahl erscheinen nur
-   noch Überschrift, Hausbeschreibung und Lage je Haustyp; die erste Vorschau
-   ist geöffnet.
-4. Unter **Export & Upload** Anbieterdaten und die benötigten Zugänge eintragen.
-   Mit **Zugangsdaten prüfen & speichern** wird ein neuer OpenAI-Zugang geprüft;
-   ein neu eingegebener Immoprofessional-Zugang wird einschließlich Zielordner
-   und FTPS-Zertifikat geprüft.
-5. Texte erzeugen, anschließend unter **Texte & Vorschau** fachlich und rechtlich
-   kontrollieren.
-6. Unter **Projektierung** Häuser einzeln austauschen, fixieren,
-   grundstücksbezogen ausschließen oder neu verteilen und die geprüfte
-   Vierer-Vorschau übernehmen. Unter
-   **Export & Upload** Reihenfolge, Hausvarianten, Aktionsbild, Status,
-   Gesamtzahl und geschätzte Laufzeit prüfen und den Sammel-Upload bestätigen.
+1. Unter **01 Grundstücke & Auswahl** werden Grundstücke zentral verwaltet,
+   bearbeitet, importiert und direkt mehrfach ausgewählt. Dieselbe gruppierte
+   Liste enthält Straße, PLZ, Ort, Fläche, Kaufpreis, letztes Plattform-
+   Uploaddatum, Inseratsanzahl und Statusfarbe. Innerhalb eines Landkreises oder
+   einer kreisfreien Stadt lässt sie sich nach allen sichtbaren Kennzahlen
+   sortieren.
+2. Direkt unter der Grundstücksliste wird der **eine gemeinsame Hauspool**
+   gewählt. Die vorhandene gewichtete Rotation verteilt vier unterschiedliche
+   Häuser auf jedes ausgewählte Grundstück. Einzelne Vorschläge bleiben
+   austauschbar, sortierbar, fixierbar und grundstücksbezogen ausschließbar.
+3. **02 Haustypen** dient ausschließlich der alphabetisch sortierten
+   Hausbibliothek, Preis- und Bildpflege. Grundstücke oder Inseratstexte werden
+   dort nicht ausgewählt beziehungsweise bearbeitet.
+4. Unter **03 Texte & Vorschau** liegen Überschrift, Kurztext, Objektbeschreibung,
+   Lage, Ausstattung, Energieangaben, feste Langtexte, KI-Erzeugung und
+   Portalvorschau. Zwischen zentral ausgewählten Grundstücken wird hier nur zur
+   Bearbeitung navigiert; die Auswahl selbst bleibt unverändert aus Schritt 01.
+5. **04 Inseratsmanager** verarbeitet ausschließlich die zentrale Auswahl. Die
+   Inserate können optional je Grundstück gruppiert und nach Ort, Uploaddatum,
+   letzter oder nächster Aktualisierung, Health Score und Status sortiert werden.
+6. **05 Export & Upload** verwendet ohne erneute Grundstücksauswahl exakt
+   dieselben Grundstücke und vorbereiteten Inserate.
+
+Der frühere Navigationsschritt **Projektierung** wurde vollständig entfernt.
+Seine Hauspool- und Verteilungsfunktionen befinden sich jetzt in Schritt 01,
+seine Textfunktionen in Schritt 03 und seine Inseratssteuerung in Schritt 04.
 
 Der Import erstellt Entwürfe. Adressfreigabe und Portalweitergabe sind im
 OpenImmo-Paket deaktiviert. Die tatsächliche Veröffentlichung bleibt eine
@@ -77,20 +69,21 @@ bewusste Aktion in Immoprofessional.
 
 ## Grundstücksverwaltung und Exposé-PDFs
 
-Grundstücke sind ab Datenschema 4 die einzige Adressquelle für Verwaltung,
-Mehrfachauswahl und Projektierung. Sie besitzen interne ID,
-Straße, Hausnummer, PLZ, Ort, Grundstücksgröße, Kaufpreis, Zeitstempeln und
-Aktivstatus. Projektierungen referenzieren den Grundstücksdatensatz; die
-bisherigen Projektfelder bleiben für bestehende Export- und Uploadpfade
-kompatibel und werden aus der zentralen Quelle synchronisiert. Eine manuelle
+Grundstücke sind die einzige Adress- und Auswahlquelle des gesamten Workflows.
+Sie besitzen interne ID, Straße, Hausnummer, PLZ, Ort, Grundstücksgröße,
+Kaufpreis, Zeitstempel und Aktivstatus. Die persistierte zentrale Auswahl wird
+beim Laden gegen aktive Grundstücke bereinigt und von Texten, Manager,
+Scheduler sowie Upload gemeinsam verwendet. Interne Inseratsarbeitsstände
+referenzieren den Grundstücksdatensatz und werden aus der zentralen Quelle
+synchronisiert. Eine manuelle
 Löschung entfernt den Grundstücksdatensatz und sämtliche internen abhängigen
 Projekt-, Upload-, Aktionsbild- und Rotationsreferenzen. Sie löst niemals eine
 externe Löschung bei Immoprofessional oder einem Immobilienportal aus.
 
-Die Unteransicht **Verwalten** enthält Anlage, Bearbeitung, vollständige
-Löschung, Exposé-Verwaltung und den kontrollierten Excel-Import. Unter **Für
-Projektierung auswählen** werden dieselben aktiven Datensätze nach Bundesland
-und Landkreis gruppiert. Grundstücke mit ein bis drei Inseraten sind gelb,
+Eine gemeinsame gruppierte Liste enthält Auswahl, Anlage, Bearbeitung,
+vollständige Löschung, Exposé-Verwaltung und den kontrollierten Excel-Import.
+Die aktiven Datensätze werden nach Bundesland und Landkreis beziehungsweise
+kreisfreier Stadt gruppiert. Grundstücke mit ein bis drei Inseraten sind gelb,
 Grundstücke ab vier Inseraten grün markiert; bei mehr als vier Varianten steht
 zusätzlich ein deutlicher Hinweis am einzelnen Eintrag.
 
@@ -111,8 +104,8 @@ Ruhezustand, holt der lokale Helfer den fälligen Lauf beim nächsten Start nach
 Ein manueller Lauf verschiebt den bestehenden Rhythmus nicht.
 
 `Nicht mehr vorhanden` deaktiviert ein Grundstück und sperrt neue
-Projektierungen sowie Rotationen, erhält aber historische Projekte und externe
-Inserate. Aktive externe Inserate erzeugen einen Prüfhinweis und werden nicht
+Inseratsentwürfe sowie Rotationen, erhält aber historische Arbeitsstände und
+externe Inserate. Aktive externe Inserate erzeugen einen Prüfhinweis und werden nicht
 automatisch gelöscht. Strukturfehler brechen vor dem atomaren Katalogschreiben
 ab; fehlerhafte Einzelzeilen werden protokolliert und stoppen die übrigen
 gültigen Zeilen nicht.
@@ -297,7 +290,7 @@ Dry Runs veröffentlichen und löschen grundsätzlich nichts.
 Version 0.15.0 vereinheitlicht alle fachlichen Zustände auf `draft`,
 `prepared`, `scheduled`, `processing`, `published`, `blocked`, `failed`,
 `archived` und `deleted`. Ältere deutsche Statuswerte werden beim Laden
-verlustfrei in dieses Modell überführt. Feste Projektierungswerte liegen nur
+verlustfrei in dieses Modell überführt. Feste OpenImmo-Standardwerte liegen nur
 noch in `listing-copy.mjs`; bestehende Benutzereingaben werden nicht
 überschrieben, fehlende Werte werden ergänzt.
 
@@ -324,8 +317,8 @@ keine Supabase-, SQL- oder Vercel-Datenbankmigration.
 
 ## Mehrfachauswahl und Sammel-Upload
 
-Die Adressauswahl unter **Projektierungen erstellen** ist dynamisch und besitzt
-keine feste Obergrenze. Für jede markierte Adresse erzeugt die App aus dem
+Die zentrale Grundstücksauswahl in Schritt 01 ist dynamisch und besitzt keine
+feste Obergrenze. Für jede markierte Adresse erzeugt die App direkt darunter aus dem
 zentralen Hauspool eine gewichtete, bearbeitbare Vierer-Kombination. Beim
 Übernehmen lädt sie Grundstücksdaten und vollständige Hausvarianten, ergänzt
 ausschließlich fehlende Standardwerte, erzeugt die Inseratentwürfe und ordnet
@@ -363,7 +356,7 @@ Fußbodenheizung, Elektro/Luft-Wärmepumpe, KFW40 und KFW55 sowie Energieklasse
 A++. Küche wird als Einbauküche und offen übertragen; beim Bad werden Dusche,
 Wanne und Fenster markiert. Als Umgebung werden Bus und Einkaufsmöglichkeit
 ergänzt. Diese Ausstattungswerte stammen aus der gemeinsamen
-Projektierungs-Konfiguration: Fehlende Angaben erhalten den Standard,
+Standardwert-Konfiguration: Fehlende Angaben erhalten den Standard,
 vorhandene Benutzerwerte werden nicht überschrieben. Adressfreigabe und
 allgemeine Weitergabe bleiben deaktiviert.
 
@@ -378,10 +371,10 @@ aus der Living-Haus-Checkliste aufgebaut. Verwendet werden beispielsweise
 Die KI erhält und schreibt ausschließlich die emotionale, haustypbezogene
 Objektbeschreibung und die generische Lagebeschreibung. Überschrift,
 Ausstattung, Sonstiges und rechtliche Texte sind kein Bestandteil der
-KI-Ausgabe. Die in Schritt 2 sichtbare Überschrift wird auch dann im Browser
+KI-Ausgabe. Die in Schritt 03 sichtbare Überschrift wird auch dann im Browser
 erneut verbindlich eingesetzt, wenn ein älterer Helferprozess eine abweichende
-Überschrift zurückgeben sollte. Schritt 3 zeigt deshalb exakt dieselbe
-Überschrift. Bestätigte Zusatzangaben zum Ort oder
+Überschrift zurückgeben sollte. Textfeld und Portalvorschau zeigen deshalb
+exakt dieselbe Überschrift. Bestätigte Zusatzangaben zum Ort oder
 Ortsteil werden berücksichtigt; Straße, Hausnummer und Postleitzahl werden der
 Text-KI weiterhin nicht übermittelt. Der vorgegebene Call-to-Action wird beim
 Speichern und Export genau einmal angefügt.
@@ -400,7 +393,7 @@ gekennzeichnet und werden beim OpenImmo-Export erneut erzwungen. Provision wird
 OpenImmo-`user_defined_simplefield` im Freitextblock mit ihren sichtbaren
 Feldbezeichnungen ausgegeben.
 
-Projektierungsmerkmale werden je Inserat nur bei fehlenden Werten ergänzt. Die
+OpenImmo-Merkmale werden je Inserat nur bei fehlenden Werten ergänzt. Die
 zentrale Konfiguration setzt gehobene Ausstattungsqualität, `PROJEKTIERT`,
 Fußbodenheizung, Luft-Wärmepumpe, KfW40 und KfW55, Energieklasse A++,
 `provisionspflichtig=false` sowie die Energieausweis-Effizienzklasse A+.
@@ -431,12 +424,14 @@ Die Gerätesicherung verwendet eine Versionsprüfung: Ein älterer, noch geöffn
 Browser-Tab darf einen neueren Katalog nicht überschreiben und wird zum Neuladen
 aufgefordert.
 
-## Adressbücher und Excel-Import
+## Zentrale Grundstücksliste und Excel-Import
 
-Unter **Adresse & Auswahl** schaltet die Oberfläche zwischen den lokalen
-Adressbüchern von Fabian und Pascal um. Bestehende Projekte ohne Zuordnung
-werden beim ersten Laden Fabian zugeordnet. **Adresse speichern** schreibt den
-aktuellen Stand sofort in Browser- und macOS-Sicherung.
+Schritt **01 Grundstücke & Auswahl** enthält die einzige Grundstücksliste und
+die einzige Mehrfachauswahl. Eigentümerkennungen bleiben intern für vorhandene
+Daten erhalten, erzeugen jedoch keine getrennten Adressbücher oder eine zweite
+Auswahloberfläche. Anlage, Bearbeitung, Löschung, Excel-/PDF-Import und Exposé-
+Verwaltung befinden sich direkt in dieser Liste. Änderungen werden in Browser-
+und macOS-Sicherung übernommen.
 
 Über **Excel-Vorlage herunterladen** steht die geprüfte Importvorlage bereit.
 Jede Tabellenzeile enthält ein Grundstück; Pflichtfelder sind Benutzer,
@@ -444,10 +439,11 @@ Straße, PLZ und Ort. Beim Import werden deutsche Zahlenformate und führende
 Nullen in Postleitzahlen berücksichtigt. Dubletten sowie unvollständige Zeilen
 werden ausgelassen und in der Oberfläche gemeldet. Ein mitgelieferter
 GeoNames-Datensatz ordnet PLZ und Ort ohne Online-Anfrage einem Bundesland und
-Landkreis zu. Das Adressauswahlfeld ist danach nach Bundesland/Landkreis
-gruppiert und innerhalb jeder Gruppe nach PLZ sortiert. Mehrdeutige oder nicht
-enthaltene Zuordnungen werden als **Ohne PLZ-Zuordnung** geführt, statt einen
-Landkreis zu raten. Bereits gespeicherte Adressen werden beim Laden ebenfalls
+Landkreis beziehungsweise einer kreisfreien Stadt zu. Die Liste bleibt nach
+diesen Gebieten gruppiert und lässt sich innerhalb jeder Gruppe nach Ort, PLZ,
+Grundstücksgröße, Kaufpreis, Uploaddatum oder Inseratsanzahl sortieren.
+Mehrdeutige oder nicht enthaltene Zuordnungen werden als **Ohne PLZ-Zuordnung**
+geführt, statt einen Landkreis zu raten. Bereits gespeicherte Grundstücke werden beim Laden ebenfalls
 mit der Offline-Tabelle ergänzt, sodass kein erneuter Excel-Import nötig ist.
 Excel-Dateien werden nur lokal im Browser verarbeitet und
 sind auf 10 MB begrenzt. Die Regionsdaten stehen unter CC BY 4.0; Quelle und

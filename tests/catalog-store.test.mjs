@@ -25,6 +25,7 @@ test("stores and restores the complete local catalog including images", async (c
     dataSchemaVersion: 4,
     plotSchemaVersion: 2,
     plots: [],
+    selectedPlotIds: [],
     houses: [{
       id: "house-1",
       name: "Testhaus",
