@@ -4,6 +4,7 @@ import { imageSequenceIssues, orderHouseImages } from "../../image-sequence.mjs"
 import {
   enforceListingCopy,
   fillMissingProjectingDefaults,
+  projectingEnvironmentLabels,
   FIXED_ANNOTATION_TEXT,
   FIXED_PROVISION_TEXT,
   FIXED_RECOMMENDATION_TEXT,
@@ -24,17 +25,20 @@ export type PackageInput = {
   provider: ProviderSettings;
   promotionImage?: HouseImage | null;
   promotionImageEnabled?: boolean;
+  promotionImagesByListingId?: Record<string, HouseImage>;
 };
 
 const SUPPORTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const MAX_EXPORTED_IMAGES = 14;
 
-function listingImages(input: PackageInput, house: HouseTemplate): HouseImage[] {
+function listingImages(input: PackageInput, house: HouseTemplate, listing?: GeneratedListing): HouseImage[] {
   const orderedImages = orderHouseImages(house.images);
-  if (!input.promotionImageEnabled || !input.promotionImage) return orderedImages;
+  const assignedPromotion = listing ? input.promotionImagesByListingId?.[listing.id] : undefined;
+  const promotionImage = assignedPromotion || (input.promotionImageEnabled ? input.promotionImage : null);
+  if (!promotionImage) return orderedImages;
   return [
-    { ...input.promotionImage, role: "promotion" },
-    ...orderedImages.filter((image) => image.id !== input.promotionImage?.id),
+    { ...promotionImage, role: "promotion" },
+    ...orderedImages.filter((image) => image.id !== promotionImage.id),
   ];
 }
 
@@ -68,7 +72,7 @@ export function validateImportPackage(input: PackageInput): string[] {
       errors.push(`${label}: zugehöriger Haustyp fehlt.`);
       continue;
     }
-    const images = listingImages(input, house);
+    const images = listingImages(input, house, listing);
     if (images.length < 4 || images.length > MAX_EXPORTED_IMAGES) {
       errors.push(`${label}: benötigt 4 bis 14 Bilder.`);
     }
@@ -169,6 +173,12 @@ function listingXml(
   });
   const texts = enforceListingCopy(listing.texts, { house, project });
   const projecting = fillMissingProjectingDefaults(listing.projectingSettings);
+  const environmentLabels = projectingEnvironmentLabels(projecting);
+  const infrastructureXml = environmentLabels.length
+    ? `<infrastruktur>
+          <user_defined_simplefield feldname="Umgebung">${cdata(environmentLabels.join(", "))}</user_defined_simplefield>
+        </infrastruktur>`
+    : "";
 
   return `
       <immobilie>
@@ -213,14 +223,14 @@ function listingXml(
         </flaechen>
         <ausstattung>
           <ausstatt_kategorie WERTIGKEIT="${xml(projecting.equipmentQuality)}" />
-          <bad dusche="true" wanne="true" fenster="true" />
-          <kueche ebk="true" offen="true" />
+          <bad dusche="${projecting.shower}" wanne="${projecting.bathtub}" fenster="${projecting.bathroomWindow}" />
+          <kueche ebk="${projecting.fittedKitchen}" offen="${projecting.openKitchen}" />
           <heizungsart fussboden="${projecting.underfloorHeating}" />
-          <befeuerung elektro="true" luftwp="${projecting.airSourceHeatPump}" />
-          <gartennutzung>true</gartennutzung>
+          <befeuerung elektro="${projecting.electricFuel}" luftwp="${projecting.airSourceHeatPump}" />
+          <gartennutzung>${projecting.gardenUse}</gartennutzung>
           <energietyp kfw40="${projecting.kfw40}" kfw55="${projecting.kfw55}" />
-          <dachboden>true</dachboden>
-          <gaestewc>true</gaestewc>
+          <dachboden>${projecting.attic}</dachboden>
+          <gaestewc>${projecting.guestWc}</gaestewc>
         </ausstattung>
         <zustand_angaben>
           <baujahr>${xml(house.constructionYear)}</baujahr>
@@ -232,6 +242,7 @@ function listingXml(
             <baujahr>${xml(house.constructionYear)}</baujahr>
           </energiepass>
         </zustand_angaben>
+        ${infrastructureXml}
         <freitexte>
           <objekttitel>${cdata(texts.title)}</objekttitel>
           <lage>${cdata(texts.location)}</lage>
@@ -269,7 +280,7 @@ export function buildOpenImmoXml(input: PackageInput): string {
     .map((listing) => {
       const house = houses.find((item) => item.id === listing.templateId);
       if (!house) throw new Error(`Haustyp ${listing.templateName} fehlt.`);
-      return listingXml(project, listing, house, listingImages(input, house), provider, timestamp);
+      return listingXml(project, listing, house, listingImages(input, house, listing), provider, timestamp);
     })
     .join("");
 
@@ -311,7 +322,7 @@ export async function buildImportPackage(input: PackageInput): Promise<{
   input.listings.forEach((listing) => {
     const house = input.houses.find((item) => item.id === listing.templateId);
     if (!house) return;
-    listingImages(input, house).forEach((image, index) => {
+    listingImages(input, house, listing).forEach((image, index) => {
       zip.file(imageFilename(listing, image, index), imageBytes(image.dataUrl));
     });
   });

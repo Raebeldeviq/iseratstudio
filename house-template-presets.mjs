@@ -1,5 +1,6 @@
 import { resolveHousePrice } from "./house-price-catalog.mjs";
 import { buildRecommendedMediaSequence } from "./image-sequence.mjs";
+import { HOUSE_ENERGY_DEFAULTS } from "./listing-copy.mjs";
 
 const DEFAULT_ARCHITECTURE =
   "Ein klar gegliederter Grundriss verbindet offene Gemeinschaftsbereiche mit gut nutzbaren privaten Rückzugsräumen";
@@ -98,9 +99,7 @@ export function buildHouseTemplatePresets(mediaItems, {
       housePrice: definition.priceOpen ? 0 : priceMatch.price,
       constructionYear,
       energyDemand: 18,
-      energyClass: "A++",
-      heatingType: "Fußbodenheizung mit Luft-Wasser-Wärmepumpe",
-      energySource: "Umweltwärme und Strom",
+      ...HOUSE_ENERGY_DEFAULTS,
       architecture: DEFAULT_ARCHITECTURE,
       equipmentHighlights: DEFAULT_EQUIPMENT,
       useStandardPackage: true,

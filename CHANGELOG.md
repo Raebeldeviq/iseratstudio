@@ -1,5 +1,449 @@
 # Änderungsprotokoll
 
+## Version 0.15.0 · Technische Tiefenbereinigung – 25. Juli 2026
+
+### Report
+
+- Ein zentrales Statusmodell ersetzt freie deutsche und englische
+  Statusvarianten in Inseratsgruppen, Scheduler, Uploadhistorie und UI.
+- `rotation-service.mjs` ist jetzt die einzige fachliche Planungsstelle für
+  gewichtete Hausrotation, Premium-/Manuellsperren, Leases, Vierergrenze und
+  eindeutige Hauskombinationen. Vorschau, Scheduler und manuelle Vorbereitung
+  verwenden denselben Plan.
+- Die frühere Round-Robin-Auswahl einschließlich `lastUsedVariantId`,
+  `nextVariantId` und gruppenweiter Prozesssperre wurde entfernt.
+- Uploads besitzen eine deterministische Job-ID. Browser und lokaler Helfer
+  verhindern parallele beziehungsweise bereits abgeschlossene Wiederholungen;
+  das Helferprotokoll wird atomar, begrenzt und strukturiert gespeichert.
+- Logdaten werden rekursiv von sensitiven Schlüsseln und typischen
+  Zugangswertmustern bereinigt. Pflichtbezüge zu Job, Inserat, Grundstück,
+  Prozess, Status und Fehler bleiben erhalten.
+- `data-integrity.mjs` und `scripts/audit-studio-catalog.mjs` ergänzen
+  nachvollziehbaren Dry Run, idempotente Migration, Dublettenprüfung,
+  Ablaufbereinigung und eine ausschließlich explizit erzeugte Ausgabekopie.
+- Der lokale Helfer migriert den bestehenden Katalog vor dem Start atomar,
+  legt einmalig eine Vor-Migrationssicherung an und bereinigt auch Sicherungen
+  älterer Browser-Tabs erneut idempotent.
+- Die Gerätesicherung erfasst nun jedes Aktionsbild der verwalteten Bibliothek;
+  nicht nur das erste aktive Motiv.
+- Pro Grundstück wird exakt eine aktuelle Aktionsbildzuordnung erzwungen;
+  Nutzungsverlauf und Bildrotation bleiben von der Hausrotation getrennt.
+- „Zusätzliche Hinweise“ wurde aus Typen, Formularzustand, KI-Payload,
+  Textgenerierung, Excel-Parser und geprüfter Importvorlage entfernt.
+- Vier eindeutig unreferenzierte Altdateien wurden entfernt: die alte
+  4+4-Rotationskopie mit Test sowie ungenutzte Cloudflare-Worker- und
+  Sites-Starterdateien.
+- TypeScript- und ESLint-Suchräume ignorieren den 3-GB-Medienbestand und
+  temporäre Prüfartefakte.
+
+### Begründung
+
+Status, Standardwerte, Rotation, Sperren und Aktionsbilder sind fachliche
+Invarianten. Sie liegen deshalb in kleinen, zustandsbasierten Diensten statt in
+mehreren UI- und Scheduler-Pfaden. Die persistente Upload-Jobdatei ergänzt die
+Browser-Sperre über Neustarts hinweg. Der Cleanup trennt bewusst exakt sichere
+Korrekturen von Fällen, die nur markiert und erhalten werden dürfen.
+
+### Hürden und Risiken
+
+- Der reale Katalog enthält zehn Steuerdatensätze, die nicht in der aktuellen
+  Inseratsliste, aber weiterhin in Varianten-Snapshots referenziert sind. Sie
+  wurden nicht gelöscht.
+- Mit genau vier Poolhäusern ist die Ersterstellung möglich, eine Rotation auf
+  ein fünftes, noch nicht aktives Haus jedoch erwartungsgemäß blockiert.
+- Immoprofessional bietet im vorhandenen Ablauf weder bestätigtes Lesen noch
+  sicheres automatisches Löschen. Ein echter Löschtest und ein produktiver
+  FTPS-Testupload bleiben deshalb bewusst ausgeschlossen.
+- Die Anwendung besitzt weiterhin eine lokale JSON-/Bildablage und IndexedDB,
+  keine Supabase-Datenbank. Serverseitige Eindeutigkeitsindizes müssen erst mit
+  einer späteren Backendmigration eingeführt werden.
+
+### Datenprüfung und Sicherung
+
+- Vor dem Cleanup wurde `catalog-v2` vollständig nach
+  `backups/pre-cleanup-20260725` gesichert; Manifest-Hash und 62 Bilddateien
+  stimmen mit der Quelle überein.
+- Der reale Dry Run prüfte 18 Häuser, 54 Grundstücke, 73 Inserate, 83
+  Steuerdatensätze, 11 Aktionsbilder, 7 Aktionsbildnutzungen und 28
+  Uploadprotokolle.
+- Keine doppelten Projekt-, Adress-, Haus-, Inserats-, Objektnummer-,
+  Aktionsbild- oder Bild-Hash-Gruppen wurden gefunden.
+- In einer separaten Bereinigungskopie wurden 54 alte Hinweisfelder entfernt
+  und acht überzählige Hausaktivierungen in zwei Altgruppen deaktiviert. Zehn
+  variantenreferenzierte Steuerdatensätze blieben erhalten.
+- Dieselben sicheren Änderungen wurden nach dem Dry Run auf den lokalen Katalog
+  angewendet. Der Abschluss-Audit meldet nur noch die zehn bewusst erhaltenen
+  Variantendatensätze. Alle 72 referenzierten Bilddateien sind vorhanden.
+
+### Tests
+
+- Datenmigration, Idempotenz, exakte und widersprüchliche Dubletten
+- gewichtete Pools mit 4, 10 und 20 Häusern sowie 20 Rotationszyklen
+- Premium-, manuelle und parallele Prozesssperren
+- Scheduler-Verteilung und Skalierung auf 2.000 Inserate
+- genau eine Aktionsbildzuordnung pro Grundstück
+- parallele, wiederholte und nach Abbruch erneut gestartete Upload-Jobs
+- rekursive Log-Redaktion und Begrenzung
+- Excel-Importvorlage ohne Hinweisfeld
+- Produktions-Build, Gesamttests und lokaler Browser-Dry-Run
+- `pnpm audit --prod`: keine bekannte Sicherheitslücke
+
+## Version 0.14.0 · Gewichteter Hauspool und intelligente Rotation – 24. Juli 2026
+
+### Report
+
+- `house-distribution.mjs` verwaltet einen zentralen, beliebig großen
+  Hauspool für Ersterstellung und spätere Aktualisierungen. Pro Grundstück
+  werden exakt vier unterschiedliche, aktive und vollständige Häuser
+  verwendet; Pools mit weniger als vier zulässigen Häusern werden mit einer
+  eindeutigen Meldung blockiert.
+- Die gewichtete Auswahl berücksichtigt Gesamtnutzung, Nutzung im frei
+  konfigurierbaren Zeitraum, letzte Verwendung, bisherige Grundstücke,
+  gleichzeitig aktive Grundstücke, Kombinationshäufigkeit und vorherige
+  Kombinationen. Sämtliche Gewichte liegen in einer zentralen Konfiguration.
+- Die Mehrfach-Projektierung besitzt jetzt eine bearbeitbare Vorschau mit
+  Preis, Wohnfläche, Zimmern, Reihenfolge und voraussichtlichem Aktionsbild.
+  Einzelne Häuser können ausgetauscht, fixiert, je Grundstück ausgeschlossen,
+  verschoben oder für eine beziehungsweise alle Adressen neu verteilt werden.
+- Hausnutzungen, Kombinationen, Zeitpunkte, aktive Grundstücke, vorherige
+  Kombinationen sowie zuletzt entferntes und aufgenommenes Haus werden in der
+  bestehenden lokalen Projektsicherung dauerhaft gespeichert.
+- Der Inseratsscheduler verwendet denselben Hauspool als Rotationspool und
+  plant ein noch nicht aktives Ersatzhaus. Premium-, manuell gesperrte und
+  intern archivierte Inserate bleiben ausgeschlossen; je Schedulerlauf gilt
+  weiterhin maximal ein Inserat pro Grundstück.
+- Eine vorbereitete Rotation ersetzt vor dem Upload nicht das bestehende
+  Inserat. Erst nach bestätigtem FTPS-Erfolg wird das alte Inserat intern als
+  ersetzt markiert und von weiteren Uploads ausgeschlossen. Eine automatische
+  Löschung in Immoprofessional findet weiterhin nicht statt.
+- Aktionsbilder speichern zusätzlich das zuletzt zugeordnete Grundstück,
+  Haus und Inserat. Die Aktionsbildrotation bleibt fachlich vollständig von
+  der Hausrotation getrennt.
+- Der Immoprofessional-Benutzername ist mit dem vorgesehenen Standardwert
+  vorbelegt; das Passwort bleibt ausschließlich im macOS-Schlüsselbund.
+- Der neue schlanke Produktionsadapter `production-server.mjs` liefert den
+  gebauten Client und das serverseitige Rendering direkt aus. Der tägliche
+  macOS-Start ist dadurch nicht mehr vom langsamen Vinext-Entwicklungsadapter
+  abhängig; der Starter toleriert zusätzlich den mehrminütigen Kaltstart nach
+  einem vollständigen Medien-Build.
+- Ein eigener lokaler Health-Endpunkt identifiziert den Produktionsserver ohne
+  vollständiges SSR-Rendering. Dadurch erkennt der Desktop-Starter eine bereits
+  laufende App zuverlässig und öffnet sie erneut mit der Helfer-Sitzung.
+- Das verwirrende Formularfeld „Zusätzliche Hinweise“ wurde aus Schritt 2
+  entfernt. Bereits gespeicherte Altwerte bleiben zur Datenkompatibilität
+  erhalten, werden aber nicht mehr zur Bearbeitung angeboten.
+
+### Begründung
+
+Verteilung und Rotation liegen in einem reinen, zustandsbasierten Dienst. So
+verwenden Ersterstellung, manuelle Vorschau und Scheduler dieselben Regeln,
+ohne Auswahlparameter in der Oberfläche mehrfach zu hardcodieren. Mehrere
+gewichtete Kandidaten werden erzeugt und anhand ihrer Nutzungs- und
+Kombinationshistorie bewertet; ein kleiner gewichteter Zufallsanteil verhindert
+starre Muster, ohne in unkontrollierten Zufall zurückzufallen. Persistente
+Historien erlauben eine gleichmäßige Verteilung auch über Neustarts hinweg.
+
+### Hürden und Risiken
+
+- Bei einem Pool mit exakt vier Häusern existiert technisch nur eine mögliche
+  Kombination. Die App dokumentiert diesen unvermeidbaren Rückfall, statt den
+  Vorgang fälschlich zu blockieren.
+- Immoprofessional stellt im vorhandenen Workflow keinen verlässlich
+  zurücklesbaren Löschstatus bereit. Darum wird ein ersetztes Inserat nur lokal
+  archiviert und muss vor einer tatsächlichen Löschung im Portal geprüft
+  werden.
+- Der große integrierte Bildbestand verlängert vollständige Produktions-Builds.
+  Reine Verteilungs- und Scheduler-Tests bleiben davon unabhängig und schnell.
+- Der Produktionsadapter muss sowohl dynamische SSR-Antworten als auch
+  gehashte Clientdateien korrekt bedienen. Dafür gibt es einen eigenen
+  Integrationstest ohne externen Netzwerkzugriff.
+- Die Datenschutzprüfung der KI-Quelldaten ignoriert die zufällig erzeugte
+  technische UUID. Dadurch kann eine zufällige Zeichenfolge innerhalb der UUID
+  nicht mehr fälschlich als übertragene Hausnummer gewertet werden.
+
+### Geänderte und neue Dateien
+
+- Neu: `house-distribution.mjs`, `production-server.mjs`,
+  `tests/house-distribution.test.mjs`, `tests/production-server.test.mjs`
+- Erweitert: `app/InseratStudio.tsx`, `app/types.ts`, `app/globals.css`,
+  `studio-defaults.mjs`, `listing-scheduler.mjs`, `batch-upload.mjs`,
+  `promotion-images.mjs`, `ftp-config.mjs`, `package.json`,
+  `Start-Fabian-Pascal-Inseratestudio.command`, `app/lib/app-version.mjs`,
+  `README.md`, `CHANGELOG.md`
+- Tests erweitert: `tests/batch-upload.test.mjs`,
+  `tests/promotion-images.test.mjs`, `tests/openimmo.test.mjs`,
+  `tests/ai-text-service.test.mjs`
+
+### Tests
+
+- 4 Grundstücke mit 10 Häusern
+- 20 Grundstücke mit 15 Häusern
+- mehr Grundstücke als praktisch unterschiedliche Kombinationen
+- Pool mit genau vier beziehungsweise weniger als vier Häusern
+- fixierte, ausgeschlossene und inaktive Häuser
+- zwanzig aufeinanderfolgende gewichtete Rotationen
+- Schutz vor doppelten Häusern und direkter Kombinationswiederholung
+- persistente Haus-, Kombinations- und Aktionsbildhistorien
+- vorbereitete Rotation ohne erneuten Upload des geschützten Ausgangsinserats
+- bestehender Premiumschutz und Skalierungstest mit 2.000 Inseraten
+- SSR-Startseite und gehashte statische Datei über den Produktionsadapter
+- vollständiger Produktions-Build und visueller Browser-Dry-Run der Schritte
+  „Adresse & Auswahl“ sowie „Export & Upload“
+- Gesamtergebnis: 85 Tests, davon 84 bestanden, 0 fehlgeschlagen und 1
+  Windows-spezifischer Verschlüsselungstest auf macOS übersprungen
+- Reale Startprüfung: App-Health und authentifizierter Upload-Helfer jeweils
+  mit HTTP 200
+
+## Version 0.13.0 · Mehrfachauswahl und Sammel-Upload – 24. Juli 2026
+
+### Report
+
+- Unter „Projektierungen erstellen“ können beliebig viele gespeicherte
+  Grundstücksadressen gleichzeitig ausgewählt werden. Die Vorbereitung lädt
+  je Adresse die Varianten, ergänzt zentrale Standardwerte, erzeugt fehlende
+  Entwürfe und verwendet die vorhandenen Bildfolgen.
+- Der neue zentrale Dienst `batch-upload.mjs` erstellt eine skalierbare
+  Uploadplanung und verarbeitet sie strikt sequenziell nach Adresse und
+  Inserat. Fehler werden einzeln zurückgegeben und stoppen keine späteren
+  Pakete.
+- Die Uploadübersicht zeigt Adresse, Inseratanzahl, Hausvarianten,
+  Aktionsbild, Status, Gesamtzahl und Laufzeitschätzung. Während des Laufs
+  bleiben Adress-, Inserats- und Gesamtfortschritt sowie Erfolg und Fehler
+  sichtbar.
+- `promotion-images.mjs` verwaltet beliebig viele Aktionsbilder zentral mit
+  Aktivstatus, Priorität, Reihenfolge, letzter Verwendung und Zähler. Rotation,
+  Zufall und manuelle Motiv-/Inseratsauswahl sind getrennt schaltbar.
+- Pro Adresse erhält technisch maximal ein Inserat ein Aktionsbild. Erst nach
+  erfolgreichem Upload werden Motiv, Inserat, Objektnummer und Zeitpunkt
+  gespeichert; die Historie verhindert nach Möglichkeit dieselbe Kombination
+  bei der nächsten Erstellung oder Aktualisierung.
+- Pro Uploadversuch werden Projekt-ID, Adresse, Objektnummer, Hausvariante,
+  Aktionsbild, Erstellung, letzte/nächste Aktualisierung, Status und Fehler in
+  der bestehenden lokalen Sicherung protokolliert.
+- Der macOS-Desktop-Starter baut nur noch bei fehlendem oder veraltetem
+  Produktionsstand. Build und Serverstart verwenden direkt die lokale,
+  festgeschriebene Vinext-Version; ein Neustart mit aktuellem Build öffnet
+  dadurch ohne unnötigen zweiten pnpm-Build.
+
+### Begründung
+
+Planung, Rotation und Ausführung liegen in reinen, unabhängig testbaren
+Diensten. Die React-Oberfläche steuert nur Auswahl, Bestätigung und
+Fortschrittsanzeige. Dadurch besitzt der Code keine Adress- oder Inseratgrenze,
+führt trotzdem immer nur genau einen Upload gleichzeitig aus und lässt sich
+später ohne fachlichen Umbau in einen Hintergrundprozess verschieben.
+
+### Hürden und Risiken
+
+- Immoprofessional bietet weiterhin keinen bestätigten Rücklesekanal für den
+  endgültigen Portalstatus. Ein erfolgreicher FTPS-Transfer bedeutet deshalb,
+  dass das Paket übertragen wurde; die endgültige Freigabe bleibt in
+  Immoprofessional zu kontrollieren.
+- Neue Adressen ohne eigene Hausvarianten übernehmen beim bewussten
+  Batch-Vorbereiten die Varianten der aktuell geöffneten Adresse. Ist auch
+  dort keine Variante vorhanden, wird die Adresse sichtbar übersprungen und
+  nicht mit erfundenen Hausdaten gefüllt.
+- Der Produktions-Build wartet bei laufendem Vinext-Server auf dessen
+  Ausgabedateien. Für die Abnahme wurde nur der Webserver gestoppt, danach der
+  Build vollständig ausgeführt und die App erneut gestartet.
+
+### Tests
+
+- Die Batchplanung wurde mit 250 Adressen und 1.000 Inseraten ohne feste
+  Obergrenze geprüft.
+- Strikte Einzelausführung und Fortsetzung nach einem gezielt ausgelösten
+  Fehler wurden automatisiert verifiziert.
+- Migration des bisherigen Einzel-Aktionsbildes, automatische und manuelle
+  Rotation, Nutzungsprotokoll sowie höchstens ein Aktionsbild je Adresse wurden
+  getestet.
+- Der OpenImmo-Export wurde mit einer inseratsbezogenen Aktionsbildzuordnung
+  geprüft; das Motiv erscheint nur im zugewiesenen Inserat.
+- Gesamtergebnis: 75 Tests, davon 74 bestanden und 1 plattformbedingt
+  übersprungen; zusätzlicher fokussierter Lauf mit 12 von 12 bestandenen Tests.
+  Der vollständige Vinext-Produktions-Build wurde erfolgreich abgeschlossen.
+
+### Angepasste und neue Dateien
+
+- Neu: `batch-upload.mjs`, `promotion-images.mjs`
+- Oberfläche und Datenmodell: `app/InseratStudio.tsx`, `app/types.ts`,
+  `app/globals.css`, `studio-defaults.mjs`, `app/lib/project-owners.ts`
+- Export: `app/lib/openimmo.ts`
+- Tests: `tests/batch-upload.test.mjs`, `tests/promotion-images.test.mjs`,
+  `tests/openimmo.test.mjs`
+- Version und Dokumentation: `app/lib/app-version.mjs`, `package.json`,
+  `README.md`, `CHANGELOG.md`, `Start-Fabian-Pascal-Inseratestudio.command`
+
+## Version 0.12.0 · Dynamisches Inseratsmanagement – 24. Juli 2026
+
+### Report
+
+- Die feste 4+4-Struktur wurde durch eine dynamische Variantenliste ohne
+  programmierte Obergrenze ersetzt. Neue Projekte erhalten vier Vorschlagszeilen;
+  Zeilen können frei ergänzt, sortiert, deaktiviert oder entfernt werden.
+- `listing-groups.mjs` verwaltet vollständige Variantensnapshots und jetzt
+  inseratsbezogene Rotationsstände, Sperren, Prioritäten, Modi, Termine,
+  Fehlerstatus, Auswahlreservierungen und Verarbeitungs-Leases.
+- Der neue zentrale Service `listing-scheduler.mjs` normalisiert alle
+  Scheduler-Einstellungen, berechnet den erweiterbaren Health Score, filtert
+  Sperren und verteilt fällige Inserate im Round-Robin-Verfahren über Adressen.
+- Die neue Ansicht „Inseratsmanager“ zeigt Adresse, Objektnummer, Hausvariante,
+  Preis, Termine, Status, Health Score, Sperren und Fehler. Pro Inserat stehen
+  Vorbereitung, Kopieren, Pause, Premium, Löschsperre, Priorität, Modus und
+  Variantenauswahl bereit.
+- Die Anwendungsversion wurde auf 0.12.0 angehoben. Bestehende 4+4-Daten werden
+  beim Laden automatisch in das dynamische Schema 2 migriert.
+- Die Oberfläche verwendet den nativen macOS-Systemfont statt eines externen
+  Google-Font-Buildschritts; dadurch bleibt der lokale Build offline stabil.
+
+### Persistenz und Datenmodell
+
+- Es wurden keine SQL-Tabellen ergänzt. Die App bleibt vollständig lokal und
+  persistiert den Zustand im bestehenden IndexedDB-Datensatz sowie in der
+  macOS-Gerätesicherung.
+- `StudioState.scheduler` speichert zentrale Einstellungen und Laufprotokolle.
+  `ListingGroup.variants` ist dynamisch; `listingControls` speichert den
+  unabhängigen Zustand je Inserat. Bestehende Speicherumschläge bleiben lesbar.
+
+### Scheduler, Priorität und Rotation
+
+- Konfigurierbar sind Tageslimit, Adresslimit, globaler Mindestabstand,
+  Erstwartezeit, Wiederholungsintervall, Wochentage, Start-/Endzeit, Pause und
+  Modus. Diese Werte liegen ausschließlich in der zentralen Konfiguration.
+- Der Health Score setzt sich aus Alter, Überfälligkeit, letztem Fehler und
+  Benutzerpriorität zusammen. Die Regeln sind als getrennte Beiträge definiert
+  und können ohne Änderung des Auswahlalgorithmus erweitert werden.
+- Kandidaten werden zuerst je Adresse priorisiert und anschließend rundenweise
+  über alle Adressen gewählt. Die nächste Hausvariante wird anhand des
+  Rotationsstands des einzelnen Ausgangsinserats bestimmt.
+
+### Sperren und Sicherheit
+
+- Premium-, manuelle und zeitliche Sperren, Aktualisierungspause, Modus,
+  Tagesreservierung und Prozess-Lease werden vor jeder Bearbeitung erneut je
+  Inserat geprüft. Ein Fehler wird isoliert protokolliert und der Tageslauf kann
+  mit den übrigen Inseraten fortfahren.
+- Vor einer Löschung verlangt die zentrale Prüfung eine erfolgreich erstellte
+  Anzeige, neue Objektnummer, bestandene Pflicht-/Variantenprüfung und fehlende
+  Sperren. Die tatsächliche automatische Löschung bleibt technisch blockiert,
+  solange Immoprofessional keinen bestätigten Lösch- und Rücklesekanal bietet.
+
+### Tests
+
+- Dynamisches Hinzufügen, Entfernen und Sortieren sowie ein Modell mit 2.000
+  Varianten wurden geprüft.
+- Die adressübergreifende Scheduler-Verteilung wurde mit 2.000 Inseraten,
+  Tages- und Adresslimits, Reservierungen, Health Score, Zeitfenstern, Sperren
+  und isolierten Fehlern getestet.
+- TypeScript-Prüfung, ESLint, vollständige Node-Tests und Produktions-Build
+  werden für die Abnahme ausgeführt.
+
+### Begründung
+
+Ein globaler, reiner Auswahlservice trennt fachliche Priorisierung und
+Sperrprüfung von Oberfläche und Upload. Dadurch skaliert derselbe Ablauf von
+wenigen Inseraten bis zu mehreren tausend Datensätzen, bleibt deterministisch
+testbar und kann später vom lokalen macOS-Helfer als Hintergrundprozess genutzt
+werden. Vollständige Variantensnapshots verhindern fachlich inkonsistente
+Mischungen aus Preis, Fläche, Texten und Bildern.
+
+### Hürden und bekannte Risiken
+
+- Browser und macOS-Helfer besitzen noch keinen von Immoprofessional
+  bestätigten API-Kanal zum Rücklesen einer neu vergebenen Objektnummer oder zum
+  sicheren Löschen. Deshalb bereiten automatische Läufe aktuell validierte
+  Entwürfe vor, veröffentlichen oder löschen aber nicht unbeaufsichtigt.
+- Der Scheduler läuft in der Oberfläche nur bei geöffneter Anwendung. Für echte
+  Hintergrundausführung nach einem Neustart muss der bestehende lokale Helfer
+  in einem separaten, signierten macOS-Release um einen LaunchAgent erweitert
+  werden; das Daten- und Servicemodell ist dafür vorbereitet.
+
+### Angepasste Dateien
+
+- `listing-groups.mjs`, `listing-scheduler.mjs`
+- `app/InseratStudio.tsx`, `app/types.ts`, `app/globals.css`, `app/layout.tsx`
+- `studio-defaults.mjs`, `app/lib/app-version.mjs`, `package.json`
+- `tests/listing-groups.test.mjs`, `tests/listing-scheduler.test.mjs`
+- `README.md`, `CHANGELOG.md`
+
+## Sichere Inseratsgruppen und Variantenrotation – 24. Juli 2026
+
+### Report
+
+- Pro Adresse ein persistentes Gruppenmodell mit vier Haupthäusern und vier
+  Alternativen ergänzt. Alternativen dürfen leer bleiben oder dieselbe
+  freigegebene Hausvariante erneut verwenden.
+- Jeder Slot speichert Haus-Snapshot, Preisbasis, Flächen, Zimmer,
+  Energieangaben, Bild- und Grundrissreferenzen, vollständigen Inseratentwurf,
+  Reihenfolge, Rolle und Freigabestatus als zusammengehörige Einheit.
+- Eine Verwaltungsoberfläche für Rotation, Intervall, Tageslimit,
+  Aktivierung, Reihenfolge, Premium-Sperren, manuelle Sperren und
+  Prozessprotokolle ergänzt.
+- Dry Run und der sichere Kopierablauf implementiert. Der Dry Run prüft
+  Hausdaten, Preis, Bilder, Texte und sämtliche zentralen Projektierungswerte.
+  Die lokale Vorbereitung erhält eine neue Objektnummer, verändert die Rotation
+  aber noch nicht. Erst ein erfolgreich bestätigter Upload schreibt den
+  Rotationsstand persistent fort und lässt bestehende Anzeigen unangetastet.
+- Browser-Locks und persistente Prozess-Leases verhindern parallele
+  Verarbeitung. Anwendungsversion auf 0.11.0 angehoben.
+
+### Begründung
+
+Varianten werden nicht aus einzelnen Preis- oder Flächenfeldern zusammengesetzt,
+sondern immer aus einem freigegebenen Haustyp vollständig erzeugt. Das
+verhindert Mischzustände zwischen Haustyp, Bildern, Grundriss, Text und Preis.
+Die bestehende IndexedDB- und macOS-Sicherung bleibt die einzige Datenquelle;
+dadurch entstehen weder ein zweites Datenbanksystem noch neue Zugangsdaten.
+
+### Hürden und Risiken
+
+- Binärbilder werden aus Speicher- und Sicherungsgründen nicht achtfach
+  dupliziert. Jeder Variantensnapshot enthält unveränderliche Bildreferenzen;
+  der Dry Run vergleicht diese mit dem zentral gespeicherten Hauskatalog.
+- Automatische Veröffentlichung und automatische Löschung sind bewusst noch
+  nicht implementiert. `automaticDeletionEnabled` wird bei jeder
+  Normalisierung und jeder Sperränderung erzwungen auf `false` gesetzt.
+- Premium- und manuelle Sperren bleiben unabhängig vom Rotationsmodus aktiv.
+  Das alte Inserat wird in dieser Ausbaustufe niemals automatisch gelöscht.
+- Bestehende Adressen werden beim Laden ohne Datenverlust in das neue
+  Acht-Slot-Modell migriert. Vorhandene Inserate und Benutzertexte bleiben
+  erhalten; fehlende zentrale Standards werden ausschließlich ergänzt.
+
+## Küche, Bad und Umgebung als Projektierungsstandards – 24. Juli 2026
+
+### Report
+
+- Die zentrale Projektierungs-Konfiguration um Einbauküche, offene Küche,
+  Dusche, Wanne, Badfenster, Bus und Einkaufsmöglichkeit ergänzt.
+- Neue, automatisch angelegte und bereits gespeicherte Projektierungen werden
+  über dieselbe Normalisierung ausschließlich um fehlende Werte ergänzt.
+- Den OpenImmo-Export für Küche und Bad auf die Projektierungswerte umgestellt
+  und die Umgebung als Infrastruktur-Zusatzfeld ergänzt. Anwendungsversion auf
+  0.10.1 angehoben.
+- Die inhaltsleere `next.config.ts` entfernt. Ohne benutzerdefinierte
+  Next-Konfiguration verwendet vinext dieselben Standardwerte, überspringt
+  jedoch den auf diesem großen lokalen Projekt zeitkritischen TS-Modul-Runner.
+
+### Begründung
+
+Eine gemeinsame Konfiguration hält Initialisierung, Wiederherstellung und
+Export deckungsgleich. Einzelne Wahr-/Falsch-Werte bilden die Mehrfachauswahl
+ab und erlauben zugleich, eine manuelle Abwahl zuverlässig zu erhalten.
+
+### Hürden und Risiken
+
+- OpenImmo bildet Bus und Einkaufsmöglichkeiten regulär als Entfernungen ab.
+  Da keine verifizierten Kilometerwerte vorliegen, werden keine künstlichen
+  Distanzen erzeugt; die Auswahl wird schema-konform als benanntes
+  Infrastruktur-Zusatzfeld übertragen.
+- Explizit gesetzte Benutzerwerte, einschließlich `false`, werden nie
+  überschrieben. Unbekannte zusätzliche Projektierungsfelder bleiben durch
+  die ergänzende Normalisierung ebenfalls erhalten.
+- Andere Formularfelder, Texte und Upload-Abläufe wurden nicht verändert.
+- Der Produktions-Build lief zuvor bereits beim Laden der funktionslosen
+  Next-Konfiguration in das feste 60-Sekunden-Limit des Vite-Modul-Runners;
+  die Entfernung ändert keine Konfiguration, beseitigt aber diesen unnötigen
+  Fehlerpfad.
+
 ## Vollständig integrierter Medien- und Preiskatalog – 24. Juli 2026
 
 ### Report

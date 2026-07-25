@@ -1,6 +1,6 @@
 import { Client } from "basic-ftp";
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { appendFile, mkdir, open, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, open, readFile, rm, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { dirname, join, parse } from "node:path";
@@ -19,11 +19,15 @@ import {
   loadCatalogSnapshot,
   loadCatalogImage,
   loadCatalogManifest,
+  migrateCatalogManifest,
   saveCatalogSnapshot,
   saveCatalogImage,
   startCatalogSnapshot,
 } from "./catalog-store.mjs";
 import { getMediaLibraryItem, queryMediaLibrary, recommendedMediaSequence } from "./media-library.mjs";
+import { createStructuredFileLogger } from "./structured-log.mjs";
+import { createUploadJobLedger } from "./upload-job-ledger.mjs";
+import { WORKFLOW_STATUS } from "./workflow-status.mjs";
 
 const HOST = "127.0.0.1";
 const PORT = 43182;
@@ -32,12 +36,15 @@ const MAX_CATALOG_BODY_BYTES = 500 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 100 * 1024 * 1024;
 const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
 const UPLOAD_LOG_PATH = join(APPLICATION_DATA_DIRECTORY, "upload.log");
+const UPLOAD_JOB_LEDGER_PATH = join(APPLICATION_DATA_DIRECTORY, "upload-jobs.json");
 const SESSION_TOKEN = String(process.env.FPI_SESSION_TOKEN || randomBytes(32).toString("hex"));
 const allowedOrigins = new Set([
   "http://localhost:43181",
   "http://127.0.0.1:43181",
 ]);
 let credentialCache;
+const writeUploadLog = createStructuredFileLogger(UPLOAD_LOG_PATH, { jobType: "immoprofessional-upload" });
+const uploadJobLedger = createUploadJobLedger(UPLOAD_JOB_LEDGER_PATH);
 
 async function credentialVault() {
   if (!credentialCache) credentialCache = await loadCredentialVault();
@@ -47,7 +54,7 @@ async function credentialVault() {
 function headers(origin) {
   return {
     "Access-Control-Allow-Origin": allowedOrigins.has(origin) ? origin : "http://localhost:43181",
-    "Access-Control-Allow-Headers": "Content-Type, X-FPI-Filename, X-FPI-Session",
+    "Access-Control-Allow-Headers": "Content-Type, X-FPI-Filename, X-FPI-Session, X-FPI-Job-Id, X-FPI-Project-Id, X-FPI-Listing-Id",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
     "Cache-Control": "no-store",
     "Content-Type": "application/json; charset=utf-8",
@@ -123,12 +130,12 @@ function decodedHeader(request, name) {
 
 async function logUpload(event, details = {}) {
   try {
-    await mkdir(dirname(UPLOAD_LOG_PATH), { recursive: true });
-    await appendFile(
-      UPLOAD_LOG_PATH,
-      `${JSON.stringify({ timestamp: new Date().toISOString(), event, ...details })}\n`,
-      { encoding: "utf8", mode: 0o600 },
-    );
+    const status = event === "failed"
+      ? WORKFLOW_STATUS.FAILED
+      : event === "transferred"
+        ? WORKFLOW_STATUS.PUBLISHED
+        : WORKFLOW_STATUS.PROCESSING;
+    await writeUploadLog(event, { status, ...details });
   } catch {
     // Ein Diagnoseprotokoll darf den eigentlichen Upload nicht blockieren.
   }
@@ -258,6 +265,10 @@ const server = createServer(async (request, response) => {
 
   let client;
   let temporaryUploadPath = "";
+  let uploadJob = null;
+  let uploadJobClaimed = false;
+  let uploadJobCompleted = false;
+  const uploadLog = (event, details = {}) => logUpload(event, { ...(uploadJob || {}), ...details });
   try {
     if (isMediaLibrarySequence) {
       const result = await recommendedMediaSequence(requestUrl.searchParams.get("coverId"));
@@ -373,6 +384,19 @@ const server = createServer(async (request, response) => {
 
     if (isBinaryUpload) {
       const filename = safeFilename(decodedHeader(request, "x-fpi-filename"));
+      uploadJob = {
+        jobId: decodedHeader(request, "x-fpi-job-id") || `legacy:${randomUUID()}`,
+        projectId: decodedHeader(request, "x-fpi-project-id"),
+        listingId: decodedHeader(request, "x-fpi-listing-id"),
+        jobType: "immoprofessional-upload",
+      };
+      const claim = await uploadJobLedger.claim(uploadJob);
+      if (claim.alreadyCompleted) {
+        await uploadLog("idempotent-skip", { status: WORKFLOW_STATUS.PUBLISHED, message: "Der Upload-Job war bereits erfolgreich abgeschlossen." });
+        send(response, 200, { ok: true, idempotent: true, message: "Der Upload war bereits erfolgreich abgeschlossen und wurde nicht erneut übertragen." }, origin);
+        return;
+      }
+      uploadJobClaimed = true;
       const vault = await credentialVault();
       const ftp = vault.credentials;
       if (!ftp.ftpHost || !ftp.ftpUser || !ftp.ftpPassword) {
@@ -385,7 +409,7 @@ const server = createServer(async (request, response) => {
       const handle = await open(temporaryUploadPath, "wx");
       let archiveBytes = 0;
       let nextProgressLog = 25 * 1024 * 1024;
-      await logUpload("receiving-started", {
+      await uploadLog("receiving-started", {
         filename,
         expectedBytes: Number(request.headers["content-length"] || 0),
         host: ftp.ftpHost,
@@ -399,7 +423,7 @@ const server = createServer(async (request, response) => {
           }
           await handle.write(chunk);
           if (archiveBytes >= nextProgressLog) {
-            await logUpload("receiving-progress", { filename, archiveBytes });
+            await uploadLog("receiving-progress", { filename, archiveBytes });
             nextProgressLog += 25 * 1024 * 1024;
           }
         }
@@ -407,7 +431,7 @@ const server = createServer(async (request, response) => {
         await handle.close();
       }
       if (!archiveBytes) throw new Error("Das Importpaket ist leer.");
-      await logUpload("received", { filename, archiveBytes, host: ftp.ftpHost, remotePath: ftp.ftpPath });
+      await uploadLog("received", { filename, archiveBytes, host: ftp.ftpHost, remotePath: ftp.ftpPath });
 
       client = new Client(300_000);
       client.ftp.verbose = false;
@@ -415,9 +439,11 @@ const server = createServer(async (request, response) => {
         ...ftpAccessOptions(ftp),
       });
       if (ftp.ftpPath && ftp.ftpPath !== "/") await client.cd(ftp.ftpPath);
-      await logUpload("connected", { filename, host: ftp.ftpHost, remotePath: ftp.ftpPath, transport: ftp.ftpSecure });
+      await uploadLog("connected", { filename, host: ftp.ftpHost, remotePath: ftp.ftpPath, transport: ftp.ftpSecure });
       await client.uploadFrom(temporaryUploadPath, filename);
-      await logUpload("transferred", { filename, archiveBytes, host: ftp.ftpHost, remotePath: ftp.ftpPath, transport: ftp.ftpSecure });
+      await uploadJobLedger.complete(uploadJob);
+      uploadJobCompleted = true;
+      await uploadLog("transferred", { filename, archiveBytes, host: ftp.ftpHost, remotePath: ftp.ftpPath, transport: ftp.ftpSecure });
       send(response, 200, {
         ok: true,
         message: `Importpaket „${filename}“ wurde an Immoprofessional übertragen. Bitte den Importbericht und den Entwurfsstatus prüfen.`,
@@ -516,8 +542,21 @@ const server = createServer(async (request, response) => {
     }
 
     const filename = safeFilename(body.filename);
+    uploadJob = {
+      jobId: String(body.jobId || `legacy:${randomUUID()}`),
+      projectId: String(body.projectId || ""),
+      listingId: String(body.listingId || ""),
+      jobType: "immoprofessional-upload",
+    };
+    const claim = await uploadJobLedger.claim(uploadJob);
+    if (claim.alreadyCompleted) {
+      await uploadLog("idempotent-skip", { status: WORKFLOW_STATUS.PUBLISHED, message: "Der Upload-Job war bereits erfolgreich abgeschlossen." });
+      send(response, 200, { ok: true, idempotent: true, message: "Der Upload war bereits erfolgreich abgeschlossen und wurde nicht erneut übertragen." }, origin);
+      return;
+    }
+    uploadJobClaimed = true;
     const remotePath = String(ftp.ftpPath || "/").trim();
-    await logUpload("started", {
+    await uploadLog("started", {
       filename,
       archiveBytes: archive.length,
       host: String(ftp.ftpHost),
@@ -529,9 +568,11 @@ const server = createServer(async (request, response) => {
     await client.access(ftpAccessOptions(ftp));
 
     if (remotePath && remotePath !== "/") await client.cd(remotePath);
-    await logUpload("connected", { filename, host: String(ftp.ftpHost), remotePath, transport: ftp.ftpSecure });
+    await uploadLog("connected", { filename, host: String(ftp.ftpHost), remotePath, transport: ftp.ftpSecure });
     await client.uploadFrom(Readable.from(archive), filename);
-    await logUpload("transferred", { filename, archiveBytes: archive.length, host: String(ftp.ftpHost), remotePath, transport: ftp.ftpSecure });
+    await uploadJobLedger.complete(uploadJob);
+    uploadJobCompleted = true;
+    await uploadLog("transferred", { filename, archiveBytes: archive.length, host: String(ftp.ftpHost), remotePath, transport: ftp.ftpSecure });
     send(response, 200, {
       ok: true,
       message: `Importpaket „${filename}“ wurde an Immoprofessional übertragen. Bitte den Importbericht und den Entwurfsstatus prüfen.`,
@@ -540,8 +581,16 @@ const server = createServer(async (request, response) => {
     const status = error && typeof error === "object" && "httpStatus" in error
       ? Number(error.httpStatus) || 400
       : 400;
+    if (uploadJobClaimed && !uploadJobCompleted && uploadJob) {
+      await uploadJobLedger.fail({
+        ...uploadJob,
+        errorCode: String(error?.code || "UPLOAD_FAILED"),
+        message: error instanceof Error ? error.message : "Upload fehlgeschlagen.",
+      }).catch(() => undefined);
+    }
     if (isUpload || isBinaryUpload) {
-      await logUpload("failed", {
+      await uploadLog("failed", {
+        errorCode: String(error?.code || "UPLOAD_FAILED"),
         message: error instanceof Error ? error.message.slice(0, 500) : "Upload fehlgeschlagen.",
       });
     }
@@ -555,6 +604,17 @@ const server = createServer(async (request, response) => {
   }
 });
 
-server.listen(PORT, HOST, () => {
-  console.log(`Fabian&Pascal Helfer: http://${HOST}:${PORT}`);
+async function startLocalHelper() {
+  const migration = await migrateCatalogManifest();
+  if (migration.migrated) {
+    console.log(`Lokaler Katalog wurde auf Datenschema ${migration.schemaVersion} migriert.`);
+  }
+  server.listen(PORT, HOST, () => {
+    console.log(`Fabian&Pascal Helfer: http://${HOST}:${PORT}`);
+  });
+}
+
+startLocalHelper().catch((error) => {
+  console.error(error instanceof Error ? error.message : "Der lokale Helfer konnte nicht gestartet werden.");
+  process.exitCode = 1;
 });

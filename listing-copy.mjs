@@ -68,7 +68,20 @@ export const IMMOPROFESSIONAL_DEFAULTS = Object.freeze({
   shower: true,
   bathtub: true,
   bathroomWindow: true,
+  environmentBus: true,
+  environmentShopping: true,
 });
+
+export const HOUSE_ENERGY_DEFAULTS = Object.freeze({
+  energyClass: IMMOPROFESSIONAL_DEFAULTS.energyClass,
+  heatingType: "Fußbodenheizung mit Luft-Wasser-Wärmepumpe",
+  energySource: "Umweltwärme und Strom",
+});
+
+export const IMMOPROFESSIONAL_ENVIRONMENT_OPTIONS = Object.freeze([
+  Object.freeze({ key: "environmentBus", label: "Bus" }),
+  Object.freeze({ key: "environmentShopping", label: "Einkaufsmöglichkeit" }),
+]);
 
 export function isMissingProjectingValue(value) {
   const normalized = String(value ?? "")
@@ -92,14 +105,32 @@ export function fillMissingProjectingDefaults(values = {}) {
     ...source,
     equipmentQuality: choice("equipmentQuality"),
     constructionPhase: choice("constructionPhase"),
+    attic: flag("attic"),
+    guestWc: flag("guestWc"),
+    gardenUse: flag("gardenUse"),
     underfloorHeating: flag("underfloorHeating"),
+    electricFuel: flag("electricFuel"),
     airSourceHeatPump: flag("airSourceHeatPump"),
     kfw40: flag("kfw40"),
     kfw55: flag("kfw55"),
     energyClass: choice("energyClass"),
     commissionRequired: flag("commissionRequired"),
     energyCertificateClass: choice("energyCertificateClass"),
+    fittedKitchen: flag("fittedKitchen"),
+    openKitchen: flag("openKitchen"),
+    shower: flag("shower"),
+    bathtub: flag("bathtub"),
+    bathroomWindow: flag("bathroomWindow"),
+    environmentBus: flag("environmentBus"),
+    environmentShopping: flag("environmentShopping"),
   };
+}
+
+export function projectingEnvironmentLabels(values = {}) {
+  const projecting = fillMissingProjectingDefaults(values);
+  return IMMOPROFESSIONAL_ENVIRONMENT_OPTIONS
+    .filter(({ key }) => projecting[key] === true)
+    .map(({ label }) => label);
 }
 
 const HEADLINE_OPENINGS = Object.freeze([

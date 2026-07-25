@@ -17,8 +17,8 @@ fi
 if [[ -z "$PNPM_BIN" && -x "$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback/pnpm" ]]; then
   PNPM_BIN="$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback/pnpm"
 fi
-if [[ -z "$NODE_BIN" || -z "$PNPM_BIN" ]]; then
-  print -u2 "Node.js 22 und pnpm wurden nicht gefunden. Bitte zuerst die lokale Laufzeit installieren."
+if [[ -z "$NODE_BIN" ]]; then
+  print -u2 "Node.js 22 wurde nicht gefunden. Bitte zuerst die lokale Laufzeit installieren."
   read -k 1 "?Taste drücken zum Schließen …"
   exit 1
 fi
@@ -31,8 +31,20 @@ fi
 export PATH="${NODE_BIN:h}:${PNPM_BIN:h}:$PATH"
 
 if [[ ! -d "$APP_ROOT/node_modules" ]]; then
+  if [[ -z "$PNPM_BIN" ]]; then
+    print -u2 "pnpm wurde nicht gefunden. Es wird nur für die einmalige Installation benötigt."
+    read -k 1 "?Taste drücken zum Schließen …"
+    exit 1
+  fi
   cd "$APP_ROOT"
   "$PNPM_BIN" install --frozen-lockfile
+fi
+
+VINEXT_CLI="$APP_ROOT/node_modules/vinext/dist/cli.js"
+if [[ ! -f "$VINEXT_CLI" ]]; then
+  print -u2 "Die lokale Vinext-Laufzeit fehlt. Bitte die Projektabhängigkeiten erneut installieren."
+  read -k 1 "?Taste drücken zum Schließen …"
+  exit 1
 fi
 
 if [[ ! -s "$SESSION_FILE" ]]; then
@@ -58,19 +70,35 @@ else
 fi
 
 if /usr/sbin/lsof -nP -iTCP:43181 -sTCP:LISTEN >/dev/null 2>&1; then
-  if ! /usr/bin/curl --silent --fail --max-time 2 "http://127.0.0.1:43181" | /usr/bin/grep -q "Inseratestudio"; then
+  if ! /usr/bin/curl --silent --fail --max-time 2 "http://127.0.0.1:43181/__fpi_health" | /usr/bin/grep -qx "fabian-pascal-inseratestudio"; then
     print -u2 "Port 43181 wird bereits von einem anderen Programm verwendet."
     read -k 1 "?Taste drücken zum Schließen …"
     exit 1
   fi
 else
   cd "$APP_ROOT"
-  "$PNPM_BIN" run build > "$WORK_ROOT/build.out.log" 2> "$WORK_ROOT/build.err.log"
-  nohup "$PNPM_BIN" run start > "$WORK_ROOT/studio.out.log" 2> "$WORK_ROOT/studio.err.log" &
+  BUILD_MARKER="$APP_ROOT/dist/server/index.js"
+  BUILD_REQUIRED=false
+  if [[ ! -s "$BUILD_MARKER" ]]; then
+    BUILD_REQUIRED=true
+  elif [[ "$APP_ROOT/package.json" -nt "$BUILD_MARKER" || "$APP_ROOT/vite.config.ts" -nt "$BUILD_MARKER" ]]; then
+    BUILD_REQUIRED=true
+  elif /usr/bin/find "$APP_ROOT/app" "$APP_ROOT/build" -type f -newer "$BUILD_MARKER" -print -quit | /usr/bin/grep -q .; then
+    BUILD_REQUIRED=true
+  elif /usr/bin/find "$APP_ROOT" -maxdepth 1 -type f \( -name '*.mjs' -o -name '*.ts' \) ! -name 'production-server.mjs' -newer "$BUILD_MARKER" -print -quit | /usr/bin/grep -q .; then
+    BUILD_REQUIRED=true
+  fi
+  if [[ "$BUILD_REQUIRED" == true ]]; then
+    "$NODE_BIN" "$VINEXT_CLI" build > "$WORK_ROOT/build.out.log" 2> "$WORK_ROOT/build.err.log"
+  fi
+  nohup "$NODE_BIN" "$APP_ROOT/production-server.mjs" > "$WORK_ROOT/studio.out.log" 2> "$WORK_ROOT/studio.err.log" &
 fi
 
-for attempt in {1..30}; do
-  if /usr/bin/curl --silent --fail --max-time 1 "http://127.0.0.1:43181" >/dev/null 2>&1 \
+# Ein notwendiger großer Medien-/Produktions-Build kann auf macOS mehrere
+# Minuten benötigen. Der Starter wartet deshalb geduldig, beendet aber
+# weiterhin mit einer klaren Diagnose.
+for attempt in {1..360}; do
+  if /usr/bin/curl --silent --fail --max-time 1 "http://127.0.0.1:43181/__fpi_health" >/dev/null 2>&1 \
     && /usr/bin/curl --silent --fail --max-time 1 -H "X-FPI-Session: $FPI_SESSION_TOKEN" "http://127.0.0.1:43182/health" >/dev/null 2>&1; then
     /usr/bin/open "http://127.0.0.1:43181/#session=$FPI_SESSION_TOKEN"
     exit 0

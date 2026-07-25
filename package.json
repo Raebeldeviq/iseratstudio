@@ -1,6 +1,6 @@
 {
   "name": "fabian-pascal-inseratestudio",
-  "version": "0.10.0",
+  "version": "0.15.0",
   "private": true,
   "packageManager": "pnpm@11.9.0",
   "engines": {
@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "vinext dev --port 43181",
     "build": "vinext build",
-    "start": "vinext start --hostname 127.0.0.1 --port 43181",
+    "start": "node production-server.mjs",
     "upload-server": "node local-upload-server.mjs",
     "media:sync": "node scripts/sync-bundled-media.mjs",
     "bootstrap:catalog": "node scripts/bootstrap-bundled-catalog.mjs",

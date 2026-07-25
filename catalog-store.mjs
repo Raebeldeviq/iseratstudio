@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { gunzip, gzip } from "node:zlib";
 import { promisify } from "node:util";
 import { APPLICATION_DATA_DIRECTORY } from "./platform-paths.mjs";
+import { cleanupStudioState, STUDIO_DATA_SCHEMA_VERSION } from "./data-integrity.mjs";
 
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
@@ -45,6 +46,9 @@ function withoutImageData(state) {
     promotionImage: state.promotionImage
       ? { ...state.promotionImage, dataUrl: "" }
       : null,
+    promotionImages: Array.isArray(state.promotionImages)
+      ? state.promotionImages.map((image) => ({ ...image, dataUrl: "" }))
+      : [],
     houses: state.houses.map((house) => ({
       ...house,
       images: Array.isArray(house.images)
@@ -57,6 +61,7 @@ function withoutImageData(state) {
 function imageEntries(state) {
   const images = [
     ...state.houses.flatMap((house) => house.images),
+    ...(Array.isArray(state.promotionImages) ? state.promotionImages : []),
     ...(state.promotionImage ? [state.promotionImage] : []),
   ];
   return [...new Map(images.map((image) => {
@@ -110,8 +115,8 @@ async function currentV2Manifest(catalogDirectory) {
 }
 
 export async function startCatalogSnapshot(input, catalogDirectory = CATALOG_V2_DIRECTORY) {
-  const state = input?.state;
-  if (!validState(state)) throw new Error("Die lokale Inseratstudio-Sicherung ist unvollständig.");
+  if (!validState(input?.state)) throw new Error("Die lokale Inseratstudio-Sicherung ist unvollständig.");
+  const state = cleanupStudioState(input.state, { apply: true }).state;
   const sessionId = safeId(input.sessionId, "Sicherungssitzung");
   const currentManifest = await currentV2Manifest(catalogDirectory);
   const expectedSavedAt = typeof input.expectedSavedAt === "string"
@@ -221,6 +226,51 @@ export async function loadCatalogManifest(catalogDirectory = CATALOG_V2_DIRECTOR
   };
 }
 
+export async function migrateCatalogManifest(catalogDirectory = CATALOG_V2_DIRECTORY) {
+  const manifest = await currentV2Manifest(catalogDirectory);
+  if (!manifest) return { migrated: false, stored: false };
+  const migration = cleanupStudioState(manifest.state, { apply: true });
+  if (!migration.changed) {
+    return {
+      migrated: false,
+      stored: true,
+      schemaVersion: STUDIO_DATA_SCHEMA_VERSION,
+      report: migration.report,
+    };
+  }
+
+  const manifestPath = join(catalogDirectory, MANIFEST_FILENAME);
+  const backupDirectory = join(catalogDirectory, "backups");
+  const backupPath = join(backupDirectory, `manifest.pre-schema-${STUDIO_DATA_SCHEMA_VERSION}.json`);
+  await mkdir(backupDirectory, { recursive: true });
+  try {
+    await writeFile(backupPath, JSON.stringify(manifest), { encoding: "utf8", mode: 0o600, flag: "wx" });
+  } catch (error) {
+    if (!error || typeof error !== "object" || !("code" in error) || error.code !== "EEXIST") throw error;
+  }
+
+  const temporaryPath = `${manifestPath}.${process.pid}.migration.tmp`;
+  const previousPath = `${manifestPath}.migration.previous`;
+  const migratedManifest = { ...manifest, state: migration.state };
+  await writeFile(temporaryPath, JSON.stringify(migratedManifest), { encoding: "utf8", mode: 0o600 });
+  await rm(previousPath, { force: true });
+  try {
+    await rename(manifestPath, previousPath);
+    await rename(temporaryPath, manifestPath);
+    await rm(previousPath, { force: true });
+  } catch (error) {
+    await rm(temporaryPath, { force: true });
+    if (await fileExistsWithContent(previousPath)) await rename(previousPath, manifestPath);
+    throw error;
+  }
+  return {
+    migrated: true,
+    stored: true,
+    schemaVersion: STUDIO_DATA_SCHEMA_VERSION,
+    report: migration.report,
+  };
+}
+
 export async function loadCatalogImage(imageIdValue, catalogDirectory = CATALOG_V2_DIRECTORY) {
   const imageId = safeId(imageIdValue, "Bild-ID");
   const manifest = await readV2Manifest(join(catalogDirectory, MANIFEST_FILENAME));
@@ -233,8 +283,8 @@ export async function loadCatalogImage(imageIdValue, catalogDirectory = CATALOG_
 }
 
 export async function saveCatalogSnapshot(input, catalogPath = CATALOG_PATH) {
-  const state = input?.state;
-  if (!validState(state)) throw new Error("Die lokale Inseratstudio-Sicherung ist unvollständig.");
+  if (!validState(input?.state)) throw new Error("Die lokale Inseratstudio-Sicherung ist unvollständig.");
+  const state = cleanupStudioState(input.state, { apply: true }).state;
   const snapshot = {
     format: 1,
     savedAt: normalizeSavedAt(input.savedAt),

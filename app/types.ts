@@ -16,6 +16,17 @@ export type ImageRole =
   | "qr"
   | "other";
 
+export type WorkflowStatus =
+  | "draft"
+  | "prepared"
+  | "scheduled"
+  | "processing"
+  | "published"
+  | "blocked"
+  | "failed"
+  | "archived"
+  | "deleted";
+
 export type HouseImage = {
   id: string;
   sourceId?: string;
@@ -28,8 +39,99 @@ export type HouseImage = {
   captionLocked?: boolean;
 };
 
+export type PromotionImageAsset = HouseImage & {
+  active: boolean;
+  priority: number;
+  order: number;
+  lastUsedAt: string;
+  usageCount: number;
+  lastProjectId?: string;
+  lastHouseId?: string;
+  lastListingId?: string;
+};
+
+export type PromotionSettings = {
+  enabled: boolean;
+  automaticRotation: boolean;
+  randomSelection: boolean;
+  manualSelection: boolean;
+  manualImageId: string;
+};
+
+export type PromotionUsage = {
+  id: string;
+  projectId: string;
+  listingId: string;
+  externalId: string;
+  houseId?: string;
+  imageId: string;
+  usedAt: string;
+  mode: "create" | "update";
+};
+
+export type HouseUsageStat = {
+  houseId: string;
+  totalUses: number;
+  lastUsedAt: string;
+  projectIds: string[];
+  activeProjectIds: string[];
+  usedAt: string[];
+};
+
+export type HouseCombinationUsage = {
+  key: string;
+  houseIds: string[];
+  totalUses: number;
+  lastUsedAt: string;
+  lastProjectId: string;
+  usedAt: string[];
+};
+
+export type ProjectHouseDistribution = {
+  projectId: string;
+  activeHouseIds: string[];
+  previewHouseIds: string[];
+  previousCombination: string;
+  combinationHistory: string[];
+  lastRemovedHouseId: string;
+  lastAddedHouseId: string;
+  pinnedHouseIds: string[];
+  excludedHouseIds: string[];
+  updatedAt: string;
+};
+
+export type HouseDistributionSettings = {
+  usageWindowDays: number;
+  candidateTrials: number;
+  weights: {
+    base: number;
+    totalUsePenalty: number;
+    recentUsePenalty: number;
+    activeProjectPenalty: number;
+    neverUsedOnProjectBonus: number;
+    inactiveBonus: number;
+    agePerDayBonus: number;
+    ageBonusLimit: number;
+    lastRemovedPenalty: number;
+    combinationUsePenalty: number;
+    projectHistoryPenalty: number;
+    simultaneousOverlapPenalty: number;
+  };
+};
+
+export type HouseDistributionState = {
+  schemaVersion: 1;
+  poolHouseIds: string[];
+  settings: HouseDistributionSettings;
+  houseUsage: HouseUsageStat[];
+  combinationUsage: HouseCombinationUsage[];
+  projects: ProjectHouseDistribution[];
+  updatedAt: string;
+};
+
 export type HouseTemplate = {
   id: string;
+  approved?: boolean;
   name: string;
   houseType: string;
   livingArea: number;
@@ -69,9 +171,9 @@ export type ProjectInput = {
   transportFacts: string;
   familyFacts: string;
   natureFacts: string;
-  notes: string;
   selectedHouseIds: string[];
   listings: GeneratedListing[];
+  listingGroup?: ListingGroup;
   createdAt: string;
 };
 
@@ -86,13 +188,24 @@ export type ListingTexts = {
 export type ProjectingSettings = {
   equipmentQuality?: string;
   constructionPhase?: string;
+  attic?: boolean;
+  guestWc?: boolean;
+  gardenUse?: boolean;
   underfloorHeating?: boolean;
+  electricFuel?: boolean;
   airSourceHeatPump?: boolean;
   kfw40?: boolean;
   kfw55?: boolean;
   energyClass?: string;
   commissionRequired?: boolean;
   energyCertificateClass?: string;
+  fittedKitchen?: boolean;
+  openKitchen?: boolean;
+  shower?: boolean;
+  bathtub?: boolean;
+  bathroomWindow?: boolean;
+  environmentBus?: boolean;
+  environmentShopping?: boolean;
 };
 
 export type GeneratedListing = {
@@ -104,6 +217,163 @@ export type GeneratedListing = {
   texts: ListingTexts;
   version: number;
   projectingSettings?: ProjectingSettings;
+  listingGroupVariantId?: string;
+  listingOrigin?: "group-source" | "rotation-copy";
+  rotationSourceListingId?: string;
+  rotationRemovedHouseId?: string;
+  rotationAddedHouseId?: string;
+  rotationArchivedAt?: string;
+  createdAt?: string;
+  promotionImageId?: string;
+  promotionAssignedAt?: string;
+  lastUploadedAt?: string;
+  nextUpdateAt?: string;
+  status?: WorkflowStatus;
+  statusMessage?: string;
+  uploadError?: string;
+};
+
+export type ListingGroupVariantRole = "variant" | "primary" | "alternative";
+
+export type HouseVariantImageReference = {
+  id: string;
+  name: string;
+  caption: string;
+  mimeType: string;
+  isFloorplan: boolean;
+  role: string;
+};
+
+export type HouseVariantSnapshot = Omit<HouseTemplate, "images" | "approved"> & {
+  images: HouseVariantImageReference[];
+};
+
+export type ListingGroupVariant = {
+  id: string;
+  projectId: string;
+  role: ListingGroupVariantRole;
+  order: number;
+  templateId: string;
+  templateName: string;
+  active: boolean;
+  approved: boolean;
+  houseSnapshot: HouseVariantSnapshot | null;
+  listing: GeneratedListing | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ListingGroupAutomation = {
+  automaticUpdateEnabled: boolean;
+  updateIntervalDays: number;
+  automaticRecreationEnabled: boolean;
+  automaticDeletionEnabled: false;
+  rotationEnabled: boolean;
+  maxUpdatesPerDay: number;
+  lastUpdatedAt: string;
+  nextUpdatedAt: string;
+};
+
+export type ListingUpdateMode =
+  | "full-auto"
+  | "copy-without-delete"
+  | "prepare-only"
+  | "blocked";
+
+export type ListingAutomationControl = {
+  listingId: string;
+  externalId: string;
+  projectId: string;
+  variantId: string;
+  automaticUpdateEnabled: boolean;
+  automaticDeletionEnabled: boolean;
+  premiumPlacement: boolean;
+  manualLock: boolean;
+  lockedUntil: string;
+  lockReason: string;
+  lastUpdatedAt: string;
+  nextUpdatedAt: string;
+  lastAttemptAt: string;
+  lastSuccessAt: string;
+  lastError: string;
+  status: WorkflowStatus;
+  statusMessage: string;
+  userPriority: number;
+  updateMode: ListingUpdateMode;
+  schedulerSelectionId: string;
+  schedulerSelectedAt: string;
+  processLease: { token: string; startedAt: string } | null;
+};
+
+export type ListingGroupLog = {
+  id: string;
+  timestamp: string;
+  projectId: string;
+  oldExternalId: string;
+  newExternalId: string;
+  oldVariantId: string;
+  oldVariantName: string;
+  newVariantId: string;
+  newVariantName: string;
+  mode: string;
+  deletionAllowed: boolean;
+  premiumLockActive: boolean;
+  checkResult: string;
+  variation: string;
+  error: string;
+  processStatus: WorkflowStatus;
+  message: string;
+};
+
+export type ListingGroup = {
+  id: string;
+  projectId: string;
+  variants: ListingGroupVariant[];
+  automation: ListingGroupAutomation;
+  listingControls: ListingAutomationControl[];
+  logs: ListingGroupLog[];
+  rotationCounter: number;
+  lastStatus: WorkflowStatus;
+  lastStatusMessage: string;
+  lastError: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SchedulerSettings = {
+  enabled: boolean;
+  paused: boolean;
+  mode: ListingUpdateMode;
+  maxUpdatesPerDay: number;
+  maxUpdatesPerAddressPerDay: number;
+  minimumSpacingHours: number;
+  initialWaitDays: number;
+  updateIntervalDays: number;
+  allowedWeekdays: number[];
+  startTime: string;
+  endTime: string;
+};
+
+export type SchedulerRunLog = {
+  id: string;
+  timestamp: string;
+  mode: ListingUpdateMode | "dry-run";
+  selectedListingIds: string[];
+  completedListingIds: string[];
+  failedListingIds: string[];
+  status: WorkflowStatus;
+  statusMessage: string;
+  error: string;
+};
+
+export type ListingScheduler = {
+  settings: SchedulerSettings;
+  runs: SchedulerRunLog[];
+  lastRunAt: string;
+  nextRunAt: string;
+  lastStatus: WorkflowStatus;
+  lastStatusMessage: string;
+  lastError: string;
 };
 
 export type ProviderSettings = {
@@ -115,11 +385,36 @@ export type ProviderSettings = {
   phone: string;
 };
 
+export type BatchUploadLog = {
+  id: string;
+  jobId: string;
+  batchId: string;
+  projectId: string;
+  address: string;
+  listingId: string;
+  externalId: string;
+  houseVariant: string;
+  promotionImageId: string;
+  createdAt: string;
+  updatedAt: string;
+  nextUpdatedAt: string;
+  status: WorkflowStatus;
+  statusMessage: string;
+  error: string;
+};
+
 export type StudioState = {
   version: 1;
+  dataSchemaVersion?: number;
   houses: HouseTemplate[];
   projects: ProjectInput[];
   provider: ProviderSettings;
   promotionImage: HouseImage | null;
   promotionImageEnabled: boolean;
+  promotionImages?: PromotionImageAsset[];
+  promotionSettings?: PromotionSettings;
+  promotionUsage?: PromotionUsage[];
+  uploadHistory?: BatchUploadLog[];
+  scheduler?: ListingScheduler;
+  houseDistribution?: HouseDistributionState;
 };

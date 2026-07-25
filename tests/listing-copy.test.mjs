@@ -6,6 +6,7 @@ import {
   enforceListingCopy,
   fillMissingListingCopy,
   fillMissingProjectingDefaults,
+  projectingEnvironmentLabels,
   FIXED_ANNOTATION_TEXT,
   FIXED_DESCRIPTION_CTA,
   FIXED_EQUIPMENT_TEXT,
@@ -83,6 +84,8 @@ test("keeps the immoprofessional defaults and legal copy explicit", () => {
     shower: true,
     bathtub: true,
     bathroomWindow: true,
+    environmentBus: true,
+    environmentShopping: true,
   });
   assert.equal(FIXED_PROVISION_TEXT, "Das Grundstück wird über einen Drittanbieter provisionspflichtig verkauft.");
   assert.match(FIXED_ANNOTATION_TEXT, /Informationenbezüglich des Grundstückes/);
@@ -101,27 +104,55 @@ test("fills only missing projecting defaults and preserves explicit user values"
     energyClass: "B",
     commissionRequired: true,
     energyCertificateClass: "C",
+    fittedKitchen: false,
+    bathroomWindow: false,
+    environmentBus: false,
   }), {
     equipmentQuality: "GEHOBEN",
     constructionPhase: "PROJEKTIERT",
+    attic: true,
+    guestWc: true,
+    gardenUse: true,
     underfloorHeating: false,
+    electricFuel: true,
     airSourceHeatPump: false,
     kfw40: false,
     kfw55: true,
     energyClass: "B",
     commissionRequired: true,
     energyCertificateClass: "C",
+    fittedKitchen: false,
+    bathroomWindow: false,
+    environmentBus: false,
+    openKitchen: true,
+    shower: true,
+    bathtub: true,
+    environmentShopping: true,
   });
 
   assert.deepEqual(fillMissingProjectingDefaults(), {
     equipmentQuality: "GEHOBEN",
     constructionPhase: "PROJEKTIERT",
+    attic: true,
+    guestWc: true,
+    gardenUse: true,
     underfloorHeating: true,
+    electricFuel: true,
     airSourceHeatPump: true,
     kfw40: true,
     kfw55: true,
     energyClass: "A++",
     commissionRequired: false,
     energyCertificateClass: "A+",
+    fittedKitchen: true,
+    openKitchen: true,
+    shower: true,
+    bathtub: true,
+    bathroomWindow: true,
+    environmentBus: true,
+    environmentShopping: true,
   });
+
+  assert.deepEqual(projectingEnvironmentLabels(), ["Bus", "Einkaufsmöglichkeit"]);
+  assert.deepEqual(projectingEnvironmentLabels({ environmentBus: false }), ["Einkaufsmöglichkeit"]);
 });

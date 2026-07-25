@@ -6,7 +6,7 @@ import { parseAddressWorkbookRows, parseGermanNumber } from "../app/lib/address-
 const headers = [
   "Benutzer", "Projektname", "Straße", "Hausnummer", "PLZ", "Ort", "Ortsteil",
   "Grundstücksfläche m²", "Grundstückspreis €", "Nebenkosten €", "Lagefakten",
-  "Verkehr & Erreichbarkeit", "Familie & Versorgung", "Natur & Freizeit", "Hinweise",
+  "Verkehr & Erreichbarkeit", "Familie & Versorgung", "Natur & Freizeit",
 ];
 
 test("imports Fabian and Pascal addresses below introductory rows", () => {
@@ -16,7 +16,7 @@ test("imports Fabian and Pascal addresses below introductory rows", () => {
     ["Eine Zeile pro Grundstück"],
     [],
     headers,
-    ["Fabian", "Bergstraße", "Bergstraße", "12", 1234, "Schulzendorf", "", 625, "185.000,50", "25.000", "ruhig", "Bus", "Kita", "See", "Bauträgerbindung"],
+    ["Fabian", "Bergstraße", "Bergstraße", "12", 1234, "Schulzendorf", "", 625, "185.000,50", "25.000", "ruhig", "Bus", "Kita", "See"],
     ["Pascal", "", "Dorfstraße", "7a", "15711", "Königs Wusterhausen", "Zernsdorf", 700, 210000, 30000],
   ], [], () => `address-${++id}`);
 
@@ -27,6 +27,9 @@ test("imports Fabian and Pascal addresses below introductory rows", () => {
   assert.equal(result.projects[0].plotArea, 625);
   assert.equal(result.projects[0].plotPrice, 185000.5);
   assert.equal(result.projects[0].selectedHouseIds.length, 0);
+  assert.equal(result.projects[0].listingGroup.variants.length, 4);
+  assert.ok(result.projects[0].listingGroup.variants.every((variant) => variant.role === "variant"));
+  assert.equal(result.projects[0].listingGroup.automation.automaticDeletionEnabled, false);
   assert.equal(result.projects[1].owner, "pascal");
   assert.equal(result.projects[1].name, "Dorfstraße 7a, 15711 Königs Wusterhausen");
   assert.deepEqual(result.errors, []);

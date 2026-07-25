@@ -41,7 +41,6 @@ const project = {
   transportFacts: "",
   familyFacts: "",
   natureFacts: "",
-  notes: "",
   selectedHouseIds: [house.id],
   listings: [],
   createdAt: "2026-07-23T00:00:00.000Z",

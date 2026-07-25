@@ -313,7 +313,6 @@ export function generateListingTexts(
       additionalCosts,
       funding,
       imageDisclaimer,
-      project.notes.trim() ? sentence(withoutConfiguredStreet(project.notes, project.street)) : null,
       "Gute Beratung ist entscheidend für den Erfolg. Gemeinsam analysieren wir Vorstellungen, Wünsche und Bedürfnisse, damit Haus, Grundstück und Finanzierung zueinander passen.",
       otherContact,
     ]),

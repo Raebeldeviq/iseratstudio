@@ -17,6 +17,11 @@ Beim ersten Start werden die exakt im Lockfile festgeschriebenen Pakete
 installiert und die lokale Produktionsfassung gebaut. Laufzeitprotokolle liegen
 ausschließlich im Unterordner `work`.
 
+Die gebaute Fassung wird anschließend durch den schlanken lokalen
+`production-server.mjs` ausgeliefert. Dadurch bleibt der tägliche Start auch mit
+der großen integrierten Medienbibliothek schnell; ein vollständiger Neuaufbau
+erfolgt nur, wenn sich relevante Quelldateien geändert haben.
+
 Bei einem neuen Git-Checkout müssen die Originalbilder einmalig mit Git LFS
 geladen werden:
 
@@ -38,8 +43,9 @@ mehr erforderlich.
    Auszeichnungen, Vertrauensmotiv und QR-Abschluss. Eine nicht eindeutige
    Hausversion oder ein fehlender Grundriss blockiert die Übernahme, statt eine
    möglicherweise falsche Datei zu verwenden.
-2. Unter **Adresse & Auswahl** Grundstücksdaten erfassen und bis zu vier
-   Haustypen auswählen. Fabian und Pascal besitzen getrennte Adressansichten;
+2. Unter **Adresse & Auswahl** Grundstücksdaten erfassen, beliebig viele
+   Adressen markieren und einen zentralen Hauspool festlegen. Die gewichtete
+   Vorschau verteilt pro Grundstück genau vier unterschiedliche Häuser. Fabian und Pascal besitzen getrennte Adressansichten;
    einzelne Adressen können gespeichert oder gesammelt per Excel importiert
    werden. Importierte Adressen werden offline aus PLZ und Ort um Bundesland
    sowie Landkreis ergänzt, entsprechend gruppiert und innerhalb der Gruppen
@@ -53,8 +59,11 @@ mehr erforderlich.
    und FTPS-Zertifikat geprüft.
 4. Texte erzeugen, anschließend unter **Texte & Vorschau** fachlich und rechtlich
    kontrollieren.
-5. Unter **Export & Upload** die gewünschten Inserate einzeln auswählen und erst
-   nach der Zusammenfassung bestätigen. Alternativ nur ein OpenImmo-ZIP laden.
+5. Unter **Adresse & Auswahl** Häuser einzeln austauschen, fixieren,
+   grundstücksbezogen ausschließen oder neu verteilen und die geprüfte
+   Vierer-Vorschau übernehmen. Unter
+   **Export & Upload** Reihenfolge, Hausvarianten, Aktionsbild, Status,
+   Gesamtzahl und geschätzte Laufzeit prüfen und den Sammel-Upload bestätigen.
 
 Der Import erstellt Entwürfe. Adressfreigabe und Portalweitergabe sind im
 OpenImmo-Paket deaktiviert. Die tatsächliche Veröffentlichung bleibt eine
@@ -73,8 +82,8 @@ Unter **Haustypen** stehen 18 vollständige Vorlagen bereit:
 Jede Vorlage enthält die festgelegte Bildfolge mit beschriftetem Titelbild,
 sechs unterschiedlichen Innenraumkategorien, emotionalem Catch,
 versionsgenauen Grundrissen, Auszeichnungen, Vertrauensmotiv und QR-Abschluss.
-Das optionale zentrale Aktionsbild bleibt unverändert nutzbar und wird beim
-Export vor diese Folge gesetzt.
+Mehrere optionale Aktionsbilder können zentral verwaltet und beim Export
+adressbezogen rotiert vor diese Folge gesetzt werden.
 
 Auf einem frischen Mac installiert der Startknopf diesen neutralen Katalog
 automatisch aus den eingebauten Medien. Existiert bereits ein lokaler Katalog,
@@ -165,6 +174,108 @@ Lokale Daten liegen unter:
 
 `~/Library/Application Support/Fabian-Pascal Inseratestudio`
 
+## Dynamisches Inseratsmanagement und sichere Variantenrotation
+
+Jede neue oder aus Excel importierte Adresse besitzt eine persistente
+Inseratsgruppe mit maximal vier gleichzeitig aktiven, unterschiedlichen
+Häusern. Der zentrale Hauspool selbst besitzt keine feste Obergrenze und dient
+sowohl der Ersterstellung als auch allen späteren Rotationen. Bestehende
+Datenstände werden beim Laden verlustarm in das aktuelle Schema migriert;
+überzählige Altvarianten werden nicht als neue aktive Inserate übernommen.
+
+Jede Variante speichert ID, Projektbezug, Reihenfolge, Freigabe, vollständigen
+Haus-Snapshot, Bild- und Grundrissreferenzen sowie einen kompletten
+Inseratentwurf. Preis, Wohnfläche, Zimmer, Energieangaben, Texte und Bilder
+werden gemeinsam geprüft und nie voneinander losgelöst rotiert.
+
+Die kleinste Prozesseinheit ist das einzelne Inserat. Dessen Sperren,
+Health Score, Benutzerpriorität, letzter und nächster Termin sowie
+Verarbeitungs-Lease werden unabhängig gespeichert. Der zentrale gewichtete
+Rotationsservice wird gleichermaßen von Vorschau, Inseratsmanager und Scheduler
+verwendet. Der Scheduler verteilt fällige Inserate über unterschiedliche
+Adressen und beachtet Tageslimit, Adresslimit,
+Mindestabstand, Erstwartezeit, Intervall, Wochentage und Zeitfenster.
+
+Der Inseratsmanager zeigt alle Adressen gemeinsam und erlaubt Dry Run, lokale
+Entwurfserstellung, Priorisierung, Pause, Premium-Sperre, Löschsperre, Modus
+und ein gezielt ausgewähltes Ersatzhaus aus dem zentralen Pool. Fehler eines
+Inserats werden isoliert protokolliert und stoppen den übrigen Tageslauf nicht.
+
+Die Hausauswahl ist gewichtet. Selten verwendete Häuser, lange nicht genutzte
+Häuser und Häuser, die auf dem konkreten Grundstück noch nie vorkamen, werden
+bevorzugt. Hohe parallele Nutzung, häufige Vierer-Kombinationen, die unmittelbar
+vorherige Kombination und das zuletzt entfernte Haus werden benachteiligt oder
+ausgeschlossen. Haus- und Kombinationshistorien werden lokal dauerhaft
+gespeichert. Die Gewichtungsparameter stehen zentral in
+`house-distribution.mjs`.
+
+Automatisches Löschen bleibt in Version 0.15.0 sicherheitsbedingt blockiert,
+bis Immoprofessional eine bestätigte Löschschnittstelle und einen zuverlässig
+zurücklesbaren Erfolgsstatus bereitstellt. Auswahl, Prüfung, dynamische
+Rotation, eindeutige neue Objektnummer und Entwurfserstellung sind umgesetzt;
+Dry Runs veröffentlichen und löschen grundsätzlich nichts.
+
+## Konsistenz, Idempotenz und lokale Migration
+
+Version 0.15.0 vereinheitlicht alle fachlichen Zustände auf `draft`,
+`prepared`, `scheduled`, `processing`, `published`, `blocked`, `failed`,
+`archived` und `deleted`. Ältere deutsche Statuswerte werden beim Laden
+verlustfrei in dieses Modell überführt. Feste Projektierungswerte liegen nur
+noch in `listing-copy.mjs`; bestehende Benutzereingaben werden nicht
+überschrieben, fehlende Werte werden ergänzt.
+
+Jeder Upload besitzt eine deterministische Job-ID. Der Browser verhindert
+Doppelklicks und parallele Ausführung, der lokale Helfer führt zusätzlich ein
+atomar geschriebenes Jobprotokoll mit Verarbeitungs-Lease. Bereits bestätigte
+Jobs werden nach einem Neustart nicht erneut übertragen. Pro Grundstück kann
+gleichzeitig nur ein aktives Inserat ein Aktionsbild tragen.
+
+Beim Laden führt die App eine idempotente, sichere Datenmigration aus. Sie
+entfernt das abgeschaffte Feld „Zusätzliche Hinweise“, vereinheitlicht Status,
+begrenzt Logs, löst abgelaufene Sperren und deaktiviert überzählige aktive
+Hausvarianten nach dem vierten Platz. Widersprüchliche produktive Dubletten
+werden nicht automatisch gelöscht. Der lokale Helfer führt dieselbe Migration
+vor dem Serverstart und vor jeder Katalogsicherung aus, schreibt den Bestand
+atomar und legt einmalig eine Vor-Migrationssicherung an. Alle verwalteten
+Aktionsbilder werden separat gesichert. Das Prüfskript
+`scripts/audit-studio-catalog.mjs` arbeitet standardmäßig im Dry Run und darf
+eine bereinigte Kopie nur mit explizitem `--apply --output` erzeugen.
+
+Die Excel-Importvorlage enthält 14 fachliche Spalten und kein Hinweisfeld mehr.
+Grundstücks- und Bilddaten bleiben lokal; es existiert in dieser Mac-Version
+keine Supabase-, SQL- oder Vercel-Datenbankmigration.
+
+## Mehrfachauswahl und Sammel-Upload
+
+Die Adressauswahl unter **Projektierungen erstellen** ist dynamisch und besitzt
+keine feste Obergrenze. Für jede markierte Adresse erzeugt die App aus dem
+zentralen Hauspool eine gewichtete, bearbeitbare Vierer-Kombination. Beim
+Übernehmen lädt sie Grundstücksdaten und vollständige Hausvarianten, ergänzt
+ausschließlich fehlende Standardwerte, erzeugt die Inseratentwürfe und ordnet
+die vorhandenen Hausbilder zu. Ein Pool mit weniger als vier aktiven,
+freigegebenen und vollständigen Häusern blockiert die Vorbereitung eindeutig.
+
+Die Uploadübersicht zeigt jede Adresse mit Inseratanzahl, Hausvarianten,
+Aktionsbild, Status, Gesamtzahl und Laufzeitschätzung. Der eigentliche Upload
+läuft strikt sequenziell: Adresse für Adresse und darin Inserat für Inserat.
+Ein Paket wird vollständig abgeschlossen, bevor das nächste beginnt. Fehler
+werden je Inserat gespeichert und angezeigt; die übrige Warteschlange läuft
+weiter.
+
+Die Aktionsbildverwaltung unterstützt beliebig viele Motive mit Vorschau,
+Dateiname, Aktivstatus, Priorität, Reihenfolge, letzter Verwendung und
+Verwendungszähler. Automatische Rotation, Zufall und manuelle Auswahl sind
+separat schaltbar. Pro Adresse wird technisch höchstens einem Inserat ein
+Aktionsbild zugeordnet. Nach einem erfolgreichen Upload werden Motiv,
+Inserat, Objektnummer und Zeitpunkt in der lokalen Nutzungshistorie gespeichert.
+Diese Historie steuert bei späteren Aktualisierungen die nächste Kombination.
+
+Für jedes bearbeitete Inserat speichert die App zusätzlich Projekt-ID,
+Adresssnapshot, Objektnummer, Hausvariante, Aktionsbild, Erstellungszeit,
+letzte und nächste Aktualisierung, Status und Fehler. Die Daten verbleiben in
+der bestehenden Browser- und macOS-Sicherung; es wurde keine neue Cloud- oder
+Datenbankabhängigkeit eingeführt.
+
 ## OpenImmo und Immoprofessional
 
 Der Export verwendet OpenImmo 1.2.7 und überträgt jedes ausgewählte Inserat als
@@ -173,8 +284,11 @@ Objekt-ID für kontrollierte Upserts. Automatisch
 gesetzt werden Wohngebiet, Nutzfläche, Dachboden, Gäste-WC, Gartennutzung,
 Fußbodenheizung, Elektro/Luft-Wärmepumpe, KFW40 und KFW55 sowie Energieklasse
 A++. Küche wird als Einbauküche und offen übertragen; beim Bad werden Dusche,
-Wanne und Fenster markiert. Adressfreigabe und allgemeine Weitergabe bleiben
-deaktiviert.
+Wanne und Fenster markiert. Als Umgebung werden Bus und Einkaufsmöglichkeit
+ergänzt. Diese Ausstattungswerte stammen aus der gemeinsamen
+Projektierungs-Konfiguration: Fehlende Angaben erhalten den Standard,
+vorhandene Benutzerwerte werden nicht überschrieben. Adressfreigabe und
+allgemeine Weitergabe bleiben deaktiviert.
 
 ## Verbindliche Inserattexte
 

@@ -1,3 +1,8 @@
+import { normalizeHouseDistribution } from "./house-distribution.mjs";
+import { createListingGroup } from "./listing-groups.mjs";
+import { HOUSE_ENERGY_DEFAULTS } from "./listing-copy.mjs";
+import { createListingScheduler } from "./listing-scheduler.mjs";
+
 const DEFAULT_ARCHITECTURE =
   "Ein klar gegliederter Grundriss verbindet offene Gemeinschaftsbereiche mit gut nutzbaren privaten Rückzugsräumen";
 const DEFAULT_EQUIPMENT =
@@ -10,6 +15,7 @@ function uid() {
 export function createEmptyHouse(index = 1) {
   return {
     id: uid(),
+    approved: true,
     name: index === 1 ? "Zweifamilienhaus – Muster" : `Haustyp ${index}`,
     houseType: index === 1 ? "Zweifamilienhaus" : "Einfamilienhaus",
     livingArea: index === 1 ? 242 : 150,
@@ -20,9 +26,7 @@ export function createEmptyHouse(index = 1) {
     housePrice: 0,
     constructionYear: new Date().getFullYear() + 1,
     energyDemand: 18,
-    energyClass: "A++",
-    heatingType: "Fußbodenheizung mit Luft-Wasser-Wärmepumpe",
-    energySource: "Umweltwärme und Strom",
+    ...HOUSE_ENERGY_DEFAULTS,
     architecture: DEFAULT_ARCHITECTURE,
     equipmentHighlights: DEFAULT_EQUIPMENT,
     useStandardPackage: true,
@@ -31,8 +35,9 @@ export function createEmptyHouse(index = 1) {
 }
 
 export function createEmptyProject(owner = "fabian") {
+  const id = uid();
   return {
-    id: uid(),
+    id,
     owner,
     name: `Neues Adressprojekt ${new Date().toLocaleDateString("de-DE")}`,
     street: "",
@@ -49,9 +54,9 @@ export function createEmptyProject(owner = "fabian") {
     transportFacts: "",
     familyFacts: "",
     natureFacts: "",
-    notes: "",
     selectedHouseIds: [],
     listings: [],
+    listingGroup: createListingGroup(id),
     createdAt: new Date().toISOString(),
   };
 }
@@ -68,12 +73,26 @@ export function createDefaultProvider() {
 }
 
 export function createInitialStudioState({ houses } = {}) {
+  const initialHouses = houses || [createEmptyHouse(1)];
+  const initialProjects = [createEmptyProject("fabian")];
   return {
     version: 1,
-    houses: houses || [createEmptyHouse(1)],
-    projects: [createEmptyProject("fabian")],
+    houses: initialHouses,
+    projects: initialProjects,
     provider: createDefaultProvider(),
     promotionImage: null,
     promotionImageEnabled: false,
+    promotionImages: [],
+    promotionSettings: {
+      enabled: false,
+      automaticRotation: true,
+      randomSelection: false,
+      manualSelection: false,
+      manualImageId: "",
+    },
+    promotionUsage: [],
+    uploadHistory: [],
+    scheduler: createListingScheduler(),
+    houseDistribution: normalizeHouseDistribution({}, initialHouses, initialProjects),
   };
 }

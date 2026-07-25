@@ -50,7 +50,9 @@ test("removes the exact house number before building the AI source data", () => 
   assert.equal("street" in source.projectWithTownOnly, false);
   assert.equal("zip" in source.projectWithTownOnly, false);
   assert.equal("houseNumber" in source.projectWithTownOnly, false);
-  assert.doesNotMatch(JSON.stringify(source), /Bergstraße|15732|27a/);
+  const { variationId: generatedVariationId, ...sourceWithoutVolatileId } = source;
+  assert.match(generatedVariationId, /^[0-9a-f-]{36}$/i);
+  assert.doesNotMatch(JSON.stringify(sourceWithoutVolatileId), /Bergstraße|15732|27a/);
 });
 
 test("uses the Responses API quality settings and a strict text schema", () => {

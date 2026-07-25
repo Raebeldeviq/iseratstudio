@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { buildImportPackage, buildOpenImmoXml, validateImportPackage } from "../app/lib/openimmo.ts";
+import { APP_VERSION } from "../app/lib/app-version.mjs";
 import {
   FIXED_ANNOTATION_TEXT,
   FIXED_EQUIPMENT_TEXT,
@@ -28,7 +29,6 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
       transportFacts: "",
       familyFacts: "",
       natureFacts: "",
-      notes: "",
       selectedHouseIds: ["house-1"],
       listings: [],
       createdAt: "2026-07-22T00:00:00.000Z",
@@ -95,11 +95,12 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
   };
   const xml = buildOpenImmoXml(input);
 
-  assert.match(xml, /senderversion="0\.10\.0"/);
+  assert.ok(xml.includes(`senderversion="${APP_VERSION}"`));
   assert.match(xml, /<openimmo_obid>FPI-TEST-1<\/openimmo_obid>/);
   assert.match(xml, /<aktion aktionart="CHANGE" timestamp="[^"]+" \/>/);
   assert.match(xml, /<bad dusche="true" wanne="true" fenster="true" \/>/);
   assert.match(xml, /<kueche ebk="true" offen="true" \/>/);
+  assert.match(xml, /<user_defined_simplefield feldname="Umgebung"><!\[CDATA\[Bus, Einkaufsmöglichkeit\]\]><\/user_defined_simplefield>/);
   assert.match(xml, /<ausstatt_kategorie WERTIGKEIT="GEHOBEN" \/>/);
   assert.match(xml, /<heizungsart fussboden="true" \/>/);
   assert.match(xml, /<befeuerung elektro="true" luftwp="true" \/>/);
@@ -121,7 +122,23 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
   assert.ok(xml.indexOf("<courtage_hinweis>") < xml.indexOf("<waehrung "));
   assert.ok(xml.indexOf("<bad ") < xml.indexOf("<kueche "));
   assert.ok(xml.indexOf("<gartennutzung>") < xml.indexOf("<energietyp "));
+  assert.ok(xml.indexOf("</zustand_angaben>") < xml.indexOf("<infrastruktur>"));
+  assert.ok(xml.indexOf("<infrastruktur>") < xml.indexOf("<freitexte>"));
   assert.ok(xml.indexOf("Aktuelles Angebot für dein neues Zuhause") < xml.indexOf("Bild 1"));
+  const secondListing = {
+    ...input.listings[0],
+    id: "listing-2",
+    externalId: "FPI-TEST-2",
+  };
+  const perListingXml = buildOpenImmoXml({
+    ...input,
+    listings: [input.listings[0], secondListing],
+    promotionImage: null,
+    promotionImageEnabled: false,
+    promotionImagesByListingId: { [input.listings[0].id]: input.promotionImage },
+  });
+  assert.equal(perListingXml.match(/Aktuelles Angebot für dein neues Zuhause/g)?.length, 1);
+  assert.ok(perListingXml.indexOf("Aktuelles Angebot für dein neues Zuhause") < perListingXml.indexOf("FPI-TEST-2"));
   const packageResult = await buildImportPackage(input);
   assert.match(packageResult.filename, /testprojekt-testhaus-fpi-test-1-\d{4}-\d{2}-\d{2}\.zip/);
   assert.deepEqual(validateImportPackage(input), []);
@@ -148,13 +165,24 @@ test("does not overwrite explicit projecting values during export", () => {
       projectingSettings: {
         equipmentQuality: "LUXUS",
         constructionPhase: "ERSTBEZUG",
+        attic: false,
+        guestWc: false,
+        gardenUse: false,
         underfloorHeating: false,
+        electricFuel: false,
         airSourceHeatPump: false,
         kfw40: false,
         kfw55: false,
         energyClass: "B",
         commissionRequired: true,
         energyCertificateClass: "C",
+        fittedKitchen: false,
+        openKitchen: false,
+        shower: false,
+        bathtub: false,
+        bathroomWindow: false,
+        environmentBus: false,
+        environmentShopping: true,
       },
       texts: {
         title: "Vorhandener Titel",
@@ -204,11 +232,17 @@ test("does not overwrite explicit projecting values during export", () => {
   const xml = buildOpenImmoXml(input);
   assert.match(xml, /<ausstatt_kategorie WERTIGKEIT="LUXUS" \/>/);
   assert.match(xml, /<heizungsart fussboden="false" \/>/);
-  assert.match(xml, /<befeuerung elektro="true" luftwp="false" \/>/);
+  assert.match(xml, /<befeuerung elektro="false" luftwp="false" \/>/);
+  assert.match(xml, /<gartennutzung>false<\/gartennutzung>/);
   assert.match(xml, /<energietyp kfw40="false" kfw55="false" \/>/);
   assert.match(xml, /<zustand zustand_art="ERSTBEZUG" \/>/);
   assert.match(xml, /<wertklasse>C<\/wertklasse>/);
   assert.match(xml, /<provisionspflichtig>true<\/provisionspflichtig>/);
+  assert.match(xml, /<bad dusche="false" wanne="false" fenster="false" \/>/);
+  assert.match(xml, /<kueche ebk="false" offen="false" \/>/);
+  assert.match(xml, /<dachboden>false<\/dachboden>/);
+  assert.match(xml, /<gaestewc>false<\/gaestewc>/);
+  assert.match(xml, /<user_defined_simplefield feldname="Umgebung"><!\[CDATA\[Einkaufsmöglichkeit\]\]><\/user_defined_simplefield>/);
   assert.match(xml, /<user_defined_simplefield feldname="Energieklasse"><!\[CDATA\[B\]\]><\/user_defined_simplefield>/);
 });
 

@@ -5,7 +5,7 @@ import {
   FIXED_DESCRIPTION_CTA,
   FIXED_EQUIPMENT_TEXT,
   FIXED_OTHER_TEXT,
-  IMMOPROFESSIONAL_DEFAULTS,
+  HOUSE_ENERGY_DEFAULTS,
 } from "./listing-copy.mjs";
 
 const DEFAULT_MODEL = "gpt-5.6-luna";
@@ -83,7 +83,6 @@ function publicProject(project = {}) {
     verifiedTransportFacts: withoutPrivateLocationReferences(project.transportFacts, project),
     verifiedFamilyAndSupplyFacts: withoutPrivateLocationReferences(project.familyFacts, project),
     verifiedNatureAndLeisureFacts: withoutPrivateLocationReferences(project.natureFacts, project),
-    additionalNotes: withoutPrivateLocationReferences(project.notes, project),
   };
 }
 
@@ -99,9 +98,9 @@ function publicHouse(house = {}) {
     housePriceEuro: finiteNumber(house.housePrice),
     plannedConstructionYear: finiteNumber(house.constructionYear),
     plannedEnergyDemandKwhPerSquareMeterYear: finiteNumber(house.energyDemand),
-    plannedEnergyClass: IMMOPROFESSIONAL_DEFAULTS.energyClass,
-    plannedHeatingType: "Fußbodenheizung mit Luft-Wasser-Wärmepumpe",
-    plannedEnergySource: "Umweltwärme und Strom",
+    plannedEnergyClass: HOUSE_ENERGY_DEFAULTS.energyClass,
+    plannedHeatingType: HOUSE_ENERGY_DEFAULTS.heatingType,
+    plannedEnergySource: HOUSE_ENERGY_DEFAULTS.energySource,
     architectureAndFloorPlan: cleanString(house.architecture),
     configuredEquipmentHighlights: cleanString(house.equipmentHighlights),
     standardPackageApproved: house.useStandardPackage !== false,

@@ -18,12 +18,41 @@ import {
 import { housePriceCatalogEntries, resolveHousePrice } from "../house-price-catalog.mjs";
 import { applyConfirmedHouseModelDetails } from "../house-template-presets.mjs";
 import {
-  createDefaultProvider,
   createEmptyHouse,
   createEmptyProject,
   createInitialStudioState,
 } from "../studio-defaults.mjs";
-import { IMMOPROFESSIONAL_FTPS_HOST } from "../ftp-config.mjs";
+import {
+  IMMOPROFESSIONAL_DEFAULT_USERNAME,
+  IMMOPROFESSIONAL_FTPS_HOST,
+} from "../ftp-config.mjs";
+import {
+  addListingGroupVariant,
+  assignListingGroupVariant,
+  claimListingOperation,
+  clearListingGroupVariant,
+  listingControl,
+  listingDeletionBlockReasons,
+  moveListingGroupVariant,
+  normalizeListingGroup,
+  recordListingGroupCopy,
+  recordListingGroupFailure,
+  releaseListingOperation,
+  removeListingGroupVariant,
+  replaceListingGroupVariantListing,
+  setListingGroupVariantActive,
+  updateListingControl,
+  updateListingGroupAutomation,
+  validateListingGroupVariant,
+} from "../listing-groups.mjs";
+import {
+  listingHealthScore,
+  normalizeListingScheduler,
+  reserveSchedulerSelection,
+  runSchedulerDryRun,
+  selectSchedulerListings,
+  updateListingSchedulerSettings,
+} from "../listing-scheduler.mjs";
 import {
   fillMissingProjectingDefaults,
   fillMissingListingCopy,
@@ -34,12 +63,39 @@ import {
   FIXED_PROVISION_TEXT,
   FIXED_RECOMMENDATION_TEXT,
   FIXED_TERMS_TEXT,
+  HOUSE_ENERGY_DEFAULTS,
   IMMOPROFESSIONAL_DEFAULTS,
   isMissingProjectingValue,
 } from "../listing-copy.mjs";
 import { parseAddressWorkbookRows } from "./lib/address-import";
 import { APP_VERSION } from "./lib/app-version.mjs";
 import { buildImportPackage } from "./lib/openimmo";
+import {
+  BATCH_UPLOAD_LOG_LIMIT,
+  createBatchUploadLog,
+  createBatchUploadPlan,
+  runSequentialBatchUpload,
+} from "../batch-upload.mjs";
+import {
+  choosePromotionImage,
+  enforceSinglePromotionAssignment,
+  normalizePromotionLibrary as normalizePromotionLibraryValue,
+  recordPromotionUsage,
+} from "../promotion-images.mjs";
+import {
+  commitHouseDistributionPreviews,
+  generateWeightedDistribution,
+  generateWeightedProjectPreview,
+  HOUSES_PER_PROJECT,
+  normalizeHouseDistribution,
+  recordHouseRotation,
+  setHouseDistributionPool,
+  updateProjectHouseRules,
+  validateHousePool,
+} from "../house-distribution.mjs";
+import { planListingRotation } from "../rotation-service.mjs";
+import { cleanupStudioState } from "../data-integrity.mjs";
+import { normalizeWorkflowStatus, workflowStatusLabel, WORKFLOW_STATUS } from "../workflow-status.mjs";
 import {
   compareProjectsByRegion,
   enrichProjectWithPostalRegion,
@@ -52,17 +108,37 @@ import { completeListingTexts, generateListingTexts, totalPrice } from "./lib/te
 import { loadStudioSnapshot, saveStudioState, STORAGE_ID } from "./lib/storage";
 import type {
   AddressOwner,
+  BatchUploadLog,
   GeneratedListing,
+  HouseDistributionState,
   HouseImage,
   HouseTemplate,
   ImageRole,
+  ListingGroup,
+  ListingGroupVariant,
   ListingTexts,
+  PromotionImageAsset,
+  PromotionSettings,
+  PromotionUsage,
   ProjectInput,
+  SchedulerSettings,
   ProviderSettings,
   StudioState,
 } from "./types";
 
-type Tab = "houses" | "project" | "preview" | "settings";
+type PromotionLibraryState = {
+  promotionImage: PromotionImageAsset | null;
+  promotionImageEnabled: boolean;
+  promotionImages: PromotionImageAsset[];
+  promotionSettings: PromotionSettings;
+  promotionUsage: PromotionUsage[];
+};
+
+function normalizePromotionLibrary(value: StudioState): PromotionLibraryState {
+  return normalizePromotionLibraryValue(value) as PromotionLibraryState;
+}
+
+type Tab = "houses" | "project" | "preview" | "manager" | "settings";
 type AiModel = "gpt-5.6-luna" | "gpt-5.6-terra" | "gpt-5.6-sol";
 type FtpSecurity = "explicit" | "implicit" | "none";
 type MediaLibraryKind = "house" | "floorplan" | "interior" | "location" | "marketing";
@@ -85,6 +161,21 @@ type MediaLibraryItem = {
 };
 
 type MediaLibraryGroup = { name: string; count: number };
+
+type PromotionOverride = { imageId?: string; listingId?: string };
+
+type BatchUploadProgress = {
+  running: boolean;
+  addressIndex: number;
+  addressTotal: number;
+  listingIndex: number;
+  listingTotal: number;
+  processed: number;
+  total: number;
+  successful: number;
+  failed: number;
+  status: string;
+};
 
 const MIN_HOUSE_IMAGES = 4;
 const MAX_HOUSE_IMAGES = 14;
@@ -127,32 +218,62 @@ function looksLikeOpenAiApiKey(value: string): boolean {
 const uid = () => crypto.randomUUID();
 const newHouse = (index = 1): HouseTemplate => createEmptyHouse(index) as HouseTemplate;
 const newProject = (owner: AddressOwner = "fabian"): ProjectInput => createEmptyProject(owner) as ProjectInput;
-const defaultProvider = createDefaultProvider() as ProviderSettings;
 const initialState = (): StudioState => createInitialStudioState() as StudioState;
 
-function normalizeMandatoryListingStandards(state: StudioState): StudioState {
+function createVariantListing(
+  house: HouseTemplate,
+  project: ProjectInput,
+  provider: ProviderSettings,
+  variantId: string,
+  order: number,
+  previous?: GeneratedListing | null,
+): GeneratedListing {
+  const version = Math.max(1, previous?.version || 1);
+  return {
+    id: previous?.id || uid(),
+    externalId: previous?.externalId
+      || `FPI-${project.id.slice(0, 8)}-V${order}-${variantId.slice(0, 6)}`.toUpperCase(),
+    templateId: house.id,
+    templateName: house.name,
+    price: totalPrice(house, project),
+    texts: completeListingTexts(
+      house,
+      project,
+      provider,
+      previous?.texts,
+      version,
+    ),
+    version,
+    status: normalizeWorkflowStatus(previous?.status, WORKFLOW_STATUS.DRAFT),
+    statusMessage: previous?.statusMessage || "Entwurf",
+    projectingSettings: fillMissingProjectingDefaults(previous?.projectingSettings),
+    listingGroupVariantId: variantId,
+    listingOrigin: "group-source",
+  };
+}
+
+function normalizeMandatoryListingStandards(inputState: StudioState): StudioState {
+  const state = cleanupStudioState(inputState, { apply: true }).state as StudioState;
+  const promotion = normalizePromotionLibrary(state);
   const houses = state.houses.map((storedHouse) => {
     const house = applyConfirmedHouseModelDetails(storedHouse);
     return {
       ...house,
+      approved: house.approved !== false,
       energyClass: isMissingProjectingValue(house.energyClass)
-        ? IMMOPROFESSIONAL_DEFAULTS.energyClass
+        ? HOUSE_ENERGY_DEFAULTS.energyClass
         : house.energyClass,
       heatingType: isMissingProjectingValue(house.heatingType)
-        ? "Fußbodenheizung mit Luft-Wasser-Wärmepumpe"
+        ? HOUSE_ENERGY_DEFAULTS.heatingType
         : house.heatingType,
       energySource: isMissingProjectingValue(house.energySource)
-        ? "Umweltwärme und Strom"
+        ? HOUSE_ENERGY_DEFAULTS.energySource
         : house.energySource,
     };
   });
   const houseById = new Map(houses.map((house) => [house.id, house]));
-  return {
-    ...state,
-    houses,
-    projects: state.projects.map((project) => ({
-      ...project,
-      listings: project.listings.map((listing) => {
+  const projects = state.projects.map((project) => {
+      const listings = project.listings.map((listing) => {
         const house = houseById.get(listing.templateId);
         if (!house) return listing;
         const fallbackTexts = generateListingTexts(
@@ -170,17 +291,78 @@ function normalizeMandatoryListingStandards(state: StudioState): StudioState {
             { house, project },
           ) as ListingTexts,
         };
-      }),
-    })),
+      });
+      let listingGroup = normalizeListingGroup(project.listingGroup, project.id) as ListingGroup;
+      const assignedIds = listingGroup.variants
+        .filter((variant) => variant.templateId)
+        .map((variant) => variant.templateId);
+      const selectedIds = (assignedIds.length ? assignedIds : project.selectedHouseIds).slice(0, HOUSES_PER_PROJECT);
+      while (listingGroup.variants.length < selectedIds.length) {
+        listingGroup = addListingGroupVariant(listingGroup) as ListingGroup;
+      }
+
+      for (let index = 0; index < selectedIds.length; index += 1) {
+        const house = houseById.get(selectedIds[index]);
+        if (!house) continue;
+        const variant = listingGroup.variants[index];
+        const previous = variant.listing
+          || listings.find((listing) => listing.templateId === house.id && listing.listingOrigin !== "rotation-copy")
+          || null;
+        listingGroup = assignListingGroupVariant(
+          listingGroup,
+          index + 1,
+          house,
+          createVariantListing(house, project, state.provider, variant.id, index + 1, previous),
+        );
+      }
+
+      for (const variant of listingGroup.variants) {
+        if (!variant.templateId || !variant.listing) continue;
+        const house = houseById.get(variant.templateId);
+        if (!house || house.approved === false) continue;
+        listingGroup = assignListingGroupVariant(
+          listingGroup,
+          variant.order,
+          house,
+          createVariantListing(house, project, state.provider, variant.id, variant.order, variant.listing),
+          { active: variant.order <= HOUSES_PER_PROJECT },
+        );
+      }
+
+      const sourceListings = listingGroup.variants
+        .filter((variant) => variant.active && variant.listing)
+        .slice(0, HOUSES_PER_PROJECT)
+        .map((variant) => variant.listing as GeneratedListing);
+      const rotationCopies = listings.filter((listing) => listing.listingOrigin === "rotation-copy");
+      return {
+        ...project,
+        selectedHouseIds: listingGroup.variants
+          .filter((variant) => variant.active && variant.templateId)
+          .slice(0, HOUSES_PER_PROJECT)
+          .map((variant) => variant.templateId),
+        listings: [...sourceListings, ...rotationCopies],
+        listingGroup: listingGroup as ListingGroup,
+      };
+    });
+  return {
+    ...state,
+    ...promotion,
+    uploadHistory: Array.isArray(state.uploadHistory) ? state.uploadHistory.slice(-BATCH_UPLOAD_LOG_LIMIT) : [],
+    houses,
+    scheduler: normalizeListingScheduler(state.scheduler),
+    projects,
+    houseDistribution: normalizeHouseDistribution(state.houseDistribution, houses, projects) as HouseDistributionState,
   };
 }
 
 function effectiveHouseImages(state: StudioState, house: HouseTemplate): HouseImage[] {
   const orderedImages = orderHouseImages(house.images);
-  if (!state.promotionImageEnabled || !state.promotionImage) return orderedImages;
+  const promotion = normalizePromotionLibrary(state);
+  const activePromotionImage = promotion.promotionImages.find((image) => image.active);
+  if (!promotion.promotionSettings.enabled || !activePromotionImage) return orderedImages;
   return [
-    { ...state.promotionImage, role: "promotion" },
-    ...orderedImages.filter((image) => image.id !== state.promotionImage?.id),
+    { ...activePromotionImage, role: "promotion" },
+    ...orderedImages.filter((image) => image.id !== activePromotionImage.id),
   ];
 }
 
@@ -190,6 +372,12 @@ function euro(value: number): string {
     currency: "EUR",
     maximumFractionDigits: 0,
   }).format(value || 0);
+}
+
+function localDateTime(value: string): string {
+  if (!value) return "–";
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? "–" : parsed.toLocaleString("de-DE");
 }
 
 function projectSelectionLabel(project: ProjectInput): string {
@@ -371,11 +559,14 @@ async function runWithConcurrency<T>(
 }
 
 function catalogWithoutImageData(state: StudioState): StudioState {
+  const promotion = normalizePromotionLibrary(state);
   return {
     ...state,
-    promotionImage: state.promotionImage
-      ? { ...state.promotionImage, dataUrl: "" }
+    ...promotion,
+    promotionImage: promotion.promotionImage
+      ? { ...promotion.promotionImage, dataUrl: "" }
       : null,
+    promotionImages: promotion.promotionImages.map((image) => ({ ...image, dataUrl: "" })),
     houses: state.houses.map((house) => ({
       ...house,
       images: house.images.map((image) => ({ ...image, dataUrl: "" })),
@@ -391,7 +582,7 @@ async function saveDeviceCatalogSnapshot(
   const sessionId = uid();
   const allImages = [
     ...state.houses.flatMap((house) => house.images),
-    ...(state.promotionImage ? [state.promotionImage] : []),
+    ...normalizePromotionLibrary(state).promotionImages,
   ];
   const imageById = new Map(allImages.map((image) => [image.id, image]));
   const startResponse = await helperFetch("/catalog-v2/start", {
@@ -472,7 +663,7 @@ async function loadDeviceCatalogSnapshot(): Promise<{
       v2ManifestFound = true;
       const imageIds = [...new Set([
         ...manifestData.state.houses.flatMap((house) => house.images.map((image) => image.id)),
-        ...(manifestData.state.promotionImage ? [manifestData.state.promotionImage.id] : []),
+        ...normalizePromotionLibrary(manifestData.state).promotionImages.map((image) => image.id),
       ])];
       const dataUrlById = new Map<string, string>();
       await runWithConcurrency(imageIds, async (imageId) => {
@@ -480,14 +671,17 @@ async function loadDeviceCatalogSnapshot(): Promise<{
         if (!imageResponse.ok) throw new Error("Ein Bild der Gerätesicherung konnte nicht geladen werden.");
         dataUrlById.set(imageId, await blobDataUrl(await imageResponse.blob()));
       });
+      const manifestPromotion = normalizePromotionLibrary(manifestData.state);
+      const promotionImages = manifestPromotion.promotionImages.map((image) => ({
+        ...image,
+        dataUrl: dataUrlById.get(image.id) ?? "",
+      }));
       const state: StudioState = {
         ...manifestData.state,
-        promotionImage: manifestData.state.promotionImage
-          ? {
-              ...manifestData.state.promotionImage,
-              dataUrl: dataUrlById.get(manifestData.state.promotionImage.id) ?? "",
-            }
-          : null,
+        ...manifestPromotion,
+        promotionImages,
+        promotionImage: promotionImages[0] || null,
+        promotionImageEnabled: manifestPromotion.promotionSettings.enabled && Boolean(promotionImages[0]),
         houses: manifestData.state.houses.map((house) => ({
           ...house,
           images: house.images.map((image) => ({
@@ -529,13 +723,28 @@ export default function InseratStudio() {
   const [activeOwner, setActiveOwner] = useState<AddressOwner>("fabian");
   const [notice, setNotice] = useState<string | null>(null);
   const [ftpHost, setFtpHost] = useState(IMMOPROFESSIONAL_FTPS_HOST);
-  const [ftpUser, setFtpUser] = useState("");
+  const [ftpUser, setFtpUser] = useState(IMMOPROFESSIONAL_DEFAULT_USERNAME);
   const [ftpPassword, setFtpPassword] = useState("");
   const [ftpPath, setFtpPath] = useState("/");
   const [ftpSecure, setFtpSecure] = useState<FtpSecurity>("explicit");
   const [hasStoredOpenAiKey, setHasStoredOpenAiKey] = useState(false);
   const [hasStoredFtpCredentials, setHasStoredFtpCredentials] = useState(false);
   const [excludedUploadIds, setExcludedUploadIds] = useState<string[]>([]);
+  const [selectedBatchProjectIds, setSelectedBatchProjectIds] = useState<string[]>([]);
+  const [promotionOverrides, setPromotionOverrides] = useState<Record<string, PromotionOverride>>({});
+  const [batchItemStatuses, setBatchItemStatuses] = useState<Record<string, { status: string; error: string }>>({});
+  const [batchUploadProgress, setBatchUploadProgress] = useState<BatchUploadProgress>({
+    running: false,
+    addressIndex: 0,
+    addressTotal: 0,
+    listingIndex: 0,
+    listingTotal: 0,
+    processed: 0,
+    total: 0,
+    successful: 0,
+    failed: 0,
+    status: "Noch nicht gestartet",
+  });
   const [uploading, setUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState("");
   const [helperOnline, setHelperOnline] = useState(false);
@@ -567,6 +776,13 @@ export default function InseratStudio() {
   const [importingMedia, setImportingMedia] = useState(false);
   const [importingAddresses, setImportingAddresses] = useState(false);
   const [addressImportReport, setAddressImportReport] = useState<string[]>([]);
+  const [groupOperationRunning, setGroupOperationRunning] = useState(false);
+  const [lastGroupDryRun, setLastGroupDryRun] = useState<{
+    ok: boolean;
+    variantName: string;
+    issues: string[];
+  } | null>(null);
+  const [managerVariantOverrides, setManagerVariantOverrides] = useState<Record<string, string>>({});
 
   useEffect(() => {
     let releaseLock: (() => void) | undefined;
@@ -636,6 +852,7 @@ export default function InseratStudio() {
         setState(next);
         setActiveHouseId(next.houses[0]?.id ?? "");
         setActiveProjectId(next.projects[0]?.id ?? "");
+        setSelectedBatchProjectIds(next.projects[0]?.id ? [next.projects[0].id] : []);
         setActiveOwner(projectOwner(next.projects[0]));
         setSaveLabel(selected?.source === "device" ? "Aus lokaler macOS-Sicherung geladen" : "Doppelt lokal gespeichert");
       })
@@ -684,13 +901,14 @@ export default function InseratStudio() {
               : "gpt-5.6-luna",
           );
           setFtpHost(data.credentials.ftpHost || IMMOPROFESSIONAL_FTPS_HOST);
-          setFtpUser(data.credentials.ftpUser ?? "");
+          setFtpUser(data.credentials.ftpUser || IMMOPROFESSIONAL_DEFAULT_USERNAME);
           setFtpPassword("");
           setFtpPath(data.credentials.ftpPath || "/");
           setFtpSecure(data.credentials.ftpSecure || "explicit");
           setHasStoredFtpCredentials(Boolean(data.credentials.hasFtpCredentials));
           setCredentialSaveLabel("Zugangsdaten wurden verschlüsselt geladen");
         } else {
+          setFtpUser(IMMOPROFESSIONAL_DEFAULT_USERNAME);
           setCredentialSaveLabel("Neue Zugangsdaten werden automatisch verschlüsselt gespeichert");
         }
         setCredentialsReady(true);
@@ -767,13 +985,61 @@ export default function InseratStudio() {
   const activeProject =
     ownerProjects.find((project) => project.id === activeProjectId) ??
     ownerProjects[0];
-
-  const selectedHouses = state.houses.filter((house) =>
-    activeProject?.selectedHouseIds.includes(house.id),
+  const activeListingGroup = activeProject
+    ? normalizeListingGroup(activeProject.listingGroup, activeProject.id) as ListingGroup
+    : null;
+  const promotionLibrary = normalizePromotionLibrary(state);
+  const approvedHouses = state.houses.filter((house) => house.approved !== false);
+  const houseDistribution = normalizeHouseDistribution(
+    state.houseDistribution,
+    state.houses,
+    state.projects,
+  ) as HouseDistributionState;
+  const housePoolValidation = validateHousePool(houseDistribution, state.houses, {
+    projects: state.projects,
+  });
+  const eligiblePoolHouseIds = new Set(housePoolValidation.eligibleHouseIds as string[]);
+  const rejectedPoolHouses = new Map(
+    (housePoolValidation.rejected as Array<{ houseId: string; issues: string[] }>).map((entry) => [entry.houseId, entry.issues]),
   );
+  const houseDistributionByProject = new Map(
+    houseDistribution.projects.map((record) => [record.projectId, record]),
+  );
+  const listingVariants = activeListingGroup?.variants.slice(0, HOUSES_PER_PROJECT) ?? [];
+  const selectedVariantEntries = listingVariants
+    .filter((variant) => variant.active && variant.templateId)
+    .flatMap((variant) => {
+      const house = state.houses.find((item) => item.id === variant.templateId);
+      return house ? [{ variant, house }] : [];
+    });
+  const selectedHouses = selectedVariantEntries.map((entry) => entry.house);
+  const activeRotationSourceListing = activeProject?.listings.find((listing) => {
+    if (!activeListingGroup) return false;
+    const control = listingControl(activeListingGroup, listing);
+    return control.automaticUpdateEnabled && !listing.rotationArchivedAt;
+  }) ?? null;
+  const activeRotationPlan = activeProject && activeRotationSourceListing
+    ? planListingRotation(state, activeProject.id, activeRotationSourceListing.id, {
+        project: activeProject,
+        listing: activeRotationSourceListing,
+        group: activeListingGroup,
+        distribution: houseDistribution,
+        distributionValidation: housePoolValidation,
+      })
+    : null;
+  const currentRotationHouse = activeRotationSourceListing
+    ? state.houses.find((house) => house.id === activeRotationSourceListing.templateId) ?? null
+    : null;
+  const nextRotationHouse = activeRotationPlan?.house ?? null;
+  const premiumLockCount = activeListingGroup?.listingControls.filter(
+    (control) => control.premiumPlacement,
+  ).length ?? 0;
   const secondStepTextPreviews = activeProject
-    ? selectedHouses.map((house) => {
-        const listing = activeProject.listings.find((item) => item.templateId === house.id);
+    ? listingVariants.filter((variant) => variant.active && variant.templateId).flatMap((variant) => {
+        const house = state.houses.find((item) => item.id === variant.templateId);
+        if (!house) return [];
+        const listing = variant.listing
+          || activeProject.listings.find((item) => item.listingGroupVariantId === variant.id);
         return {
           house,
           texts: completeListingTexts(
@@ -786,14 +1052,44 @@ export default function InseratStudio() {
         };
       })
     : [];
-  const selectedUploadIds = activeProject?.listings
-    .map((listing) => listing.id)
-    .filter((id) => !excludedUploadIds.includes(id)) ?? [];
+  const effectiveBatchProjectIds = selectedBatchProjectIds
+    .filter((id) => state.projects.some((project) => project.id === id));
+  const batchOverviewPlan = createBatchUploadPlan(state, effectiveBatchProjectIds, {
+    promotionOverrides,
+  });
+  const batchPlan = createBatchUploadPlan(state, effectiveBatchProjectIds, {
+    excludedListingIds: excludedUploadIds,
+    promotionOverrides,
+  });
+  const selectedUploadIds = batchPlan.addresses.flatMap((address: { items: Array<{ listingId: string }> }) =>
+    address.items.map((item) => item.listingId));
+  const scheduler = normalizeListingScheduler(state.scheduler) as NonNullable<StudioState["scheduler"]>;
+  const managedListings = state.projects.flatMap((project) => {
+    const group = normalizeListingGroup(project.listingGroup, project.id) as ListingGroup;
+    return project.listings.map((listing) => {
+      const rotationPlan = planListingRotation(state, project.id, listing.id, {
+        project,
+        listing,
+        group,
+        distribution: houseDistribution,
+        distributionValidation: housePoolValidation,
+      });
+      return {
+        project,
+        group,
+        listing,
+        control: listingControl(group, listing),
+        health: listingHealthScore(group, listing, scheduler.settings),
+        rotationPlan,
+        nextHouse: state.houses.find((house) => house.id === rotationPlan.houseId) || null,
+      };
+    });
+  }).sort((left, right) => right.health.score - left.health.score || left.listing.id.localeCompare(right.listing.id));
 
   const saveHousesNow = async () => {
     const savedAt = new Date().toISOString();
     const imageCount = state.houses.reduce((sum, house) => sum + house.images.length, 0)
-      + (state.promotionImage ? 1 : 0);
+      + normalizePromotionLibrary(state).promotionImages.length;
     setSavingHouses(true);
     try {
       await saveStudioState(state, savedAt);
@@ -876,6 +1172,12 @@ export default function InseratStudio() {
 
   const removeHouse = () => {
     if (!activeHouse || state.houses.length === 1) return;
+    const referencedProjects = state.projects.filter((project) =>
+      project.listingGroup?.variants?.some((variant) => variant.templateId === activeHouse.id));
+    if (referencedProjects.length) {
+      setNotice(`Der Haustyp „${activeHouse.name}“ wird noch in ${referencedProjects.length} Inseratsgruppe(n) verwendet und kann deshalb nicht gelöscht werden.`);
+      return;
+    }
     if (!window.confirm(`Haustyp „${activeHouse.name}“ wirklich lokal löschen?`)) return;
     const houses = state.houses.filter((house) => house.id !== activeHouse.id);
     setState((current) => ({
@@ -1319,51 +1621,109 @@ export default function InseratStudio() {
     setNotice("Die festen Bildrollen wurden sortiert; die gewählte Reihenfolge der Innenräume blieb erhalten.");
   };
 
-  const addPromotionImage = (event: ChangeEvent<HTMLInputElement>) => {
+  const applyPromotionLibrary = (
+    current: StudioState,
+    images: PromotionImageAsset[],
+    settings = normalizePromotionLibrary(current).promotionSettings,
+  ): StudioState => ({
+    ...current,
+    promotionImages: images.map((image, index) => ({ ...image, order: index + 1 })),
+    promotionSettings: settings,
+    promotionImage: images[0] || null,
+    promotionImageEnabled: settings.enabled && images.some((image) => image.active),
+  });
+
+  const addPromotionImage = async (event: ChangeEvent<HTMLInputElement>) => {
     const input = event.target;
-    const file = input.files?.[0];
-    if (!file) return;
-    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+    const selectedFiles = Array.from(input.files || []);
+    if (!selectedFiles.length) return;
+    const files = selectedFiles.filter((file) =>
+      ["image/jpeg", "image/png", "image/webp"].includes(file.type)
+      && file.size <= MAX_PROMOTION_IMAGE_BYTES);
+    if (!files.length) {
       input.value = "";
-      setNotice("Das Aktionsbild muss als JPEG, PNG oder WebP vorliegen.");
+      setNotice("Aktionsbilder müssen als JPEG, PNG oder WebP vorliegen und dürfen jeweils maximal 25 MB groß sein.");
       return;
     }
-    if (file.size > MAX_PROMOTION_IMAGE_BYTES) {
-      input.value = "";
-      setNotice("Das Aktionsbild darf maximal 25 MB groß sein.");
-      return;
+    try {
+      const added = await Promise.all(files.map((file, index) => new Promise<PromotionImageAsset>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve({
+          id: uid(),
+          name: file.name,
+          mimeType: file.type,
+          dataUrl: String(reader.result),
+          caption: "Aktuelles Angebot für dein neues Zuhause",
+          isFloorplan: false,
+          role: "promotion",
+          captionLocked: false,
+          active: true,
+          priority: 0,
+          order: promotionLibrary.promotionImages.length + index + 1,
+          lastUsedAt: "",
+          usageCount: 0,
+        });
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      })));
+      setState((current) => {
+        const library = normalizePromotionLibrary(current);
+        return applyPromotionLibrary(
+          current,
+          [...library.promotionImages, ...added],
+          { ...library.promotionSettings, enabled: true },
+        );
+      });
+      setNotice(`${added.length} Aktionsbild${added.length === 1 ? " wurde" : "er wurden"} in die zentrale Rotation aufgenommen.${files.length < selectedFiles.length ? " Nicht unterstützte oder zu große Dateien wurden ausgelassen." : ""}`);
+    } catch {
+      setNotice("Mindestens ein Aktionsbild konnte nicht gelesen werden.");
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      const promotionImage: HouseImage = {
-        id: uid(),
-        name: file.name,
-        mimeType: file.type,
-        dataUrl: String(reader.result),
-        caption: "Aktuelles Angebot für dein neues Zuhause",
-        isFloorplan: false,
-        role: "promotion",
-        captionLocked: false,
-      };
-      setState((current) => ({
-        ...current,
-        promotionImage,
-        promotionImageEnabled: true,
-      }));
-      setNotice("Das Aktionsbild wurde eingefügt und als Anzeigebild für alle Haustypen aktiviert.");
-    };
-    reader.onerror = () => setNotice("Das Aktionsbild konnte nicht gelesen werden.");
-    reader.readAsDataURL(file);
     input.value = "";
   };
 
-  const removePromotionImage = () => {
-    setState((current) => ({
-      ...current,
-      promotionImage: null,
-      promotionImageEnabled: false,
-    }));
-    setNotice("Das Aktionsbild wurde entfernt. Jeder Haustyp verwendet wieder sein eigenes Titelbild.");
+  const updatePromotionSettings = (patch: Partial<NonNullable<StudioState["promotionSettings"]>>) => {
+    setState((current) => {
+      const library = normalizePromotionLibrary(current);
+      return applyPromotionLibrary(current, library.promotionImages, {
+        ...library.promotionSettings,
+        ...patch,
+      });
+    });
+  };
+
+  const updatePromotionImage = (imageId: string, patch: Partial<PromotionImageAsset>) => {
+    setState((current) => {
+      const library = normalizePromotionLibrary(current);
+      return applyPromotionLibrary(
+        current,
+        library.promotionImages.map((image) => image.id === imageId ? { ...image, ...patch } : image),
+      );
+    });
+  };
+
+  const movePromotionImage = (imageId: string, direction: "up" | "down") => {
+    setState((current) => {
+      const library = normalizePromotionLibrary(current);
+      const images = [...library.promotionImages];
+      const index = images.findIndex((image) => image.id === imageId);
+      const target = index + (direction === "up" ? -1 : 1);
+      if (index < 0 || target < 0 || target >= images.length) return current;
+      [images[index], images[target]] = [images[target], images[index]];
+      return applyPromotionLibrary(current, images);
+    });
+  };
+
+  const removePromotionImage = (imageId: string) => {
+    setState((current) => {
+      const library = normalizePromotionLibrary(current);
+      const images = library.promotionImages.filter((image) => image.id !== imageId);
+      return applyPromotionLibrary(current, images, {
+        ...library.promotionSettings,
+        enabled: images.some((image) => image.active) && library.promotionSettings.enabled,
+        manualImageId: library.promotionSettings.manualImageId === imageId ? "" : library.promotionSettings.manualImageId,
+      });
+    });
+    setNotice("Das Aktionsbild wurde aus der Rotation entfernt.");
   };
 
   const selectOwner = (owner: AddressOwner) => {
@@ -1373,6 +1733,7 @@ export default function InseratStudio() {
     setActiveOwner(owner);
     if (existingProject) {
       setActiveProjectId(existingProject.id);
+      setSelectedBatchProjectIds([existingProject.id]);
       return;
     }
     const project = newProject(owner);
@@ -1381,6 +1742,7 @@ export default function InseratStudio() {
       projects: [project, ...current.projects],
     }));
     setActiveProjectId(project.id);
+    setSelectedBatchProjectIds([project.id]);
     setNotice(`Der Adressbereich für ${owner === "pascal" ? "Pascal" : "Fabian"} wurde angelegt.`);
   };
 
@@ -1391,6 +1753,7 @@ export default function InseratStudio() {
       projects: [project, ...current.projects],
     }));
     setActiveProjectId(project.id);
+    setSelectedBatchProjectIds([project.id]);
   };
 
   const importAddressesFromExcel = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -1428,6 +1791,7 @@ export default function InseratStudio() {
       const firstProject = importedProjects[0];
       setActiveOwner(firstProject.owner);
       setActiveProjectId(firstProject.id);
+      setSelectedBatchProjectIds(importedProjects.map((project) => project.id));
       const savedAt = new Date().toISOString();
       await saveStudioState(nextState, savedAt);
       if (helperOnline) await queueDeviceCatalogSnapshot(nextState, savedAt);
@@ -1448,26 +1812,648 @@ export default function InseratStudio() {
     }
   };
 
-  const toggleHouse = (houseId: string) => {
-    if (!activeProject) return;
-    const selected = activeProject.selectedHouseIds.includes(houseId);
-    if (!selected && activeProject.selectedHouseIds.length >= 4) {
-      setNotice("Pro Adresse können maximal vier Haustypen gewählt werden.");
+  const toggleBatchProject = (projectId: string, selected: boolean) => {
+    setSelectedBatchProjectIds((current) => {
+      return selected
+        ? [...new Set([...current, projectId])]
+        : current.filter((id) => id !== projectId);
+    });
+  };
+
+  const toggleHousePoolEntry = (houseId: string, selected: boolean) => {
+    setState((current) => {
+      const distribution = normalizeHouseDistribution(
+        current.houseDistribution,
+        current.houses,
+        current.projects,
+      );
+      const poolHouseIds = selected
+        ? [...new Set([...distribution.poolHouseIds, houseId])]
+        : distribution.poolHouseIds.filter((id: string) => id !== houseId);
+      return {
+        ...current,
+        houseDistribution: setHouseDistributionPool(
+          distribution,
+          poolHouseIds,
+          current.houses,
+          current.projects,
+        ) as HouseDistributionState,
+      };
+    });
+  };
+
+  const generateHousePreviews = (projectIds = effectiveBatchProjectIds) => {
+    if (!projectIds.length) {
+      setNotice("Bitte mindestens eine Grundstücksadresse auswählen.");
       return;
     }
-    updateProject({
-      selectedHouseIds: selected
-        ? activeProject.selectedHouseIds.filter((id) => id !== houseId)
-        : [...activeProject.selectedHouseIds, houseId],
-      listings: activeProject.listings.filter((listing) =>
-        selected ? listing.templateId !== houseId : true,
-      ),
+    const result = generateWeightedDistribution(
+      houseDistribution,
+      state.houses,
+      projectIds,
+      { projects: state.projects, seed: uid() },
+    );
+    setState((current) => ({
+      ...current,
+      houseDistribution: result.distribution as HouseDistributionState,
+    }));
+    setNotice(result.ok
+      ? `${projectIds.length} Grundstück${projectIds.length === 1 ? " wurde" : "e wurden"} gewichtet verteilt. Bitte die vier Häuser je Adresse prüfen oder manuell anpassen.`
+      : `Verteilung nicht möglich: ${result.diagnostics.join(" · ")}`);
+  };
+
+  const generateSingleHousePreview = (projectId: string) => {
+    const result = generateWeightedProjectPreview(
+      houseDistribution,
+      state.houses,
+      projectId,
+      { projects: state.projects, seed: uid() },
+    );
+    setState((current) => ({
+      ...current,
+      houseDistribution: result.distribution as HouseDistributionState,
+    }));
+    setNotice(result.ok
+      ? "Für dieses Grundstück wurde eine neue gewichtete Vierer-Kombination erstellt."
+      : `Neuverteilen nicht möglich: ${result.diagnostics.join(" · ")}`);
+  };
+
+  const updateHousePreviewSlot = (projectId: string, index: number, houseId: string) => {
+    const record = houseDistributionByProject.get(projectId);
+    if (!record || !houseDistribution.poolHouseIds.includes(houseId)) return;
+    if (record.previewHouseIds.some((id, currentIndex) => currentIndex !== index && id === houseId)) {
+      setNotice("Dasselbe Haus darf innerhalb eines Grundstücks nicht doppelt vorkommen.");
+      return;
+    }
+    const previewHouseIds = [...record.previewHouseIds];
+    previewHouseIds[index] = houseId;
+    setState((current) => ({
+      ...current,
+      houseDistribution: updateProjectHouseRules(
+        current.houseDistribution,
+        current.houses,
+        current.projects,
+        projectId,
+        { previewHouseIds },
+      ) as HouseDistributionState,
+    }));
+  };
+
+  const moveHousePreviewSlot = (projectId: string, index: number, direction: "up" | "down") => {
+    const record = houseDistributionByProject.get(projectId);
+    if (!record) return;
+    const targetIndex = index + (direction === "up" ? -1 : 1);
+    if (targetIndex < 0 || targetIndex >= record.previewHouseIds.length) return;
+    const previewHouseIds = [...record.previewHouseIds];
+    [previewHouseIds[index], previewHouseIds[targetIndex]] = [previewHouseIds[targetIndex], previewHouseIds[index]];
+    setState((current) => ({
+      ...current,
+      houseDistribution: updateProjectHouseRules(
+        current.houseDistribution,
+        current.houses,
+        current.projects,
+        projectId,
+        { previewHouseIds },
+      ) as HouseDistributionState,
+    }));
+  };
+
+  const togglePinnedPreviewHouse = (projectId: string, houseId: string, pinned: boolean) => {
+    const record = houseDistributionByProject.get(projectId);
+    if (!record) return;
+    const pinnedHouseIds = pinned
+      ? [...new Set([...record.pinnedHouseIds, houseId])]
+      : record.pinnedHouseIds.filter((id) => id !== houseId);
+    setState((current) => ({
+      ...current,
+      houseDistribution: updateProjectHouseRules(
+        current.houseDistribution,
+        current.houses,
+        current.projects,
+        projectId,
+        { pinnedHouseIds },
+      ) as HouseDistributionState,
+    }));
+  };
+
+  const toggleExcludedProjectHouse = (projectId: string, houseId: string, excluded: boolean) => {
+    const record = houseDistributionByProject.get(projectId);
+    if (!record) return;
+    if (excluded && record.previewHouseIds.includes(houseId)) {
+      setNotice("Ein aktuell ausgewähltes Haus muss zuerst ausgetauscht werden, bevor es für dieses Grundstück gesperrt werden kann.");
+      return;
+    }
+    const excludedHouseIds = excluded
+      ? [...new Set([...record.excludedHouseIds, houseId])]
+      : record.excludedHouseIds.filter((id) => id !== houseId);
+    setState((current) => ({
+      ...current,
+      houseDistribution: updateProjectHouseRules(
+        current.houseDistribution,
+        current.houses,
+        current.projects,
+        projectId,
+        { excludedHouseIds },
+      ) as HouseDistributionState,
+    }));
+  };
+
+  const prepareBatchSelection = () => {
+    const projectIds = effectiveBatchProjectIds;
+    if (!projectIds.length) {
+      setNotice("Bitte mindestens eine Grundstücksadresse auswählen.");
+      return;
+    }
+    const committed = commitHouseDistributionPreviews(
+      houseDistribution,
+      state.houses,
+      state.projects,
+      projectIds,
+    );
+    if (!committed.ok) {
+      setNotice(`Vorbereitung blockiert: ${committed.issues.join(" · ")} Bitte zuerst die gewichtete Vorschau erstellen und vollständig prüfen.`);
+      return;
+    }
+    const issues: string[] = [];
+    let preparedListings = 0;
+    const projects = state.projects.map((project) => {
+      if (!projectIds.includes(project.id)) return project;
+      let group = normalizeListingGroup(project.listingGroup, project.id) as ListingGroup;
+      const templateIds = committed.distribution.projects
+        .find((record: { projectId: string }) => record.projectId === project.id)
+        ?.activeHouseIds || [];
+      if (templateIds.length !== HOUSES_PER_PROJECT) {
+        issues.push(`${project.name}: keine vollständige Vierer-Kombination`);
+        return project;
+      }
+      while (group.variants.length < HOUSES_PER_PROJECT) {
+        group = addListingGroupVariant(group) as ListingGroup;
+      }
+      for (let index = HOUSES_PER_PROJECT; index < group.variants.length; index += 1) {
+        group = setListingGroupVariantActive(group, group.variants[index].id, false) as ListingGroup;
+      }
+      for (let index = 0; index < HOUSES_PER_PROJECT; index += 1) {
+        const house = state.houses.find((item) => item.id === templateIds[index] && item.approved !== false);
+        if (!house) {
+          issues.push(`${project.name}: Haustyp ${templateIds[index]} fehlt oder ist nicht freigegeben`);
+          continue;
+        }
+        const variant = group.variants[index];
+        const previous = project.listings.find((listing) =>
+          listing.templateId === house.id && listing.listingOrigin !== "rotation-copy")
+          || (variant.templateId === house.id ? variant.listing : null)
+          || null;
+        group = assignListingGroupVariant(
+          group,
+          index + 1,
+          house,
+          createVariantListing(house, project, state.provider, variant.id, index + 1, previous),
+        ) as ListingGroup;
+      }
+      const sourceListings = group.variants
+        .filter((variant) => variant.active && variant.listing)
+        .slice(0, HOUSES_PER_PROJECT)
+        .map((variant) => variant.listing as GeneratedListing);
+      const rotationCopies = project.listings.filter((listing) => listing.listingOrigin === "rotation-copy");
+      preparedListings += sourceListings.length + rotationCopies.length;
+      return {
+        ...project,
+        selectedHouseIds: group.variants
+          .filter((variant) => variant.active && variant.templateId)
+          .slice(0, HOUSES_PER_PROJECT)
+          .map((variant) => variant.templateId),
+        listings: [...sourceListings, ...rotationCopies],
+        listingGroup: group,
+      };
     });
+    setState({
+      ...state,
+      projects,
+      houseDistribution: committed.distribution as HouseDistributionState,
+    });
+    setSelectedBatchProjectIds(projectIds);
+    setBatchItemStatuses({});
+    setTab("settings");
+    setNotice(`${projectIds.length} Adresse${projectIds.length === 1 ? " wurde" : "n wurden"} mit gewichteter Vierer-Verteilung vorbereitet · ${preparedListings} Inserate mit Standardwerten und Bildern.${issues.length ? ` ${issues.length} Adresse(n) benötigen Nacharbeit: ${issues.slice(0, 2).join(" · ")}` : " Die Uploadübersicht ist bereit."}`);
+  };
+
+  const projectPatchForListingGroup = (listingGroup: ListingGroup) => {
+    if (!activeProject) return null;
+    const sourceListings = listingGroup.variants
+      .filter((variant) => variant.active && variant.listing)
+      .slice(0, HOUSES_PER_PROJECT)
+      .map((variant) => variant.listing as GeneratedListing);
+    const rotationCopies = activeProject.listings.filter((listing) => listing.listingOrigin === "rotation-copy");
+    return {
+      listingGroup,
+      selectedHouseIds: listingGroup.variants
+        .filter((variant) => variant.active && variant.templateId)
+        .slice(0, HOUSES_PER_PROJECT)
+        .map((variant) => variant.templateId),
+      listings: [...sourceListings, ...rotationCopies],
+    };
+  };
+
+  const assignHouseToVariant = (variantId: string, houseId: string) => {
+    if (!activeProject || !activeListingGroup) return;
+    const currentVariant = activeListingGroup.variants.find((variant) => variant.id === variantId);
+    if (!currentVariant) return;
+    if (!houseId) {
+      const listingGroup = clearListingGroupVariant(activeListingGroup, variantId) as ListingGroup;
+      const patch = projectPatchForListingGroup(listingGroup);
+      if (patch) updateProject(patch);
+      return;
+    }
+    if (!houseDistribution.poolHouseIds.includes(houseId)) {
+      setNotice("Dieser Haustyp gehört nicht zum zentral freigegebenen Hauspool.");
+      return;
+    }
+    if (activeListingGroup.variants.some((variant) =>
+      variant.id !== variantId && variant.active && variant.templateId === houseId)) {
+      setNotice("Dasselbe Haus darf innerhalb eines Grundstücks nicht doppelt aktiv sein.");
+      return;
+    }
+    const house = approvedHouses.find((item) => item.id === houseId);
+    if (!house) {
+      setNotice("Dieser Haustyp ist nicht vorhanden oder nicht für Inserate freigegeben.");
+      return;
+    }
+    const previous = currentVariant.listing;
+    const listing = createVariantListing(
+      house,
+      activeProject,
+      state.provider,
+      currentVariant.id,
+      currentVariant.order,
+      previous,
+    );
+    const listingGroup = assignListingGroupVariant(
+      activeListingGroup,
+      variantId,
+      house,
+      listing,
+    ) as ListingGroup;
+    const patch = projectPatchForListingGroup(listingGroup);
+    if (patch) updateProject(patch);
+  };
+
+  const removeVariant = (variantId: string) => {
+    if (!activeListingGroup) return;
+    try {
+      const listingGroup = removeListingGroupVariant(activeListingGroup, variantId) as ListingGroup;
+      const patch = projectPatchForListingGroup(listingGroup);
+      if (patch) updateProject(patch);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Die Variante konnte nicht entfernt werden.");
+    }
+  };
+
+  const setVariantActive = (variantId: string, active: boolean) => {
+    if (!activeListingGroup) return;
+    const listingGroup = setListingGroupVariantActive(
+      activeListingGroup,
+      variantId,
+      active,
+    ) as ListingGroup;
+    const patch = projectPatchForListingGroup(listingGroup);
+    if (patch) updateProject(patch);
+  };
+
+  const moveVariant = (variantId: string, direction: "up" | "down") => {
+    if (!activeListingGroup) return;
+    const listingGroup = moveListingGroupVariant(
+      activeListingGroup,
+      variantId,
+      direction,
+    ) as ListingGroup;
+    const patch = projectPatchForListingGroup(listingGroup);
+    if (patch) updateProject(patch);
+  };
+
+  const updateGroupAutomation = (patch: Partial<ListingGroup["automation"]>) => {
+    if (!activeListingGroup) return;
+    const listingGroup = updateListingGroupAutomation(
+      activeListingGroup,
+      patch,
+    ) as ListingGroup;
+    updateProject({ listingGroup });
+  };
+
+  const updateGroupListingControl = (
+    listing: GeneratedListing,
+    patch: Partial<ListingGroup["listingControls"][number]>,
+  ) => {
+    if (!activeListingGroup) return;
+    const listingGroup = updateListingControl(
+      activeListingGroup,
+      listing,
+      patch,
+    ) as ListingGroup;
+    updateProject({ listingGroup });
+  };
+
+  const updateScheduler = (patch: Partial<SchedulerSettings>) => {
+    setState((current) => ({
+      ...current,
+      scheduler: updateListingSchedulerSettings(current.scheduler, patch) as NonNullable<StudioState["scheduler"]>,
+    }));
+  };
+
+  const updateManagedListingControl = (
+    projectId: string,
+    listingId: string,
+    patch: Partial<ListingGroup["listingControls"][number]>,
+  ) => {
+    setState((current) => ({
+      ...current,
+      projects: current.projects.map((project) => {
+        if (project.id !== projectId) return project;
+        const listing = project.listings.find((item) => item.id === listingId);
+        if (!listing) return project;
+        const group = normalizeListingGroup(project.listingGroup, project.id) as ListingGroup;
+        return { ...project, listingGroup: updateListingControl(group, listing, patch) as ListingGroup };
+      }),
+    }));
+  };
+
+  const prepareManagedCopyInState = (
+    current: StudioState,
+    projectId: string,
+    listingId: string,
+    mode: "full-auto" | "copy-without-delete" | "prepare-only",
+    explicitVariantId = "",
+  ): { state: StudioState; message: string; ok: boolean } => {
+    const rotationPlan = planListingRotation(current, projectId, listingId, {
+      explicitHouseId: explicitVariantId,
+    });
+    if (!rotationPlan.ok) {
+      return { state: current, message: rotationPlan.issues.join(" · "), ok: false };
+    }
+    const project = rotationPlan.project as ProjectInput;
+    const sourceListing = rotationPlan.listing as GeneratedListing;
+    let group = rotationPlan.group as ListingGroup;
+    const house = rotationPlan.house as HouseTemplate | null;
+    const sourceVariant = rotationPlan.sourceVariant as ListingGroupVariant | null;
+    if (!house || !sourceVariant) {
+      return { state: current, message: "Das gewichtete Ersatzhaus oder der Ausgangsplatz ist nicht mehr vorhanden.", ok: false };
+    }
+    const targetSeed = createVariantListing(
+      house,
+      project,
+      current.provider,
+      sourceVariant.id,
+      sourceVariant.order,
+    );
+    group = assignListingGroupVariant(
+      group,
+      sourceVariant.id,
+      house,
+      targetSeed,
+    ) as ListingGroup;
+    const variant = group.variants.find((item) => item.id === sourceVariant.id) as ListingGroupVariant | undefined;
+    if (!variant?.listing) return { state: current, message: "Die gewichtete Zielvariante konnte nicht vollständig aufgebaut werden.", ok: false };
+    const issues = validateListingGroupVariant(variant, house, {
+      expectedPrice: house ? totalPrice(house, project) : Number.NaN,
+    }) as string[];
+    if (!house || issues.length) {
+      group = recordListingGroupFailure(group, variant.id, mode, issues, { sourceListing }).group as ListingGroup;
+      return {
+        state: { ...current, projects: current.projects.map((item) => item.id === project.id ? { ...item, listingGroup: group } : item) },
+        message: issues.join(" · "),
+        ok: false,
+      };
+    }
+    const token = uid();
+    group = claimListingOperation(group, sourceListing, token) as ListingGroup;
+    const variantListing = variant.listing;
+    const version = Math.max(sourceListing.version || 1, variantListing.version || 1) + 1;
+    const variedTexts = generateListingTexts(house, project, current.provider, version);
+    const copyId = uid();
+    const copy: GeneratedListing = {
+      ...variantListing,
+      id: copyId,
+      externalId: `FPI-${project.id.slice(0, 6)}-V${variant.order}-${copyId.slice(0, 8)}`.toUpperCase(),
+      templateId: house.id,
+      templateName: house.name,
+      price: totalPrice(house, project),
+      texts: completeListingTexts(
+        house,
+        project,
+        current.provider,
+        { ...variantListing.texts, title: variedTexts.title, description: variedTexts.description },
+        version,
+      ),
+      version,
+      projectingSettings: fillMissingProjectingDefaults(variantListing.projectingSettings),
+      listingGroupVariantId: variant.id,
+      listingOrigin: "rotation-copy",
+      rotationSourceListingId: sourceListing.id,
+      rotationRemovedHouseId: sourceListing.templateId,
+      rotationAddedHouseId: house.id,
+      createdAt: new Date().toISOString(),
+      status: WORKFLOW_STATUS.PREPARED,
+      statusMessage: "Entwurf wartet auf Upload",
+    };
+    const copyIssues = validateListingGroupVariant({ ...variant, listing: copy }, house, {
+      expectedPrice: totalPrice(house, project),
+    }) as string[];
+    if (copyIssues.length) {
+      group = recordListingGroupFailure(group, variant.id, mode, copyIssues, { sourceListing }).group as ListingGroup;
+      group = releaseListingOperation(group, sourceListing, token) as ListingGroup;
+      return {
+        state: { ...current, projects: current.projects.map((item) => item.id === project.id ? { ...item, listingGroup: group } : item) },
+        message: copyIssues.join(" · "),
+        ok: false,
+      };
+    }
+    group = recordListingGroupCopy(group, variant.id, copy, {
+      mode,
+      status: WORKFLOW_STATUS.PREPARED,
+      advanceRotation: false,
+      sourceListing,
+      sourceListingId: sourceListing.id,
+      variation: "Überschrift und Einleitung variiert; Preis, Fläche, Zimmer, Energieangaben, Grundrisse und Bilder vollständig aus der Zielvariante übernommen.",
+    }).group as ListingGroup;
+    group = releaseListingOperation(group, sourceListing, token) as ListingGroup;
+    return {
+      state: {
+        ...current,
+        projects: current.projects.map((item) => item.id === project.id
+          ? { ...item, listingGroup: group, listings: [...item.listings, copy] }
+          : item),
+      },
+      message: `${copy.externalId} mit „${variant.templateName}“ wurde vorbereitet. Keine Veröffentlichung und keine Löschung.`,
+      ok: true,
+    };
+  };
+
+  const prepareManagedListing = async (
+    projectId: string,
+    listingId: string,
+    mode: "full-auto" | "copy-without-delete" | "prepare-only",
+  ) => {
+    const targetVariantId = managerVariantOverrides[listingId] || "";
+    const run = () => {
+      const result = prepareManagedCopyInState(state, projectId, listingId, mode, targetVariantId);
+      setState(result.state);
+      setNotice(result.ok ? result.message : `Inserat übersprungen: ${result.message}`);
+    };
+    if (!navigator.locks) return run();
+    const completed = await navigator.locks.request(
+      `fpi-listing-${projectId}-${listingId}`,
+      { ifAvailable: true, mode: "exclusive" },
+      async (lock) => {
+        if (!lock) return false;
+        run();
+        return true;
+      },
+    );
+    if (!completed) setNotice("Dieses Inserat wird bereits verarbeitet.");
+  };
+
+  const runGlobalSchedulerDryRun = () => {
+    const result = runSchedulerDryRun(
+      state,
+      state.houses,
+      (project: ProjectInput, house: HouseTemplate) => totalPrice(house, project),
+      { ignoreWindow: true },
+    );
+    const reserved = reserveSchedulerSelection(state, result, { mode: "dry-run", reserveControls: false });
+    setState(reserved.state as StudioState);
+    const failed = result.results.filter((item) => !item.ok).length;
+    setNotice(result.results.length
+      ? `Scheduler-Dry-Run: ${result.results.length} Inserate verteilt ausgewählt, ${failed} blockiert. Nichts veröffentlicht oder gelöscht.`
+      : `Scheduler-Dry-Run ohne Auswahl: ${result.issues.join(" · ") || "Kein fälliges Inserat."}`);
+  };
+
+  const prepareGlobalDailyRun = () => {
+    const selection = selectSchedulerListings(state);
+    if (!selection.selections.length) {
+      setNotice(`Kein Tageslauf vorbereitet: ${selection.issues.join(" · ") || "Kein fälliges, ungesperrtes Inserat."}`);
+      return;
+    }
+    let nextState = state;
+    let completed = 0;
+    const completedIds: string[] = [];
+    const failedIds: string[] = [];
+    const failures: string[] = [];
+    for (const item of selection.selections) {
+      const result = prepareManagedCopyInState(
+        nextState,
+        item.project.id,
+        item.listing.id,
+        selection.scheduler.settings.mode === "full-auto" ? "full-auto" : selection.scheduler.settings.mode === "copy-without-delete" ? "copy-without-delete" : "prepare-only",
+      );
+      nextState = result.state;
+      if (result.ok) {
+        completed += 1;
+        completedIds.push(item.listing.id);
+      } else {
+        failedIds.push(item.listing.id);
+        failures.push(`${item.listing.externalId}: ${result.message}`);
+      }
+    }
+    const reserved = reserveSchedulerSelection(nextState, selection, {
+      mode: selection.scheduler.settings.mode,
+      completedListingIds: completedIds,
+      failedListingIds: failedIds,
+    });
+    setState(reserved.state as StudioState);
+    setNotice(`${completed} Inserate wurden einzeln vorbereitet; ${failures.length} wurden isoliert übersprungen. Es wurde nichts automatisch gelöscht.${failures.length ? ` ${failures.slice(0, 2).join(" · ")}` : ""}`);
+  };
+
+  const runExclusiveGroupAction = async (action: () => Promise<void> | void, listingId = "selection") => {
+    if (!activeProject || groupOperationRunning) return;
+    setGroupOperationRunning(true);
+    try {
+      if (!navigator.locks) {
+        await action();
+        return;
+      }
+      const completed = await navigator.locks.request(
+        `fpi-listing-${activeProject.id}-${listingId}`,
+        { ifAvailable: true, mode: "exclusive" },
+        async (lock) => {
+          if (!lock) return false;
+          await action();
+          return true;
+        },
+      );
+      if (!completed) setNotice("Diese Inseratsgruppe wird bereits in einem anderen Vorgang verarbeitet.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Die Inseratsgruppe konnte nicht verarbeitet werden.");
+    } finally {
+      setGroupOperationRunning(false);
+    }
+  };
+
+  const runGroupDryRun = async () => {
+    if (!activeProject || !activeListingGroup) return;
+    const sourceListing = activeProject.listings.find((listing) =>
+      listingControl(activeListingGroup, listing).automaticUpdateEnabled);
+    if (!sourceListing) {
+      setNotice("Dry Run blockiert: Es ist kein aktives Ausgangsinserat vorhanden.");
+      return;
+    }
+    await runExclusiveGroupAction(() => {
+      try {
+        const result = planListingRotation(state, activeProject.id, sourceListing.id);
+        const issues = [...result.issues];
+        if (result.ok && result.house && result.sourceVariant) {
+          const targetSeed = createVariantListing(
+            result.house,
+            activeProject,
+            state.provider,
+            result.sourceVariant.id,
+            result.sourceVariant.order,
+          );
+          const previewGroup = assignListingGroupVariant(
+            result.group,
+            result.sourceVariant.id,
+            result.house,
+            targetSeed,
+          ) as ListingGroup;
+          const previewVariant = previewGroup.variants.find((variant) => variant.id === result.sourceVariant.id);
+          if (previewVariant) {
+            issues.push(...validateListingGroupVariant(previewVariant, result.house, {
+              expectedPrice: totalPrice(result.house, activeProject),
+            }) as string[]);
+          }
+        }
+        const uniqueIssues = [...new Set(issues)];
+        setLastGroupDryRun({
+          ok: result.ok && uniqueIssues.length === 0,
+          variantName: result.house?.name || "Keine Variante",
+          issues: uniqueIssues,
+        });
+        setNotice(result.ok && uniqueIssues.length === 0
+          ? `Dry Run erfolgreich: Als Nächstes ist „${result.house?.name}“ vorgesehen. Es wurde nichts veröffentlicht oder gelöscht.`
+          : `Dry Run blockiert: ${uniqueIssues.join(" · ")}`);
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Der Dry Run konnte nicht ausgeführt werden.");
+      }
+    }, sourceListing.id);
+  };
+
+  const prepareNextVariantCopy = async () => {
+    if (!activeProject || !activeListingGroup) return;
+    const sourceListing = activeProject.listings.find((listing) => {
+      const control = listingControl(activeListingGroup, listing);
+      return control.automaticUpdateEnabled
+        && !control.premiumPlacement
+        && !control.manualLock
+        && !listing.rotationArchivedAt;
+    });
+    if (!sourceListing) {
+      setNotice("Kopieren blockiert: Es ist kein freies, aktives Ausgangsinserat vorhanden.");
+      return;
+    }
+    await prepareManagedListing(activeProject.id, sourceListing.id, "copy-without-delete");
   };
 
   const generationInputIsValid = () => {
     if (!activeProject || selectedHouses.length === 0) {
-      setNotice("Bitte zuerst mindestens einen Haustyp auswählen.");
+      setNotice("Bitte zuerst mindestens eine freigegebene Inseratsvariante auswählen.");
       return false;
     }
     if (!activeProject.city || !activeProject.zip || !activeProject.street || !activeProject.plotArea) {
@@ -1498,9 +2484,11 @@ export default function InseratStudio() {
     try {
       const generated = await Promise.all(
         houseSnapshots.map(async (house, index) => {
-          const previous = projectSnapshot.listings.find(
-            (listing) => listing.templateId === house.id,
-          );
+          const variant = selectedVariantEntries[index]?.variant;
+          const previous = variant?.listing
+            || projectSnapshot.listings.find(
+              (listing) => listing.templateId === house.id && listing.listingOrigin !== "rotation-copy",
+            );
           const response = await helperFetch("/generate-texts", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1517,9 +2505,9 @@ export default function InseratStudio() {
                 housePrice: house.housePrice,
                 constructionYear: house.constructionYear,
                 energyDemand: house.energyDemand,
-                energyClass: IMMOPROFESSIONAL_DEFAULTS.energyClass,
-                heatingType: "Fußbodenheizung mit Luft-Wasser-Wärmepumpe",
-                energySource: "Umweltwärme und Strom",
+                energyClass: HOUSE_ENERGY_DEFAULTS.energyClass,
+                heatingType: HOUSE_ENERGY_DEFAULTS.heatingType,
+                energySource: HOUSE_ENERGY_DEFAULTS.energySource,
                 architecture: house.architecture,
                 equipmentHighlights: house.equipmentHighlights,
                 useStandardPackage: house.useStandardPackage,
@@ -1538,7 +2526,6 @@ export default function InseratStudio() {
                 transportFacts: projectSnapshot.transportFacts,
                 familyFacts: projectSnapshot.familyFacts,
                 natureFacts: projectSnapshot.natureFacts,
-                notes: projectSnapshot.notes,
               },
               provider: {
                 company: state.provider.company,
@@ -1570,11 +2557,11 @@ export default function InseratStudio() {
             data.texts,
             version,
           );
-          return { house, index, previous, texts, version };
+          return { house, index, variant, previous, texts, version };
         }),
       );
 
-      const listings: GeneratedListing[] = generated.map(({ house, index, previous, texts, version }) => ({
+      const sourceListings: GeneratedListing[] = generated.map(({ house, index, variant, previous, texts, version }) => ({
         id: previous?.id ?? uid(),
         externalId:
           previous?.externalId ??
@@ -1585,12 +2572,27 @@ export default function InseratStudio() {
         texts,
         version,
         projectingSettings: fillMissingProjectingDefaults(previous?.projectingSettings),
+        listingGroupVariantId: variant?.id,
+        listingOrigin: "group-source",
+        status: normalizeWorkflowStatus(previous?.status, WORKFLOW_STATUS.DRAFT),
+        statusMessage: previous?.statusMessage || "Entwurf",
       }));
+      let listingGroup = activeListingGroup as ListingGroup;
+      for (const listing of sourceListings) {
+        if (!listing.listingGroupVariantId) continue;
+        listingGroup = replaceListingGroupVariantListing(
+          listingGroup,
+          listing.listingGroupVariantId,
+          listing,
+        ) as ListingGroup;
+      }
+      const rotationCopies = projectSnapshot.listings.filter((listing) => listing.listingOrigin === "rotation-copy");
+      const listings = [...sourceListings, ...rotationCopies];
 
       setState((current) => ({
         ...current,
         projects: current.projects.map((project) =>
-          project.id === projectSnapshot.id ? { ...project, listings } : project,
+          project.id === projectSnapshot.id ? { ...project, listings, listingGroup } : project,
         ),
       }));
       setActiveProjectId(projectSnapshot.id);
@@ -1605,10 +2607,25 @@ export default function InseratStudio() {
 
   const updateListing = (listingId: string, patch: Partial<GeneratedListing>) => {
     if (!activeProject) return;
+    const currentListing = activeProject.listings.find((listing) => listing.id === listingId);
+    const updatedListing = currentListing ? { ...currentListing, ...patch } : null;
+    let listingGroup = activeListingGroup;
+    if (
+      listingGroup
+      && updatedListing?.listingOrigin === "group-source"
+      && updatedListing.listingGroupVariantId
+    ) {
+      listingGroup = replaceListingGroupVariantListing(
+        listingGroup,
+        updatedListing.listingGroupVariantId,
+        updatedListing,
+      ) as ListingGroup;
+    }
     updateProject({
       listings: activeProject.listings.map((listing) =>
         listing.id === listingId ? { ...listing, ...patch } : listing,
       ),
+      ...(listingGroup ? { listingGroup } : {}),
     });
   };
 
@@ -1624,28 +2641,43 @@ export default function InseratStudio() {
     });
   };
 
-  const packageInput = (listings = activeProject?.listings ?? []) => {
-    if (!activeProject || listings.length === 0) {
+  const packageInput = (
+    project: ProjectInput,
+    listings: GeneratedListing[],
+    promotionImagesByListingId: Record<string, HouseImage> = {},
+    sourceState = state,
+  ) => {
+    if (!project || listings.length === 0) {
       throw new Error("Es wurden noch keine Inserate erzeugt.");
     }
     const invalidImageCounts = listings
-      .map((listing) => state.houses.find((house) => house.id === listing.templateId))
+      .map((listing) => ({
+        house: sourceState.houses.find((house) => house.id === listing.templateId),
+        promotionImage: promotionImagesByListingId[listing.id],
+      }))
       .filter(
-        (house) =>
-          !house
-          || effectiveHouseImages(state, house).length < MIN_HOUSE_IMAGES
-          || effectiveHouseImages(state, house).length > MAX_HOUSE_IMAGES,
+        ({ house, promotionImage }) => {
+          if (!house) return true;
+          const count = house.images.length + (promotionImage ? 1 : 0);
+          return count < MIN_HOUSE_IMAGES || count > MAX_HOUSE_IMAGES;
+        },
       )
-      .map((house) => house ? `${house.name} (${effectiveHouseImages(state, house).length} Bilder)` : "Unbekannter Haustyp");
+      .map(({ house, promotionImage }) => house
+        ? `${house.name} (${house.images.length + (promotionImage ? 1 : 0)} Bilder)`
+        : "Unbekannter Haustyp");
     if (invalidImageCounts.length) {
       throw new Error(
         `Für den Import werden pro Haustyp mindestens ${MIN_HOUSE_IMAGES} und maximal ${MAX_HOUSE_IMAGES} Bilder benötigt: ${invalidImageCounts.join(", ")}.`,
       );
     }
     const invalidSequences = listings.flatMap((listing) => {
-      const house = state.houses.find((item) => item.id === listing.templateId);
+      const house = sourceState.houses.find((item) => item.id === listing.templateId);
       if (!house) return [];
-      return imageSequenceIssues(effectiveHouseImages(state, house), {
+      const promotionImage = promotionImagesByListingId[listing.id];
+      const images = promotionImage
+        ? [{ ...promotionImage, role: "promotion" as ImageRole }, ...orderHouseImages(house.images)]
+        : orderHouseImages(house.images);
+      return imageSequenceIssues(images, {
         requiresUpperFloor: house.floors > 1,
         requiresThirdFloor: house.floors > 2,
         maximumImages: MAX_HOUSE_IMAGES,
@@ -1654,36 +2686,43 @@ export default function InseratStudio() {
     if (invalidSequences.length) {
       throw new Error(`Die Bildfolge ist noch nicht exportbereit: ${invalidSequences.join(" ")}`);
     }
-    if (!state.provider.providerNumber || !state.provider.company || !state.provider.email) {
+    if (!sourceState.provider.providerNumber || !sourceState.provider.company || !sourceState.provider.email) {
       throw new Error("Bitte Anbieternummer, Firma und E-Mail unter Export & Upload ergänzen.");
     }
     const completedListings = listings.map((listing) => {
-      const house = state.houses.find((item) => item.id === listing.templateId);
+      const house = sourceState.houses.find((item) => item.id === listing.templateId);
       if (!house) return listing;
       return {
         ...listing,
         texts: completeListingTexts(
           house,
-          activeProject,
-          state.provider,
+          project,
+          sourceState.provider,
           listing.texts,
           listing.version || 1,
         ),
       };
     });
     return {
-      project: activeProject,
+      project,
       listings: completedListings,
-      houses: state.houses,
-      provider: state.provider,
-      promotionImage: state.promotionImage,
-      promotionImageEnabled: state.promotionImageEnabled,
+      houses: sourceState.houses,
+      provider: sourceState.provider,
+      promotionImagesByListingId,
     };
   };
 
   const downloadPackage = async () => {
     try {
-      const result = await buildImportPackage(packageInput());
+      const addressPlan = batchPlan.addresses.find((address: { projectId: string }) => address.projectId === activeProject.id);
+      const listings = activeProject.listings.filter((listing) => selectedUploadIds.includes(listing.id));
+      const promotionImagesByListingId: Record<string, HouseImage> = {};
+      for (const item of addressPlan?.items || []) {
+        if (!item.promotionImageId) continue;
+        const image = promotionLibrary.promotionImages.find((candidate) => candidate.id === item.promotionImageId);
+        if (image) promotionImagesByListingId[item.listingId] = image;
+      }
+      const result = await buildImportPackage(packageInput(activeProject, listings, promotionImagesByListingId));
       if (helperOnline) {
         const response = await helperFetch("/save-package", {
           method: "POST",
@@ -1706,9 +2745,7 @@ export default function InseratStudio() {
   };
 
   const uploadPackage = async () => {
-    if (!activeProject) return;
-    const selectedListings = activeProject.listings.filter((listing) => selectedUploadIds.includes(listing.id));
-    if (!selectedListings.length) {
+    if (!batchPlan.totalListings) {
       setNotice("Bitte mindestens ein Inserat für den Upload auswählen.");
       return;
     }
@@ -1720,27 +2757,57 @@ export default function InseratStudio() {
       setNotice("Der lokale Upload-Helfer ist nicht erreichbar. Bitte die Anwendung über den Startknopf öffnen.");
       return;
     }
+    const estimatedMinutes = Math.max(1, Math.ceil(batchPlan.estimatedSeconds / 60));
     const confirmed = window.confirm(
-      `${selectedListings.length} ausgewählte${selectedListings.length === 1 ? "n Entwurf" : " Entwürfe"} jetzt an ${ftpHost} übertragen?\n\nDie Weitergabe an Portale ist im Paket deaktiviert. Bitte den Entwurfsstatus nach dem Import trotzdem in Immoprofessional prüfen.${ftpSecure === "none" ? "\n\nWARNUNG: Der Transport ist unverschlüsselt konfiguriert." : ""}`,
+      `${batchPlan.totalAddresses} Adresse(n) mit insgesamt ${batchPlan.totalListings} Inseraten jetzt nacheinander an ${ftpHost} übertragen?\n\nGeschätzte Laufzeit: ca. ${estimatedMinutes} Minute(n). Fehler einzelner Inserate werden protokolliert und die Warteschlange läuft weiter. Die Weitergabe an Portale ist im Paket deaktiviert.${ftpSecure === "none" ? "\n\nWARNUNG: Der Transport ist unverschlüsselt konfiguriert." : ""}`,
     );
     if (!confirmed) return;
 
     setUploading(true);
-    setUploadStatus("Einzelpakete werden vorbereitet …");
+    setUploadStatus("Sammel-Upload wird vorbereitet …");
+    setBatchItemStatuses({});
+    setBatchUploadProgress({
+      running: true,
+      addressIndex: 0,
+      addressTotal: batchPlan.totalAddresses,
+      listingIndex: 0,
+      listingTotal: 0,
+      processed: 0,
+      total: batchPlan.totalListings,
+      successful: 0,
+      failed: 0,
+      status: "Vorbereitung abgeschlossen",
+    });
     try {
-      const input = packageInput(selectedListings);
-      for (let index = 0; index < input.listings.length; index += 1) {
-        const listing = input.listings[index];
-        const position = `${index + 1}/${input.listings.length}`;
+      const uploadState = state;
+      const result = await runSequentialBatchUpload(batchPlan, async ({ address, item, addressIndex, listingIndex }: {
+        address: { projectId: string; items: unknown[] };
+        item: { jobId: string; listingId: string; templateName: string; promotionImageId: string };
+        addressIndex: number;
+        listingIndex: number;
+      }) => {
+        const project = uploadState.projects.find((candidate) => candidate.id === address.projectId);
+        const listing = project?.listings.find((candidate) => candidate.id === item.listingId);
+        if (!project || !listing) throw new Error("Adresse oder Inserat wurde während der Vorbereitung entfernt.");
+        const promotionImage = item.promotionImageId
+          ? normalizePromotionLibrary(uploadState).promotionImages.find((image) => image.id === item.promotionImageId)
+          : null;
+        const promotionImagesByListingId = promotionImage ? { [listing.id]: promotionImage } : {};
+        const position = `${addressIndex + 1}/${batchPlan.totalAddresses} · ${listingIndex + 1}/${address.items.length}`;
         setUploadStatus(`${position} · ${listing.templateName} wird gepackt …`);
-        const result = await buildImportPackage({ ...input, listings: [listing] });
+        const packageResult = await buildImportPackage(
+          packageInput(project, [listing], promotionImagesByListingId, uploadState),
+        );
         setUploadStatus(`${position} · ZIP wird lokal übergeben …`);
         await new Promise<{ ok?: boolean; message?: string }>((resolve, reject) => {
           const request = new XMLHttpRequest();
           request.open("POST", "http://127.0.0.1:43182/upload-binary");
           request.setRequestHeader("Content-Type", "application/zip");
-          request.setRequestHeader("X-FPI-Filename", encodeURIComponent(result.filename));
+          request.setRequestHeader("X-FPI-Filename", encodeURIComponent(packageResult.filename));
           request.setRequestHeader("X-FPI-Session", helperSessionToken());
+          request.setRequestHeader("X-FPI-Job-Id", encodeURIComponent(item.jobId));
+          request.setRequestHeader("X-FPI-Project-Id", encodeURIComponent(project.id));
+          request.setRequestHeader("X-FPI-Listing-Id", encodeURIComponent(listing.id));
           request.upload.onprogress = (event) => {
             if (event.lengthComputable && event.total > 0) {
               const percentage = Math.min(100, Math.round((event.loaded / event.total) * 100));
@@ -1764,12 +2831,221 @@ export default function InseratStudio() {
             }
             resolve(responseData);
           };
-          request.send(result.blob);
+          request.send(packageResult.blob);
         });
+      }, {
+        onItemStart: ({ address, item, addressIndex, listingIndex, processed, successful, failed }: {
+          address: { items: unknown[] };
+          item: { listingId: string; templateName: string };
+          addressIndex: number;
+          listingIndex: number;
+          processed: number;
+          successful: number;
+          failed: number;
+        }) => {
+          setBatchItemStatuses((current) => ({ ...current, [item.listingId]: { status: "Läuft", error: "" } }));
+          setBatchUploadProgress({
+            running: true,
+            addressIndex: addressIndex + 1,
+            addressTotal: batchPlan.totalAddresses,
+            listingIndex: listingIndex + 1,
+            listingTotal: address.items.length,
+            processed,
+            total: batchPlan.totalListings,
+            successful,
+            failed,
+            status: `${item.templateName} wird übertragen`,
+          });
+        },
+        onItemComplete: ({ result: itemResult, processed, successful, failed }: {
+          result: { listingId: string; ok: boolean; error: string };
+          processed: number;
+          successful: number;
+          failed: number;
+        }) => {
+          setBatchItemStatuses((current) => ({
+            ...current,
+            [itemResult.listingId]: {
+              status: itemResult.ok ? "Erfolgreich" : "Fehlgeschlagen",
+              error: itemResult.error,
+            },
+          }));
+          setBatchUploadProgress((current) => ({
+            ...current,
+            processed,
+            successful,
+            failed,
+            status: itemResult.ok ? "Inserat abgeschlossen" : "Fehler protokolliert · Warteschlange läuft weiter",
+          }));
+        },
+      });
+
+      const timestamp = new Date().toISOString();
+      let nextState = uploadState;
+      const newLogs: BatchUploadLog[] = batchPlan.addresses
+        .filter((address: { items: unknown[] }) => !address.items.length)
+        .map((address: { projectId: string; address: string; error: string }) => {
+          const project = uploadState.projects.find((candidate) => candidate.id === address.projectId);
+          return {
+            id: uid(),
+            jobId: `skip:${batchPlan.id}:${address.projectId}`,
+            batchId: batchPlan.id,
+            projectId: address.projectId,
+            address: address.address,
+            listingId: "",
+            externalId: "",
+            houseVariant: "",
+            promotionImageId: "",
+            createdAt: project?.createdAt || timestamp,
+            updatedAt: timestamp,
+            nextUpdatedAt: "",
+            status: WORKFLOW_STATUS.BLOCKED,
+            statusMessage: "Adresse übersprungen",
+            error: address.error || "Für diese Adresse waren keine vollständigen Inserate vorhanden.",
+          };
+        });
+      for (const itemResult of result.results) {
+        const project = nextState.projects.find((candidate) => candidate.id === itemResult.projectId);
+        const listing = project?.listings.find((candidate) => candidate.id === itemResult.listingId);
+        if (!project || !listing) continue;
+        const log = createBatchUploadLog(project, listing, itemResult, {
+          batchId: batchPlan.id,
+          promotionImageId: itemResult.promotionImageId,
+          now: timestamp,
+          updateIntervalDays: scheduler.settings.updateIntervalDays,
+        });
+        newLogs.push(log);
+        let listingGroup = normalizeListingGroup(project.listingGroup, project.id) as ListingGroup;
+        if (listing.listingGroupVariantId) {
+          listingGroup = itemResult.ok
+            ? recordListingGroupCopy(listingGroup, listing.listingGroupVariantId, listing, {
+                mode: "batch-upload",
+                status: WORKFLOW_STATUS.PUBLISHED,
+                variation: itemResult.promotionImageId
+                  ? "Sammel-Upload mit rotiertem Aktionsbild; keine automatische Löschung ausgeführt."
+                  : "Sammel-Upload mit normaler Bildfolge; keine automatische Löschung ausgeführt.",
+              }).group as ListingGroup
+            : recordListingGroupFailure(
+                listingGroup,
+                listing.listingGroupVariantId,
+                "batch-upload",
+                [itemResult.error],
+                { sourceListing: listing },
+              ).group as ListingGroup;
+        }
+        const updatedListing: GeneratedListing = itemResult.ok ? {
+          ...listing,
+          promotionImageId: itemResult.promotionImageId,
+          promotionAssignedAt: itemResult.promotionImageId ? timestamp : "",
+          lastUploadedAt: timestamp,
+          nextUpdateAt: log.nextUpdatedAt,
+          status: log.status,
+          statusMessage: log.statusMessage,
+          uploadError: "",
+        } : {
+          ...listing,
+          status: log.status,
+          statusMessage: log.statusMessage,
+          uploadError: log.error,
+        };
+        if (updatedListing.listingOrigin === "group-source" && updatedListing.listingGroupVariantId) {
+          listingGroup = replaceListingGroupVariantListing(
+            listingGroup,
+            updatedListing.listingGroupVariantId,
+            updatedListing,
+          ) as ListingGroup;
+        }
+        const replacedSourceListing = itemResult.ok && listing.rotationSourceListingId
+          ? project.listings.find((entry) => entry.id === listing.rotationSourceListingId)
+          : null;
+        if (replacedSourceListing) {
+          listingGroup = updateListingControl(listingGroup, replacedSourceListing, {
+            automaticUpdateEnabled: false,
+            status: WORKFLOW_STATUS.ARCHIVED,
+            statusMessage: "Durch erfolgreiche Rotation ersetzt · Löschung manuell prüfen",
+            lastUpdatedAt: timestamp,
+            lastSuccessAt: timestamp,
+            lastError: "",
+          }) as ListingGroup;
+        }
+        let updatedProject: ProjectInput = {
+          ...project,
+          listings: project.listings.map((entry) => {
+            if (entry.id === listing.id) return updatedListing;
+            if (replacedSourceListing && entry.id === replacedSourceListing.id) {
+              return {
+                ...entry,
+                rotationArchivedAt: timestamp,
+                status: WORKFLOW_STATUS.ARCHIVED,
+                statusMessage: "Durch erfolgreiche Rotation ersetzt · Löschung manuell prüfen",
+                uploadError: "",
+              };
+            }
+            return entry;
+          }),
+          listingGroup,
+        };
+        if (itemResult.ok && itemResult.promotionImageId) {
+          updatedProject = enforceSinglePromotionAssignment(
+            updatedProject,
+            listing.id,
+            itemResult.promotionImageId,
+            { now: timestamp },
+          ) as ProjectInput;
+        }
+        nextState = {
+          ...nextState,
+          projects: nextState.projects.map((candidate) => candidate.id === project.id ? updatedProject : candidate),
+        };
+        if (
+          itemResult.ok
+          && listing.rotationRemovedHouseId
+          && listing.rotationAddedHouseId
+        ) {
+          nextState = {
+            ...nextState,
+            houseDistribution: recordHouseRotation(
+              nextState.houseDistribution,
+              nextState.houses,
+              nextState.projects,
+              project.id,
+              listing.rotationRemovedHouseId,
+              listing.rotationAddedHouseId,
+              { now: timestamp },
+            ) as HouseDistributionState,
+          };
+        }
+        if (itemResult.ok && itemResult.promotionImageId) {
+          nextState = {
+            ...nextState,
+            ...recordPromotionUsage(nextState, {
+              projectId: project.id,
+              listingId: listing.id,
+              externalId: listing.externalId,
+              houseId: listing.templateId,
+              imageId: itemResult.promotionImageId,
+              mode: listing.lastUploadedAt || listing.listingOrigin === "rotation-copy" ? "update" : "create",
+            }, { now: timestamp }),
+          };
+        }
       }
-      setNotice(`${input.listings.length} getrennte Inseratpakete wurden an Immoprofessional übertragen. Bitte den Importbericht und den Entwurfsstatus prüfen.`);
+      nextState = {
+        ...nextState,
+        uploadHistory: [...(nextState.uploadHistory || []), ...newLogs].slice(-BATCH_UPLOAD_LOG_LIMIT),
+      };
+      setState(nextState);
+      setBatchUploadProgress((current) => ({
+        ...current,
+        running: false,
+        processed: result.processed,
+        successful: result.successful,
+        failed: result.failed,
+        status: "Sammel-Upload abgeschlossen",
+      }));
+      setNotice(`Sammel-Upload abgeschlossen: ${result.successful} erfolgreich, ${result.failed} fehlgeschlagen. Jeder Fehler wurde isoliert protokolliert; ${result.processed} von ${result.total} Inseraten wurden bearbeitet.`);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Upload fehlgeschlagen.");
+      setBatchUploadProgress((current) => ({ ...current, running: false, status: "Sammel-Upload unerwartet beendet" }));
+      setNotice(error instanceof Error ? error.message : "Der Sammel-Upload konnte nicht gestartet werden.");
     } finally {
       setUploading(false);
       setUploadStatus("");
@@ -1889,6 +3165,7 @@ export default function InseratStudio() {
         setState(next);
         setActiveHouseId(next.houses[0]?.id ?? "");
         setActiveProjectId(next.projects[0]?.id ?? "");
+        setSelectedBatchProjectIds(next.projects[0]?.id ? [next.projects[0].id] : []);
         setActiveOwner(projectOwner(next.projects[0]));
         setNotice("Fabian&Pascal-Sicherung wurde lokal eingelesen.");
       } catch {
@@ -1898,6 +3175,46 @@ export default function InseratStudio() {
     reader.readAsText(file);
     event.target.value = "";
   };
+
+  useEffect(() => {
+    if (!ready || isPrimaryTab !== true) return;
+    const runSafeLocalScheduler = () => {
+      setState((current) => {
+        const currentScheduler = normalizeListingScheduler(current.scheduler);
+        if (!currentScheduler.settings.enabled || currentScheduler.settings.paused) return current;
+        const selection = selectSchedulerListings(current);
+        if (!selection.selections.length) return current;
+        let nextState = current;
+        const completedIds: string[] = [];
+        const failedIds: string[] = [];
+        for (const item of selection.selections) {
+          const result = prepareManagedCopyInState(
+            nextState,
+            item.project.id,
+            item.listing.id,
+            selection.scheduler.settings.mode === "full-auto"
+              ? "full-auto"
+              : selection.scheduler.settings.mode === "copy-without-delete"
+                ? "copy-without-delete"
+                : "prepare-only",
+          );
+          nextState = result.state;
+          (result.ok ? completedIds : failedIds).push(item.listing.id);
+        }
+        return reserveSchedulerSelection(nextState, selection, {
+          mode: selection.scheduler.settings.mode,
+          completedListingIds: completedIds,
+          failedListingIds: failedIds,
+        }).state as StudioState;
+      });
+    };
+    const initialTimer = window.setTimeout(runSafeLocalScheduler, 5_000);
+    const interval = window.setInterval(runSafeLocalScheduler, 60_000);
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.clearInterval(interval);
+    };
+  }, [ready, isPrimaryTab]);
 
   if (isPrimaryTab === false) {
     return (
@@ -1939,15 +3256,15 @@ export default function InseratStudio() {
       <section className="hero-panel">
         <div>
           <span className="eyebrow">Vom Grundstück zum fertigen Entwurf</span>
-          <h1>Vier Inserate. Eine Adresse. Volle Kontrolle.</h1>
+          <h1>Beliebig viele Inserate. Ein sicherer, verteilter Tageslauf.</h1>
           <p>
-            Adresse erfassen, vier Haustypen wählen, Texte prüfen und erst dann als
-            Entwurf zu Immoprofessional übertragen.
+            Hausvarianten dynamisch je Adresse verwalten, jedes Inserat einzeln prüfen
+            und Aktualisierungen gleichmäßig über alle Adressen verteilen.
           </p>
         </div>
         <div className="workflow-summary">
           <div><b>{state.houses.length}</b><span>von {MAX_HOUSE_TEMPLATES} Haustypen</span></div>
-          <div><b>{activeProject.selectedHouseIds.length}</b><span>ausgewählt</span></div>
+          <div><b>{activeListingGroup?.variants.filter((variant) => variant.templateId).length || 0}</b><span>aktive Varianten</span></div>
           <div><b>{activeProject.listings.length}</b><span>Entwürfe</span></div>
         </div>
       </section>
@@ -1957,7 +3274,8 @@ export default function InseratStudio() {
           ["houses", "01", "Haustypen"],
           ["project", "02", "Adresse & Auswahl"],
           ["preview", "03", "Texte & Vorschau"],
-          ["settings", "04", "Export & Upload"],
+          ["manager", "04", "Inseratsmanager"],
+          ["settings", "05", "Export & Upload"],
         ] as Array<[Tab, string, string]>).map(([id, number, label]) => (
           <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>
             <span>{number}</span>{label}
@@ -1976,52 +3294,42 @@ export default function InseratStudio() {
         <>
         <section className="workspace promotion-card">
           <div className="promotion-copy">
-            <span className="eyebrow">Zentrales Anzeigebild</span>
-            <h2>Aktionsbild für alle Haustypen</h2>
-            <p>Standardmodus: Das Haus steht an Position 1. Aktionsmodus: Das Aktionsbild steht an Position 1 und das Haus direkt dahinter. Die gespeicherten Hausfolgen bleiben unverändert.</p>
+            <span className="eyebrow">Aktionsbildverwaltung</span>
+            <h2>{promotionLibrary.promotionImages.length} Aktionsbilder in der Rotation</h2>
+            <p>Pro Adresse erhält maximal ein Inserat ein Aktionsbild. Motiv, Inserat und Zeitpunkt werden nach einem erfolgreichen Upload gespeichert; die übrigen Inserate behalten ihre normale Bildfolge.</p>
           </div>
-          {state.promotionImage ? (
-            <div className="promotion-editor">
-              <img src={state.promotionImage.dataUrl} alt={state.promotionImage.caption} />
-              <div>
-                <label className="image-caption">
-                  <span>Bildtext im Inserat</span>
-                  <input
-                    value={state.promotionImage.caption}
-                    onChange={(event) => setState((current) => ({
-                      ...current,
-                      promotionImage: current.promotionImage
-                        ? { ...current.promotionImage, caption: event.target.value }
-                        : null,
-                    }))}
-                  />
-                </label>
-                <label className="promotion-toggle">
-                  <input
-                    type="checkbox"
-                    checked={state.promotionImageEnabled}
-                    onChange={(event) => setState((current) => ({
-                      ...current,
-                      promotionImageEnabled: event.target.checked,
-                    }))}
-                  />
-                  <span><b>Aktionsmodus verwenden</b><small>Das Aktionsbild wird Bild 1, die Hausansicht Bild 2. Bei mehr als 14 Gesamtbildern blockiert die Exportprüfung.</small></span>
-                </label>
-                <div className="button-row">
-                  <label className="secondary file-label">Aktionsbild ersetzen<input type="file" accept="image/jpeg,image/png,image/webp" onChange={addPromotionImage} /></label>
-                  <button className="primary" disabled={savingHouses} onClick={saveHousesNow}>{savingHouses ? "Wird gespeichert …" : "Aktionsbild speichern"}</button>
-                  <button className="text-danger" onClick={removePromotionImage}>Aktionsbild entfernen</button>
-                </div>
-              </div>
+          <div className="promotion-management">
+            <div className="promotion-settings-grid">
+              <label className="promotion-toggle"><input type="checkbox" checked={promotionLibrary.promotionSettings.enabled} disabled={!promotionLibrary.promotionImages.some((image) => image.active)} onChange={(event) => updatePromotionSettings({ enabled: event.target.checked })} /><span><b>Aktionsbilder verwenden</b><small>Maximal ein Inserat je Adresse.</small></span></label>
+              <label className="promotion-toggle"><input type="checkbox" checked={promotionLibrary.promotionSettings.automaticRotation} onChange={(event) => updatePromotionSettings({ automaticRotation: event.target.checked })} /><span><b>Automatische Rotation</b><small>Vermeidet die zuletzt verwendete Kombination.</small></span></label>
+              <label className="promotion-toggle"><input type="checkbox" checked={promotionLibrary.promotionSettings.randomSelection} onChange={(event) => updatePromotionSettings({ randomSelection: event.target.checked })} /><span><b>Zufällige Auswahl</b><small>Wählt unter geeigneten aktiven Motiven.</small></span></label>
+              <label className="promotion-toggle"><input type="checkbox" checked={promotionLibrary.promotionSettings.manualSelection} onChange={(event) => updatePromotionSettings({ manualSelection: event.target.checked })} /><span><b>Manuelle Auswahl</b><small>Aktiviert Motiv- und Inseratswahl in der Uploadübersicht.</small></span></label>
             </div>
-          ) : (
-            <label className="promotion-upload">
-              <span>+</span>
-              <b>Aktionsbild einfügen</b>
-              <small>JPEG, PNG oder WebP auswählen</small>
-              <input type="file" accept="image/jpeg,image/png,image/webp" onChange={addPromotionImage} />
-            </label>
-          )}
+            {promotionLibrary.promotionImages.length ? (
+              <div className="promotion-library-grid">
+                {promotionLibrary.promotionImages.map((image, index) => (
+                  <article className={`promotion-library-item${image.active ? "" : " inactive"}`} key={image.id}>
+                    <img src={image.dataUrl} alt={image.caption} />
+                    <div className="promotion-library-fields">
+                      <div><b>{image.name}</b><small>Zuletzt: {localDateTime(image.lastUsedAt)} · {image.usageCount} Verwendungen</small></div>
+                      <label>Bildüberschrift<input value={image.caption} onChange={(event) => updatePromotionImage(image.id, { caption: event.target.value })} /></label>
+                      <label>Priorität<input type="number" value={image.priority} onChange={(event) => updatePromotionImage(image.id, { priority: Number(event.target.value) })} /></label>
+                      <label className="promotion-active"><input type="checkbox" checked={image.active} onChange={(event) => updatePromotionImage(image.id, { active: event.target.checked })} /> aktiv</label>
+                      <div className="promotion-item-actions">
+                        <button className="icon-button" disabled={index === 0} onClick={() => movePromotionImage(image.id, "up")} aria-label="Aktionsbild nach oben">↑</button>
+                        <button className="icon-button" disabled={index === promotionLibrary.promotionImages.length - 1} onClick={() => movePromotionImage(image.id, "down")} aria-label="Aktionsbild nach unten">↓</button>
+                        <button className="text-danger" onClick={() => removePromotionImage(image.id)}>Entfernen</button>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : <div className="empty-state compact"><b>Noch kein Aktionsbild hinterlegt</b><span>Füge ein oder mehrere Motive hinzu; ohne aktive Motive werden ausschließlich normale Hausbilder verwendet.</span></div>}
+            <div className="button-row promotion-library-actions">
+              <label className="secondary file-label">Aktionsbilder hinzufügen<input type="file" multiple accept="image/jpeg,image/png,image/webp" onChange={addPromotionImage} /></label>
+              <button className="primary" disabled={savingHouses} onClick={saveHousesNow}>{savingHouses ? "Wird gespeichert …" : "Aktionsbildverwaltung speichern"}</button>
+            </div>
+          </div>
         </section>
         <section className="workspace integrated-catalog-card">
           <details>
@@ -2099,7 +3407,7 @@ export default function InseratStudio() {
               <Field label="Baujahr geplant" type="number" value={activeHouse.constructionYear} onChange={(value) => updateHouse({ constructionYear: Number(value) })} />
               <Field label="Endenergiebedarf" type="number" min={0} value={activeHouse.energyDemand} suffix="kWh/(m²·a)" onChange={(value) => updateHouse({ energyDemand: Number(value) })} />
               <Field label="Energieklasse (fest)" value={IMMOPROFESSIONAL_DEFAULTS.energyClass} readOnly onChange={() => undefined} />
-              <Field label="Heizungsart (fest)" value="Fußbodenheizung mit Luft-Wasser-Wärmepumpe" readOnly onChange={() => undefined} />
+              <Field label="Heizungsart (fest)" value={HOUSE_ENERGY_DEFAULTS.heatingType} readOnly onChange={() => undefined} />
               <TextField label="Architektur & Grundriss" rows={3} value={activeHouse.architecture} onChange={(value) => updateHouse({ architecture: value })} />
               <TextField label="Ausstattungsmerkmale" rows={3} value={activeHouse.equipmentHighlights} onChange={(value) => updateHouse({ equipmentHighlights: value })} />
               <label className="standard-package field-wide">
@@ -2111,6 +3419,17 @@ export default function InseratStudio() {
                 <span>
                   <b>Standardbausteine aus den Exposé-Vorlagen verwenden</b>
                   <small>Traumküche, Bau-Cockpit, I-KON, Zuhause-Darlehen, Zuhause-Paket, DIY-Coaching sowie die beschriebenen Garantie- und Serviceleistungen. Vor dem Import je Haustyp prüfen.</small>
+                </span>
+              </label>
+              <label className="standard-package field-wide">
+                <input
+                  type="checkbox"
+                  checked={activeHouse.approved !== false}
+                  onChange={(event) => updateHouse({ approved: event.target.checked })}
+                />
+                <span>
+                  <b>Für Inseratsvarianten freigegeben</b>
+                  <small>Nur freigegebene, vollständig gepflegte Hausvarianten können einer Adresse zugeordnet werden. Bereits zugeordnete Varianten werden bei einer späteren Sperre im Dry Run blockiert.</small>
                 </span>
               </label>
             </div>
@@ -2368,6 +3687,180 @@ export default function InseratStudio() {
                 {addressImportReport.map((message) => <span key={message}>{message}</span>)}
               </div>
             ) : null}
+            <section className="batch-address-selection" aria-label="Adressen für den Sammel-Upload auswählen">
+              <div className="section-heading compact">
+                <div>
+                  <span className="eyebrow">Projektierungen erstellen</span>
+                  <h3>{effectiveBatchProjectIds.length} Adresse{effectiveBatchProjectIds.length === 1 ? "" : "n"} für den Sammel-Upload</h3>
+                  <small className="section-note">Beliebig viele Adressen auswählen. Der zentrale Hauspool verteilt anschließend je Grundstück genau vier unterschiedliche Häuser und berücksichtigt dabei die dauerhaft gespeicherte Nutzungshistorie.</small>
+                </div>
+                <div className="button-row">
+                  <button className="secondary" onClick={() => setSelectedBatchProjectIds(ownerProjects.map((project) => project.id))}>Alle auswählen</button>
+                  <button className="secondary" onClick={() => setSelectedBatchProjectIds([])}>Auswahl leeren</button>
+                </div>
+              </div>
+              <div className="batch-address-groups">
+                {ownerProjectGroups.map((group) => (
+                  <section key={group.label}>
+                    <header><b>{group.label}</b><span>{group.projects.length} Adressen</span></header>
+                    <div>
+                      {group.projects.map((project) => {
+                        const selected = effectiveBatchProjectIds.includes(project.id);
+                        const groupValue = normalizeListingGroup(project.listingGroup, project.id) as ListingGroup;
+                        const listingCount = project.listings.length || groupValue.variants.filter((variant) => variant.active && variant.templateId).length;
+                        return (
+                          <label className={selected ? "selected" : ""} key={project.id}>
+                            <input type="checkbox" checked={selected} onChange={(event) => toggleBatchProject(project.id, event.target.checked)} />
+                            <span><b>{projectSelectionLabel(project)}</b><small>{listingCount} Inserate/Varianten · {projectRegionLabel(project)}</small></span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </section>
+                ))}
+              </div>
+              <div className="house-pool-card">
+                <div className="section-heading compact">
+                  <div>
+                    <span className="eyebrow">Zentraler Rotationspool</span>
+                    <h3>{houseDistribution.poolHouseIds.length} Häuser im Hauspool</h3>
+                    <small className="section-note">Der Pool gilt für die Ersterstellung und für alle späteren inseratsweisen Aktualisierungen. Selten verwendete Häuser und neue Kombinationen werden bevorzugt.</small>
+                  </div>
+                  <div className="button-row">
+                    <button className="secondary" onClick={() => setState((current) => ({
+                      ...current,
+                      houseDistribution: setHouseDistributionPool(
+                        current.houseDistribution,
+                        housePoolValidation.eligibleHouseIds,
+                        current.houses,
+                        current.projects,
+                      ) as HouseDistributionState,
+                    }))}>Alle vollständigen</button>
+                    <button className="secondary" onClick={() => setState((current) => ({
+                      ...current,
+                      houseDistribution: setHouseDistributionPool(
+                        current.houseDistribution,
+                        [],
+                        current.houses,
+                        current.projects,
+                      ) as HouseDistributionState,
+                    }))}>Pool leeren</button>
+                  </div>
+                </div>
+                <div className="house-pool-grid">
+                  {approvedHouses.map((house) => {
+                    const usage = houseDistribution.houseUsage.find((entry) => entry.houseId === house.id);
+                    const rejected = rejectedPoolHouses.get(house.id) || [];
+                    const selected = houseDistribution.poolHouseIds.includes(house.id);
+                    return (
+                      <label className={`${selected ? "selected" : ""}${rejected.length ? " rejected" : ""}`} key={house.id}>
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          disabled={Boolean(rejected.length)}
+                          onChange={(event) => toggleHousePoolEntry(house.id, event.target.checked)}
+                        />
+                        <span>
+                          <b>{house.name}</b>
+                          <small>{house.livingArea} m² · {house.rooms} Zimmer · {usage?.totalUses || 0} Nutzungen · {usage?.activeProjectIds.length || 0} aktiv</small>
+                          {rejected.length ? <em>{rejected.join(" · ")}</em> : null}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+                {!housePoolValidation.ok ? <p className="house-pool-error">{housePoolValidation.issues.join(" · ")}</p> : null}
+                <div className="house-pool-actions">
+                  <label className="compact-field">Nutzungszeitraum
+                    <span><input
+                      type="number"
+                      min={1}
+                      value={houseDistribution.settings.usageWindowDays}
+                      onChange={(event) => setState((current) => {
+                        const distribution = normalizeHouseDistribution(current.houseDistribution, current.houses, current.projects);
+                        return {
+                          ...current,
+                          houseDistribution: {
+                            ...distribution,
+                            settings: { ...distribution.settings, usageWindowDays: Math.max(1, Number(event.target.value) || 1) },
+                          } as HouseDistributionState,
+                        };
+                      })}
+                    /> Tage</span>
+                  </label>
+                  <button
+                    className="primary"
+                    disabled={!effectiveBatchProjectIds.length || !housePoolValidation.ok}
+                    onClick={() => generateHousePreviews()}
+                  >Alle Grundstücke gewichtet neu verteilen</button>
+                </div>
+              </div>
+
+              <div className="house-distribution-preview">
+                <div className="section-heading compact">
+                  <div>
+                    <span className="eyebrow">Bearbeitbare Vorschau</span>
+                    <h3>Vier Häuser je Grundstück</h3>
+                    <small className="section-note">Reihenfolge, einzelne Häuser, Fixierungen und grundstücksbezogene Ausschlüsse können vor dem Upload angepasst werden.</small>
+                  </div>
+                </div>
+                {effectiveBatchProjectIds.map((projectId) => {
+                  const project = state.projects.find((item) => item.id === projectId);
+                  const record = houseDistributionByProject.get(projectId);
+                  if (!project || !record) return null;
+                  const promotionImage = choosePromotionImage(promotionLibrary, { projectId });
+                  const projectPromotionUses = promotionLibrary.promotionUsage.filter((entry) => entry.projectId === projectId).length;
+                  const actionIndex = record.previewHouseIds.length ? projectPromotionUses % record.previewHouseIds.length : -1;
+                  return (
+                    <article className="house-distribution-card" key={projectId}>
+                      <header>
+                        <div><b>{projectSelectionLabel(project)}</b><small>{projectRegionLabel(project)}</small></div>
+                        <div className="button-row"><button className="secondary" onClick={() => generateSingleHousePreview(projectId)}>Grundstück neu verteilen</button></div>
+                      </header>
+                      {record.previewHouseIds.length === HOUSES_PER_PROJECT ? (
+                        <div className="house-distribution-slots">
+                          {record.previewHouseIds.map((houseId, index) => {
+                            const house = state.houses.find((item) => item.id === houseId);
+                            if (!house) return null;
+                            return (
+                              <div className="house-distribution-slot" key={`${projectId}-${index}`}>
+                                <span className="slot-order">{index + 1}</span>
+                                <div className="slot-house">
+                                  <select value={houseId} onChange={(event) => updateHousePreviewSlot(projectId, index, event.target.value)}>
+                                    {houseDistribution.poolHouseIds.filter((id) => eligiblePoolHouseIds.has(id)).map((id) => {
+                                      const option = state.houses.find((item) => item.id === id);
+                                      return option ? <option key={id} value={id}>{option.name}</option> : null;
+                                    })}
+                                  </select>
+                                  <small>{house.livingArea} m² · {house.rooms} Zimmer · {euro(totalPrice(house, project))}</small>
+                                </div>
+                                <label className="pin-house"><input type="checkbox" checked={record.pinnedHouseIds.includes(houseId)} onChange={(event) => togglePinnedPreviewHouse(projectId, houseId, event.target.checked)} /> fixieren</label>
+                                <div className="slot-move">
+                                  <button className="secondary" disabled={index === 0} onClick={() => moveHousePreviewSlot(projectId, index, "up")}>↑</button>
+                                  <button className="secondary" disabled={index === record.previewHouseIds.length - 1} onClick={() => moveHousePreviewSlot(projectId, index, "down")}>↓</button>
+                                </div>
+                                {index === actionIndex && promotionImage ? <span className="slot-promotion">Aktionsbild · {promotionImage.name}</span> : <span className="slot-normal">normale Bildfolge</span>}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : <div className="empty-state compact"><b>Noch keine vollständige Verteilung</b><span>Mit „gewichtet neu verteilen“ werden vier unterschiedliche Häuser vorgeschlagen.</span></div>}
+                      <details className="project-house-exclusions">
+                        <summary>Häuser nur für dieses Grundstück ausschließen ({record.excludedHouseIds.length})</summary>
+                        <div>{houseDistribution.poolHouseIds.filter((id) => eligiblePoolHouseIds.has(id)).map((houseId) => {
+                          const house = state.houses.find((item) => item.id === houseId);
+                          return house ? <label key={houseId}><input type="checkbox" checked={record.excludedHouseIds.includes(houseId)} onChange={(event) => toggleExcludedProjectHouse(projectId, houseId, event.target.checked)} /> {house.name}</label> : null;
+                        })}</div>
+                      </details>
+                    </article>
+                  );
+                })}
+              </div>
+              <div className="batch-selection-action">
+                <div><b>Geprüfte Vorschau übernehmen</b><span>Genau vier unterschiedliche Häuser, vollständige Hausdaten, Standardwerte, Bilder und genau eine Aktionsbild-Zuordnung je Adresse werden für den Upload zusammengestellt.</span></div>
+                <button className="primary" disabled={!effectiveBatchProjectIds.length || !housePoolValidation.ok} onClick={prepareBatchSelection}>Vorschau übernehmen &amp; Uploadübersicht öffnen</button>
+              </div>
+            </section>
             <div className="section-heading">
               <div><span className="eyebrow">Adressbuch {activeOwner === "pascal" ? "Pascal" : "Fabian"}</span><h2>Grundstück speichern &amp; wiederverwenden</h2></div>
               <div className="button-row">
@@ -2426,29 +3919,138 @@ export default function InseratStudio() {
                 <TextField label="Verkehr & Erreichbarkeit" value={activeProject.transportFacts} placeholder="Nur bestätigte Angaben eintragen." onChange={(value) => updateProject({ transportFacts: value })} />
                 <TextField label="Familie & Versorgung" value={activeProject.familyFacts} placeholder="Schulen, Kitas, Einkauf – nur geprüfte Fakten." onChange={(value) => updateProject({ familyFacts: value })} />
                 <TextField label="Natur & Freizeit" value={activeProject.natureFacts} placeholder="Wald, Seen, Wege oder Freizeitangebote." onChange={(value) => updateProject({ natureFacts: value })} />
-                <TextField label="Zusätzliche Hinweise" value={activeProject.notes} onChange={(value) => updateProject({ notes: value })} />
               </div>
             </details>
 
-            <div className="selection-section">
+            <div className="selection-section listing-group-editor">
               <div className="section-heading compact">
-                <div><span className="eyebrow">Maximal vier auswählen</span><h3>Welche Häuser passen zu dieser Adresse?</h3></div>
-                <b>{activeProject.selectedHouseIds.length}/4</b>
+                <div>
+                  <span className="eyebrow">Aktive Inseratsgruppe</span>
+                  <h3>Maximal vier Inserate für diese Adresse</h3>
+                  <small className="section-note">Die vier aktiven Häuser stammen aus dem zentralen Hauspool. Der gesamte Pool bleibt unabhängig davon für spätere gewichtete Rotationen erhalten.</small>
+                </div>
+                <div className="button-row">
+                  <b>{listingVariants.filter((variant) => variant.templateId).length} von {HOUSES_PER_PROJECT} belegt</b>
+                </div>
               </div>
-              <div className="selection-grid">
-                {state.houses.map((house) => {
-                  const selected = activeProject.selectedHouseIds.includes(house.id);
-                  const displayImage = effectiveHouseImages(state, house)[0];
-                  return (
-                    <button key={house.id} className={selected ? "select-card selected" : "select-card"} onClick={() => toggleHouse(house.id)}>
-                      <span className="selection-check">{selected ? "✓" : "+"}</span>
-                      {displayImage ? <img src={displayImage.dataUrl} alt={displayImage.caption} /> : <div className="image-placeholder">F&amp;P</div>}
-                      <div><strong>{house.name}</strong><small>{house.livingArea} m² · {house.rooms} Zimmer</small><b>{euro(totalPrice(house, activeProject))}</b></div>
-                    </button>
-                  );
-                })}
+              <div className="listing-variant-columns dynamic">
+                <section className="listing-variant-column">
+                  <header><b>Aktive Hausvarianten</b><span>{listingVariants.length} von maximal {HOUSES_PER_PROJECT}</span></header>
+                  {listingVariants.map((variant, index) => {
+                    const house = approvedHouses.find((item) => item.id === variant.templateId);
+                    return (
+                      <article className={`listing-variant-row${variant.templateId ? " assigned" : ""}${variant.active ? " active" : " inactive"}`} key={variant.id}>
+                        <div className="variant-order"><span>Variante</span><b>{variant.order}</b></div>
+                        <div className="variant-main">
+                          <select value={variant.templateId} onChange={(event) => assignHouseToVariant(variant.id, event.target.value)} aria-label={`Inseratsvariante ${index + 1}`}>
+                            <option value="">Haustyp auswählen</option>
+                            {approvedHouses.filter((item) => houseDistribution.poolHouseIds.includes(item.id) && eligiblePoolHouseIds.has(item.id)).map((item) => (
+                              <option key={item.id} value={item.id}>{item.name} · {item.livingArea} m² · {item.rooms} Zi. · {euro(totalPrice(item, activeProject))}</option>
+                            ))}
+                          </select>
+                          {house ? (
+                            <small>{house.houseType} · {house.images.length} Bilder · {house.images.filter((image) => image.isFloorplan).length} Grundrissbilder · vollständiger Variantenstand</small>
+                          ) : <small>Freie Vorschlagszeile – auswählen oder entfernen.</small>}
+                        </div>
+                        <label className="variant-active-toggle" title="Variante in der Rotation verwenden">
+                          <input type="checkbox" checked={variant.active} disabled={!variant.templateId} onChange={(event) => setVariantActive(variant.id, event.target.checked)} />
+                          <span>aktiv</span>
+                        </label>
+                        <div className="variant-order-buttons">
+                          <button className="icon-button" disabled={index === 0} onClick={() => moveVariant(variant.id, "up")} aria-label="Variante nach oben">↑</button>
+                          <button className="icon-button" disabled={index === listingVariants.length - 1} onClick={() => moveVariant(variant.id, "down")} aria-label="Variante nach unten">↓</button>
+                          <button className="icon-button danger" onClick={() => removeVariant(variant.id)} aria-label="Variante entfernen">×</button>
+                        </div>
+                      </article>
+                    );
+                  })}
+                  {!listingVariants.length ? <div className="empty-state compact"><b>Noch keine Variante</b><span>Mit „Variante hinzufügen“ entsteht eine neue freie Zeile.</span></div> : null}
+                </section>
               </div>
             </div>
+
+            {activeListingGroup ? (
+              <div className="listing-group-management">
+                <div className="section-heading compact">
+                  <div>
+                    <span className="eyebrow">Sichere Rotationsverwaltung</span>
+                    <h3>Aktualisierung, Sperren und Protokoll</h3>
+                    <small className="section-note">Jedes Inserat wird unabhängig rotiert, gesperrt und protokolliert. Vollautomatisches Löschen bleibt bis zur bestätigten Immoprofessional-Löschschnittstelle gesperrt.</small>
+                  </div>
+                  <span className="status online">Löschschutz aktiv</span>
+                </div>
+
+                <div className="listing-group-overview">
+                  <div><span>Adresse</span><b>{projectSelectionLabel(activeProject)}</b></div>
+                  <div><span>Aktuelles Ausgangshaus</span><b>{currentRotationHouse?.name || "Noch keines"}</b></div>
+                  <div><span>Gewichtetes nächstes Haus</span><b>{nextRotationHouse?.name || "Nicht verfügbar"}</b></div>
+                  <div><span>Aktive Inserate</span><b>{activeProject.listings.length}</b></div>
+                  <div><span>Premium-Sperren</span><b>{premiumLockCount}</b></div>
+                  <div><span>Nächster Termin</span><b>{localDateTime(activeListingGroup.automation.nextUpdatedAt)}</b></div>
+                  <div><span>Letzter Status</span><b>{activeListingGroup.lastStatusMessage || workflowStatusLabel(activeListingGroup.lastStatus)}</b></div>
+                  <div><span>Letzter Fehler</span><b>{activeListingGroup.lastError || "–"}</b></div>
+                </div>
+
+                <div className="automation-settings-grid">
+                  <label className="standard-package">
+                    <input type="checkbox" checked={activeListingGroup.automation.rotationEnabled} onChange={(event) => updateGroupAutomation({ rotationEnabled: event.target.checked })} />
+                    <span><b>Gewichtete Hausrotation aktiv</b><small>Wählt je Inserat zentral nach Nutzung, Historie und eindeutiger Vierer-Kombination.</small></span>
+                  </label>
+                  <label className="standard-package locked-setting">
+                    <input type="checkbox" checked={false} disabled />
+                    <span><b>Automatisches Löschen deaktiviert</b><small>Bleibt bis zur bestätigten Immoprofessional-Löschschnittstelle technisch gesperrt.</small></span>
+                  </label>
+                </div>
+
+                <div className="rotation-actions">
+                  <button className="primary" disabled={groupOperationRunning} onClick={runGroupDryRun}>{groupOperationRunning ? "Prüfung läuft …" : "Dry Run starten"}</button>
+                  <button className="secondary" disabled={groupOperationRunning} onClick={prepareNextVariantCopy}>Nächste Variante vorbereiten</button>
+                  <button className="secondary" onClick={() => setTab("manager")}>Zum globalen Inseratsmanager</button>
+                </div>
+                <p className="helper-text">Zeitfenster, Tageslimit, Adresslimit, Priorität und Automatikmodus werden zentral im Inseratsmanager gesteuert. Erst ein bestätigter Upload zählt die Variante als verwendet; bestehende Anzeigen werden nicht automatisch gelöscht.</p>
+                {lastGroupDryRun ? (
+                  <div className={`dry-run-result ${lastGroupDryRun.ok ? "ready" : "blocked"}`}>
+                    <b>{lastGroupDryRun.ok ? "Dry Run bestanden" : "Dry Run blockiert"} · {lastGroupDryRun.variantName}</b>
+                    <span>{lastGroupDryRun.issues.length ? lastGroupDryRun.issues.join(" · ") : "Alle Pflichtfelder, Hausdaten, Preise, Bilder und Standardwerte sind konsistent. Keine Veröffentlichung und keine Löschung ausgeführt."}</span>
+                  </div>
+                ) : null}
+
+                <details className="listing-locks" open={activeProject.listings.length > 0}>
+                  <summary>Inseratsbezogene Sperrliste ({activeProject.listings.length})</summary>
+                  <div className="listing-lock-list">
+                    {activeProject.listings.length ? activeProject.listings.map((listing) => {
+                      const control = listingControl(activeListingGroup, listing);
+                      const blockReasons = listingDeletionBlockReasons(activeListingGroup, listing);
+                      return (
+                        <article key={listing.id} className="listing-lock-row">
+                          <header><div><b>{listing.externalId}</b><span>{listing.templateName}</span></div><small>{blockReasons.join(" · ")}</small></header>
+                          <div className="listing-lock-options">
+                            <label><input type="checkbox" checked={control.automaticUpdateEnabled} onChange={(event) => updateGroupListingControl(listing, { automaticUpdateEnabled: event.target.checked })} /> Aktualisierung</label>
+                            <label><input type="checkbox" checked={control.premiumPlacement} onChange={(event) => updateGroupListingControl(listing, { premiumPlacement: event.target.checked })} /> Premium-Sperre</label>
+                            <label><input type="checkbox" checked={control.manualLock} onChange={(event) => updateGroupListingControl(listing, { manualLock: event.target.checked })} /> Löschung sperren</label>
+                            <label className="lock-date">Gesperrt bis<input type="datetime-local" value={control.lockedUntil ? control.lockedUntil.slice(0, 16) : ""} onChange={(event) => updateGroupListingControl(listing, { lockedUntil: event.target.value ? new Date(event.target.value).toISOString() : "" })} /></label>
+                            <label className="lock-reason">Sperrgrund<input value={control.lockReason} placeholder="z. B. Premium-Platzierung" onChange={(event) => updateGroupListingControl(listing, { lockReason: event.target.value })} /></label>
+                          </div>
+                        </article>
+                      );
+                    }) : <div className="empty-state compact"><b>Noch keine aktiven Inseratentwürfe</b><span>Nach der Erstellung der ausgewählten Hausvarianten erscheinen hier die objektspezifischen Sperren.</span></div>}
+                  </div>
+                </details>
+
+                <details className="listing-group-log">
+                  <summary>Prozessprotokoll ({activeListingGroup.logs.length})</summary>
+                  <div className="listing-group-log-list">
+                    {activeListingGroup.logs.length ? [...activeListingGroup.logs].reverse().slice(0, 12).map((log) => (
+                      <article key={log.id}>
+                        <div><b>{log.message || workflowStatusLabel(log.processStatus)}</b><span>{localDateTime(log.timestamp)} · {log.mode}</span></div>
+                        <p>{log.oldVariantName || "Start"} → {log.newVariantName || "keine Variante"} · Alt: {log.oldExternalId || "–"} · Neu: {log.newExternalId || "–"}</p>
+                        <small>{log.checkResult}</small>
+                      </article>
+                    )) : <span>Noch keine Vorgänge protokolliert.</span>}
+                  </div>
+                </details>
+              </div>
+            ) : null}
             <div className="project-text-preview">
               <div className="section-heading compact">
                 <div>
@@ -2501,7 +4103,16 @@ export default function InseratStudio() {
               <div className="listing-stack">
                 {activeProject.listings.map((listing) => {
                   const house = state.houses.find((item) => item.id === listing.templateId);
-                  const displayImages = house ? effectiveHouseImages(state, house) : [];
+                  const plannedItem = batchOverviewPlan.addresses
+                    .find((address: { projectId: string }) => address.projectId === activeProject.id)
+                    ?.items.find((item: { listingId: string }) => item.listingId === listing.id);
+                  const promotionImageId = plannedItem?.promotionImageId || listing.promotionImageId || "";
+                  const promotionImage = promotionLibrary.promotionImages.find((image) => image.id === promotionImageId);
+                  const displayImages = house
+                    ? promotionImage
+                      ? [{ ...promotionImage, role: "promotion" as ImageRole }, ...orderHouseImages(house.images)]
+                      : orderHouseImages(house.images)
+                    : [];
                   const displayImage = displayImages[0];
                   return (
                     <article className="listing-card" key={listing.id}>
@@ -2523,14 +4134,93 @@ export default function InseratStudio() {
                         <TextField label="7 · Allgemeine Geschäftsbedingungen · fest" rows={3} value={FIXED_TERMS_TEXT} readOnly />
                         <TextField label="8 · Freier Textblock für Empfehlungen · fest" rows={7} value={FIXED_RECOMMENDATION_TEXT} readOnly />
                       </div>
-                      <footer><span>{displayImages.length} Bilder automatisch zugeordnet{state.promotionImageEnabled && state.promotionImage ? " · Aktionsbild an Position 1" : ""}</span><span>Weitergabe an Portale: <b>deaktiviert</b></span></footer>
+                      <footer><span>{displayImages.length} Bilder automatisch zugeordnet{promotionImage ? " · Aktionsbild an Position 1" : " · normale Bildfolge"}</span><span>Weitergabe an Portale: <b>deaktiviert</b></span></footer>
                     </article>
                   );
                 })}
               </div>
             ) : (
-              <div className="empty-state large"><b>Noch keine Entwürfe</b><span>Erfasse eine Adresse, wähle bis zu vier Haustypen und erzeuge anschließend die Texte.</span><button className="primary" onClick={() => setTab("project")}>Zur Adresseingabe</button></div>
+              <div className="empty-state large"><b>Noch keine Entwürfe</b><span>Erfasse eine Adresse, ordne mindestens eine Hausvariante zu und erzeuge anschließend die Texte.</span><button className="primary" onClick={() => setTab("project")}>Zur Adresseingabe</button></div>
             )}
+          </div>
+        </section>
+      ) : null}
+
+      {tab === "manager" ? (
+        <section className="workspace manager-workspace">
+          <div className="content-card scheduler-card">
+            <div className="section-heading">
+              <div>
+                <span className="eyebrow">Global und inseratsbezogen</span>
+                <h2>Inseratsmanager</h2>
+                <small className="section-note">Der Scheduler lädt alle vorhandenen Inserate dynamisch und verteilt jede Runde adressübergreifend. Premium- und manuell gesperrte Anzeigen werden übersprungen; ein Fehler stoppt niemals andere Inserate.</small>
+              </div>
+              <span className={scheduler.settings.paused || !scheduler.settings.enabled ? "status offline" : "status online"}>
+                {scheduler.settings.paused || !scheduler.settings.enabled ? "Automatik pausiert" : "Automatik aktiv"}
+              </span>
+            </div>
+            <div className="scheduler-settings-grid">
+              <label className="standard-package">
+                <input type="checkbox" checked={scheduler.settings.enabled} onChange={(event) => updateScheduler({ enabled: event.target.checked })} />
+                <span><b>Scheduler aktivieren</b><small>Berücksichtigt Zeitfenster, Wochentage und Tageslimits.</small></span>
+              </label>
+              <label className="standard-package">
+                <input type="checkbox" checked={scheduler.settings.paused} onChange={(event) => updateScheduler({ paused: event.target.checked })} />
+                <span><b>Automatik pausieren</b><small>Stoppt neue Auswahlen, ohne gespeicherte Daten zu verändern.</small></span>
+              </label>
+              <label className="field"><span>Modus</span><select value={scheduler.settings.mode} onChange={(event) => updateScheduler({ mode: event.target.value as SchedulerSettings["mode"] })}><option value="prepare-only">Nur vorbereiten</option><option value="copy-without-delete">Kopieren ohne Löschen</option><option value="full-auto">Vollautomatisch</option><option value="blocked">Gesperrt</option></select></label>
+              <Field label="Maximal pro Tag" type="number" min={1} value={scheduler.settings.maxUpdatesPerDay} onChange={(value) => updateScheduler({ maxUpdatesPerDay: Number(value) })} />
+              <Field label="Maximal je Adresse/Tag" type="number" min={1} value={scheduler.settings.maxUpdatesPerAddressPerDay} onChange={(value) => updateScheduler({ maxUpdatesPerAddressPerDay: Number(value) })} />
+              <Field label="Mindestabstand" type="number" min={1} suffix="Stunden" value={scheduler.settings.minimumSpacingHours} onChange={(value) => updateScheduler({ minimumSpacingHours: Number(value) })} />
+              <Field label="Erste Aktualisierung" type="number" min={1} suffix="Tage" value={scheduler.settings.initialWaitDays} onChange={(value) => updateScheduler({ initialWaitDays: Number(value) })} />
+              <Field label="Wiederholungsintervall" type="number" min={1} suffix="Tage" value={scheduler.settings.updateIntervalDays} onChange={(value) => updateScheduler({ updateIntervalDays: Number(value) })} />
+              <Field label="Startzeit" type="time" value={scheduler.settings.startTime} onChange={(value) => updateScheduler({ startTime: String(value) })} />
+              <Field label="Endzeit" type="time" value={scheduler.settings.endTime} onChange={(value) => updateScheduler({ endTime: String(value) })} />
+              <label className="field scheduler-weekdays"><span>Erlaubte Wochentage</span><div>{[[1, "Mo"], [2, "Di"], [3, "Mi"], [4, "Do"], [5, "Fr"], [6, "Sa"], [0, "So"]].map(([day, label]) => <label key={day}><input type="checkbox" checked={scheduler.settings.allowedWeekdays.includes(Number(day))} onChange={(event) => updateScheduler({ allowedWeekdays: event.target.checked ? [...scheduler.settings.allowedWeekdays, Number(day)] : scheduler.settings.allowedWeekdays.filter((item) => item !== Number(day)) })} />{label}</label>)}</div></label>
+            </div>
+            <div className="rotation-actions">
+              <button className="primary" onClick={runGlobalSchedulerDryRun}>Globalen Dry Run starten</button>
+              <button className="secondary" onClick={prepareGlobalDailyRun}>Fälligen Tageslauf vorbereiten</button>
+            </div>
+            <p className="security-note">Sicherheitsgrenze: Die Auswahl, Prüfung, Rotation und Entwurfserstellung sind implementiert. Automatisches Löschen bleibt blockiert, bis Immoprofessional eine bestätigte Löschschnittstelle und einen zurücklesbaren Erfolgsstatus bereitstellt.</p>
+          </div>
+
+          <div className="content-card manager-list-card">
+            <div className="section-heading compact"><div><span className="eyebrow">Alle Adressen</span><h3>{managedListings.length} verwaltete{managedListings.length === 1 ? "s" : ""} Inserat{managedListings.length === 1 ? "" : "e"}</h3></div><b>Health Score sortiert</b></div>
+            <div className="manager-table" role="table" aria-label="Verwaltete Inserate">
+              {managedListings.map(({ project, listing, control, health, rotationPlan, nextHouse }) => (
+                <article className={`manager-row${control.premiumPlacement || control.manualLock || listing.rotationArchivedAt ? " locked" : ""}`} key={`${project.id}-${listing.id}`}>
+                  <div className="manager-row-main">
+                    <div><span>Adresse</span><b>{projectSelectionLabel(project)}</b></div>
+                    <div><span>Objektnummer</span><b>{listing.externalId || "Noch nicht hochgeladen"}</b></div>
+                    <div><span>Hausvariante</span><b>{listing.templateName}</b><small>{euro(listing.price)}</small></div>
+                    <div><span>Aktionsbild</span><b>{promotionLibrary.promotionImages.find((image) => image.id === listing.promotionImageId)?.name || "Normale Bildfolge"}</b><small>{listing.promotionAssignedAt ? localDateTime(listing.promotionAssignedAt) : "Noch nicht zugeordnet"}</small></div>
+                    <div><span>Letzte / nächste Aktualisierung</span><b>{localDateTime(control.lastSuccessAt || control.lastUpdatedAt)}</b><small>{localDateTime(control.nextUpdatedAt)}</small></div>
+                    <div><span>Status / Health Score</span><b>{control.statusMessage || workflowStatusLabel(control.status)} · {health.score}</b><small>{control.lastError || `${Math.floor(health.daysSinceSuccess)} Tage seit Erfolg`}</small></div>
+                  </div>
+                  <div className="manager-controls">
+                    <label><input type="checkbox" checked={control.automaticUpdateEnabled} onChange={(event) => updateManagedListingControl(project.id, listing.id, { automaticUpdateEnabled: event.target.checked })} /> Automatik</label>
+                    <label><input type="checkbox" checked={control.premiumPlacement} onChange={(event) => updateManagedListingControl(project.id, listing.id, { premiumPlacement: event.target.checked })} /> Premium</label>
+                    <label><input type="checkbox" checked={control.manualLock} onChange={(event) => updateManagedListingControl(project.id, listing.id, { manualLock: event.target.checked })} /> Löschen sperren</label>
+                    <label className="compact-field">Priorität<input type="number" min={-100} max={100} value={control.userPriority} onChange={(event) => updateManagedListingControl(project.id, listing.id, { userPriority: Number(event.target.value) })} /></label>
+                    <label className="compact-field">Modus<select value={control.updateMode} onChange={(event) => updateManagedListingControl(project.id, listing.id, { updateMode: event.target.value as typeof control.updateMode })}><option value="prepare-only">Vorbereiten</option><option value="copy-without-delete">Kopieren</option><option value="full-auto">Vollautomatisch</option><option value="blocked">Gesperrt</option></select></label>
+                    <label className="compact-field variant-choice">Nächstes Haus<select value={managerVariantOverrides[listing.id] || nextHouse?.id || ""} onChange={(event) => setManagerVariantOverrides((current) => ({ ...current, [listing.id]: event.target.value }))}>
+                      {!rotationPlan.ok ? <option value="">Kein Ersatz verfügbar</option> : null}
+                      {houseDistribution.poolHouseIds.filter((houseId) => {
+                        const activeIds = houseDistributionByProject.get(project.id)?.activeHouseIds || project.selectedHouseIds;
+                        return eligiblePoolHouseIds.has(houseId) && houseId !== listing.templateId && !activeIds.filter((id) => id !== listing.templateId).includes(houseId);
+                      }).map((houseId) => {
+                        const house = state.houses.find((item) => item.id === houseId);
+                        return house ? <option key={house.id} value={house.id}>{house.name}</option> : null;
+                      })}
+                    </select></label>
+                    <button className="primary" disabled={Boolean(listing.rotationArchivedAt)} onClick={() => prepareManagedListing(project.id, listing.id, control.updateMode === "full-auto" ? "full-auto" : control.updateMode === "copy-without-delete" ? "copy-without-delete" : "prepare-only")}>Jetzt aktualisieren</button>
+                    <button className="secondary" disabled={Boolean(listing.rotationArchivedAt)} onClick={() => prepareManagedListing(project.id, listing.id, "copy-without-delete")}>Nur kopieren</button>
+                  </div>
+                </article>
+              ))}
+              {!managedListings.length ? <div className="empty-state large"><b>Noch keine verwalteten Inserate</b><span>Wähle unter „Adresse &amp; Auswahl“ mindestens eine Hausvariante aus und erzeuge den Entwurf.</span></div> : null}
+            </div>
           </div>
         </section>
       ) : null}
@@ -2613,33 +4303,76 @@ export default function InseratStudio() {
           </div>
 
           <aside className="upload-card">
-            <span className="eyebrow">Kontrollierter Entwurfsimport</span>
-            <h2>{selectedUploadIds.length} von {activeProject.listings.length} ausgewählt</h2>
-            <p>Wähle ausdrücklich aus, welche Inserate als getrennte OpenImmo-Pakete übertragen werden. Adressfreigabe und Portalweitergabe bleiben deaktiviert.</p>
-            <div className="upload-selection" aria-label="Inserate für den Upload auswählen">
-              {activeProject.listings.map((listing) => (
-                <label key={listing.id}>
-                  <input
-                    type="checkbox"
-                    checked={selectedUploadIds.includes(listing.id)}
-                    onChange={(event) => setExcludedUploadIds((current) => event.target.checked
-                      ? current.filter((id) => id !== listing.id)
-                      : [...new Set([...current, listing.id])])}
-                  />
-                  <span>{listing.templateName}</span>
-                </label>
-              ))}
+            <span className="eyebrow">Uploadübersicht · sequenzielle Warteschlange</span>
+            <h2>{batchPlan.totalAddresses} Adressen · {selectedUploadIds.length} Inserate</h2>
+            <p>Die Adressen werden in der angezeigten Reihenfolge verarbeitet. Jedes Inserat wird vollständig abgeschlossen, bevor das nächste beginnt; Fehler stoppen die übrige Warteschlange nicht.</p>
+            <div className="batch-upload-overview">
+              {batchOverviewPlan.addresses.map((address: {
+                projectId: string;
+                address: string;
+                items: Array<{ listingId: string; templateName: string; promotionImageId: string }>;
+                promotionImageId: string;
+                promotionListingId: string;
+                status: string;
+                statusMessage: string;
+                error: string;
+              }, addressIndex: number) => {
+                const actionImage = promotionLibrary.promotionImages.find((image) => image.id === address.promotionImageId);
+                return (
+                  <details key={address.projectId} open={addressIndex === 0}>
+                    <summary><span><b>{addressIndex + 1}. {address.address}</b><small>{address.items.length} Inserate · {actionImage?.name || "kein Aktionsbild"}</small></span><strong>{address.error || address.statusMessage || workflowStatusLabel(address.status)}</strong></summary>
+                    {promotionLibrary.promotionSettings.manualSelection && promotionLibrary.promotionSettings.enabled ? (
+                      <div className="batch-promotion-choice">
+                        <label>Aktionsbild<select value={address.promotionImageId} onChange={(event) => setPromotionOverrides((current) => ({ ...current, [address.projectId]: { ...current[address.projectId], imageId: event.target.value } }))}>{promotionLibrary.promotionImages.filter((image) => image.active).map((image) => <option key={image.id} value={image.id}>{image.name}</option>)}</select></label>
+                        <label>Inserat mit Aktionsbild<select value={address.promotionListingId} onChange={(event) => setPromotionOverrides((current) => ({ ...current, [address.projectId]: { ...current[address.projectId], listingId: event.target.value } }))}>{address.items.map((item) => <option key={item.listingId} value={item.listingId}>{item.templateName}</option>)}</select></label>
+                      </div>
+                    ) : null}
+                    <div className="upload-selection" aria-label={`Inserate für ${address.address} auswählen`}>
+                      {address.items.map((item) => {
+                        const itemStatus = batchItemStatuses[item.listingId];
+                        return (
+                          <label key={item.listingId}>
+                            <input
+                              type="checkbox"
+                              checked={selectedUploadIds.includes(item.listingId)}
+                              disabled={uploading}
+                              onChange={(event) => setExcludedUploadIds((current) => event.target.checked
+                                ? current.filter((id) => id !== item.listingId)
+                                : [...new Set([...current, item.listingId])])}
+                            />
+                            <span>{item.templateName}{item.promotionImageId ? " · Aktionsbild" : ""}</span>
+                            <small className={itemStatus?.status === "Fehlgeschlagen" ? "batch-error" : ""}>{itemStatus?.status || "Bereit"}{itemStatus?.error ? ` · ${itemStatus.error}` : ""}</small>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </details>
+                );
+              })}
+              {!batchOverviewPlan.addresses.length ? <div className="batch-empty">Unter „Adresse &amp; Auswahl“ zuerst Grundstücke für den Sammel-Upload markieren und vorbereiten.</div> : null}
             </div>
+            {batchUploadProgress.total ? (
+              <div className="batch-progress" aria-live="polite">
+                <div><span>Adresse</span><b>{batchUploadProgress.addressIndex} von {batchUploadProgress.addressTotal}</b></div>
+                <div><span>Inserat</span><b>{batchUploadProgress.listingIndex} von {batchUploadProgress.listingTotal}</b></div>
+                <div><span>Gesamt</span><b>{batchUploadProgress.processed} von {batchUploadProgress.total}</b></div>
+                <div><span>Erfolgreich</span><b>{batchUploadProgress.successful}</b></div>
+                <div><span>Fehler</span><b>{batchUploadProgress.failed}</b></div>
+                <progress max={batchUploadProgress.total} value={batchUploadProgress.processed} />
+                <strong>{batchUploadProgress.status}</strong>
+              </div>
+            ) : null}
             <div className="upload-facts">
-              <div><span>Projekt</span><b>{activeProject.name}</b></div>
+              <div><span>Gesamt</span><b>{batchPlan.totalAddresses} Adressen · {batchPlan.totalListings} Inserate</b></div>
+              <div><span>Geschätzte Laufzeit</span><b>ca. {Math.max(1, Math.ceil(batchPlan.estimatedSeconds / 60))} Minuten</b></div>
               <div><span>Ziel</span><b>{ftpHost}</b></div>
               <div><span>Format</span><b>OpenImmo 1.2.7 · ZIP</b></div>
               <div><span>Transport</span><b>{ftpSecure === "none" ? "FTP · unverschlüsselt" : "FTPS · Zertifikat geprüft"}</b></div>
               <div><span>Automatik</span><b>A++ · KFW40/55 · Wärmepumpe · Pflichtausstattung</b></div>
               <div><span>Veröffentlichung</span><b>manuell in Immoprofessional</b></div>
             </div>
-            <button className="primary full" disabled={uploading || !selectedUploadIds.length} onClick={uploadPackage}>{uploading ? uploadStatus || "Wird übertragen …" : "Auswahl zu Immoprofessional laden"}</button>
-            <button className="secondary full" disabled={!activeProject.listings.length} onClick={downloadPackage}>Importpaket nur herunterladen</button>
+            <button className="primary full" disabled={uploading || !selectedUploadIds.length} onClick={uploadPackage}>{uploading ? uploadStatus || "Wird übertragen …" : "Sammel-Upload bestätigen & starten"}</button>
+            <button className="secondary full" disabled={uploading || !activeProject.listings.length || !effectiveBatchProjectIds.includes(activeProject.id)} onClick={downloadPackage}>Aktives Projekt nur herunterladen</button>
             <p className="first-test">Der erste Upload sollte mit einem einzelnen, nicht veröffentlichten Testobjekt geprüft werden. Immoprofessional kann eigene Importregeln anwenden.</p>
           </aside>
 

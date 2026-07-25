@@ -1,4 +1,5 @@
-import type { AddressOwner, ProjectInput } from "../types";
+import type { AddressOwner, ListingGroup, ProjectInput } from "../types";
+import { createListingGroup } from "../../listing-groups.mjs";
 import {
   enrichProjectWithPostalRegion,
   type PostalRegionIndex,
@@ -18,8 +19,7 @@ type AddressColumn =
   | "locationFacts"
   | "transportFacts"
   | "familyFacts"
-  | "natureFacts"
-  | "notes";
+  | "natureFacts";
 
 export type AddressImportResult = {
   projects: ProjectInput[];
@@ -43,7 +43,6 @@ const HEADER_ALIASES: Record<AddressColumn, string[]> = {
   transportFacts: ["verkehrerreichbarkeit", "verkehr", "erreichbarkeit"],
   familyFacts: ["familieversorgung", "familie", "versorgung"],
   natureFacts: ["naturfreizeit", "natur", "freizeit"],
-  notes: ["hinweise", "notizen", "bemerkungen"],
 };
 
 function normalize(value: unknown): string {
@@ -155,8 +154,9 @@ export function parseAddressWorkbookRows(
     const defaultName = [[street, houseNumber].filter(Boolean).join(" "), [zip, city].join(" ")]
       .filter(Boolean)
       .join(", ");
+    const projectId = createId();
     const project = enrichProjectWithPostalRegion({
-      id: createId(),
+      id: projectId,
       owner,
       name: text(cell(row, "name")) || defaultName,
       street,
@@ -171,9 +171,9 @@ export function parseAddressWorkbookRows(
       transportFacts: text(cell(row, "transportFacts")),
       familyFacts: text(cell(row, "familyFacts")),
       natureFacts: text(cell(row, "natureFacts")),
-      notes: text(cell(row, "notes")),
       selectedHouseIds: [],
       listings: [],
+      listingGroup: createListingGroup(projectId) as ListingGroup,
       createdAt: new Date().toISOString(),
     }, postalRegionIndex);
     if (!project.federalState || !project.county) unresolvedRegionCount += 1;
