@@ -1,5 +1,28 @@
 # Änderungsprotokoll
 
+## Immobilienverwaltung und Portalzentrale – 29. Juli 2026
+
+- Neue zentrale Objektliste mit Suche, Status- und Archivfiltern, Sortierung,
+  Mehrfachauswahl sowie Sammelfreigabe.
+- Inserate lassen sich kopieren, archivieren, wiederherstellen und lokal oder
+  per explizitem OpenImmo-Löschauftrag entfernen.
+- Der Objekteditor bündelt Objekt-, Adress-, Kontakt-, Basis-, Ausstattungs-,
+  Energie-, Text-, Termin- und Exportdaten in acht Arbeitsbereichen.
+- Bilder, Grundrisse, Dokumente, Videos, Links und 3D-Touren können je Objekt
+  sortiert, beschriftet und einzeln freigegeben werden; Bilder lassen sich
+  verlustarm drehen.
+- Konfigurierbare PDF-Exposés mit Kontakt, Adresse, Logo, Bildern, Farben und
+  Seitennummern können direkt erzeugt werden.
+- Die Portalzentrale zeigt Freigaben, Importstatus, Zeitstempel, Fehler,
+  Kontingente und Bildgrenzen für Immobilienscout24, Immowelt,
+  Kleinanzeigen und Living Haus.
+- Importberichte in XML, CSV, JSON und Text aktualisieren Portalstatus und
+  Objektlebenszyklus; Übertragungen und Löschungen werden protokolliert.
+- Termine inklusive ICS-Export, Benutzerrollen, Firmendaten, Öffnungszeiten
+  und ein durchsuchbares Aktivitätsprotokoll ergänzen die Verwaltung.
+- OpenImmo-CHANGE und -DELETE werden XSD-konform erzeugt; die
+  Anwendungsversion wurde auf **0.13.0** angehoben.
+
 ## Adressdubletten sicher bereinigen – 25. Juli 2026
 
 - Die **Adresszentrale** besitzt jetzt einen eigenen, gut sichtbaren Knopf

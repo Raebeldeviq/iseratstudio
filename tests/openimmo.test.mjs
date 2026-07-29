@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { APP_VERSION } from "../app/lib/app-version.mjs";
-import { buildImportPackage, buildOpenImmoXml } from "../app/lib/openimmo.ts";
+import {
+  buildDeletePackage,
+  buildImportPackage,
+  buildOpenImmoDeleteXml,
+  buildOpenImmoXml,
+} from "../app/lib/openimmo.ts";
 
 test("exports listings with the OpenImmo CHANGE upsert action", async () => {
   const input = {
@@ -90,15 +95,15 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
 
   assert.match(xml, new RegExp(`senderversion="${APP_VERSION.replaceAll(".", "\\.")}"`));
   assert.match(xml, /<openimmo_obid>FPI-TEST-1<\/openimmo_obid>/);
-  assert.match(xml, /<aktion aktionart="CHANGE" timestamp="[^"]+" \/>/);
+  assert.match(xml, /<aktion aktionart="CHANGE" \/>/);
   assert.match(xml, /<objektadresse_freigeben>false<\/objektadresse_freigeben>/);
   assert.match(xml, /<weitergabe_generell>false<\/weitergabe_generell>/);
-  assert.match(xml, /<ausstatt_kategorie WERTIGKEIT="GEHOBEN" \/>/);
-  assert.match(xml, /<bad dusche="true" wanne="true" fenster="true" \/>/);
-  assert.match(xml, /<kueche ebk="true" offen="true" \/>/);
-  assert.match(xml, /<heizungsart fussboden="true" \/>/);
-  assert.match(xml, /<befeuerung elektro="true" luftwp="true" \/>/);
-  assert.match(xml, /<energietyp kfw40="true" kfw55="true" \/>/);
+  assert.match(xml, /<ausstatt_kategorie>GEHOBEN<\/ausstatt_kategorie>/);
+  assert.match(xml, /<bad DUSCHE="true" WANNE="true" FENSTER="true" \/>/);
+  assert.match(xml, /<kueche EBK="true" OFFEN="true" \/>/);
+  assert.match(xml, /<heizungsart FUSSBODEN="true" \/>/);
+  assert.match(xml, /<befeuerung ELEKTRO="true" LUFTWP="true" \/>/);
+  assert.match(xml, /<energietyp KFW40="true" KFW55="true" \/>/);
   assert.match(xml, /<zustand zustand_art="PROJEKTIERT" \/>/);
   assert.match(xml, /<wertklasse>A\+<\/wertklasse>/);
   assert.match(xml, /<provisionspflichtig>false<\/provisionspflichtig>/);
@@ -212,12 +217,42 @@ test("preserves explicit per-listing projecting values during export", () => {
     },
   });
 
-  assert.match(xml, /<ausstatt_kategorie WERTIGKEIT="LUXUS" \/>/);
-  assert.match(xml, /<heizungsart fussboden="false" \/>/);
-  assert.match(xml, /<befeuerung elektro="true" luftwp="false" \/>/);
-  assert.match(xml, /<energietyp kfw40="false" kfw55="false" \/>/);
+  assert.match(xml, /<ausstatt_kategorie>LUXUS<\/ausstatt_kategorie>/);
+  assert.match(xml, /<heizungsart FUSSBODEN="false" \/>/);
+  assert.match(xml, /<befeuerung ELEKTRO="true" LUFTWP="false" \/>/);
+  assert.match(xml, /<energietyp KFW40="false" KFW55="false" \/>/);
   assert.match(xml, /<zustand zustand_art="ERSTBEZUG" \/>/);
   assert.match(xml, /<wertklasse>C<\/wertklasse>/);
   assert.match(xml, /<provisionspflichtig>true<\/provisionspflichtig>/);
   assert.match(xml, /<user_defined_simplefield feldname="Energieklasse"><!\[CDATA\[B\]\]><\/user_defined_simplefield>/);
+});
+
+test("creates explicit OpenImmo DELETE packages without listing content", async () => {
+  const provider = {
+    providerNumber: "30435",
+    company: "Testfirma",
+    firstName: "Max",
+    lastName: "Mustermann",
+    email: "test@example.com",
+    phone: "0000",
+  };
+  const xml = buildOpenImmoDeleteXml({
+    externalIds: ["30435-13226", "30435-13227", "30435-13226"],
+    provider,
+    timestamp: "2026-07-29T12:00:00.000Z",
+  });
+  assert.equal((xml.match(/aktionart="DELETE"/g) ?? []).length, 2);
+  assert.match(xml, /<objektkategorie>/);
+  assert.match(xml, /<kontaktperson>/);
+  assert.match(xml, /<stand_vom>2026-07-29<\/stand_vom>/);
+  assert.match(xml, /<openimmo_obid>30435-13226<\/openimmo_obid>/);
+  assert.doesNotMatch(xml, /<freitexte>/);
+
+  const result = await buildDeletePackage({
+    externalIds: ["30435-13226"],
+    provider,
+  });
+  assert.match(result.filename, /^loeschauftrag-30435-13226-\d{4}-\d{2}-\d{2}\.zip$/);
+  assert.match(result.xmlText, /aktionart="DELETE"/);
+  assert.ok(result.blob.size > 0);
 });

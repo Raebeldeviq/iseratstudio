@@ -7,6 +7,10 @@ import type {
   TotalSyncRunKind,
   TotalSyncScope,
 } from "../types";
+import {
+  allocateProviderExternalIds,
+  normalizeProviderNumber,
+} from "./external-ids.ts";
 
 export const TOTAL_SYNC_LISTINGS_PER_ADDRESS = 4;
 export const REQUIRED_TOTAL_SYNC_HOUSE_TYPES = [
@@ -182,6 +186,8 @@ export function createTotalSyncRun(input: {
   projects: ProjectInput[];
   eligibleHouses: TotalSyncHouseCandidate[];
   scope: TotalSyncScope;
+  providerNumber?: string;
+  existingExternalIds?: string[];
   projectIds?: string[];
   kind?: TotalSyncRunKind;
   promotionImageCount?: number;
@@ -200,10 +206,20 @@ export function createTotalSyncRun(input: {
   if (!readyProjects.length) {
     throw new Error("Für den Totalabgleich wurde keine vollständige Grundstücksadresse gefunden.");
   }
+  const normalizedProviderNumber = normalizeProviderNumber(input.providerNumber ?? "");
+  const allocatedExternalIds = normalizedProviderNumber
+    ? allocateProviderExternalIds(
+        normalizedProviderNumber,
+        input.existingExternalIds ?? [],
+        readyProjects.length * TOTAL_SYNC_LISTINGS_PER_ADDRESS,
+      )
+    : [];
+  let nextExternalIdIndex = 0;
   return {
     id: input.runId,
     kind: input.kind ?? "total-sync",
     scope: input.scope,
+    providerNumber: normalizedProviderNumber || undefined,
     promotionImageCount: Math.min(
       TOTAL_SYNC_LISTINGS_PER_ADDRESS,
       Math.max(0, Math.floor(Number(input.promotionImageCount) || 0)),
@@ -250,7 +266,9 @@ export function createTotalSyncRun(input: {
         uploadedExternalIds: [],
         listingJobs: houseIds.map((houseId, index) => ({
           id: `${project.id}:${index + 1}`,
-          externalId: totalSyncExternalId(input.runId, project.id, index + 1),
+          externalId: normalizedProviderNumber
+            ? allocatedExternalIds[nextExternalIdIndex++]
+            : totalSyncExternalId(input.runId, project.id, index + 1),
           houseId,
           slot: index + 1,
           status: "pending" as const,

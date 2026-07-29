@@ -99,6 +99,36 @@ test("creates new stable object ids for every total sync run", () => {
   assert.match(first, /^FPI-T-[A-Z0-9]+-[A-Z0-9]+-1$/);
 });
 
+test("uses the HV/provider number for every new total-sync object id", () => {
+  const run = createTotalSyncRun({
+    projects: [project("address-1"), project("address-2")],
+    eligibleHouses: houseCandidates(["h1", "h2", "h3", "h4"]),
+    scope: "all",
+    providerNumber: "30435",
+    existingExternalIds: ["30435-13225", "30435-14000"],
+    runId: "run-with-provider",
+    createdAt: "2026-07-28T12:00:00.000Z",
+    random: () => 0.25,
+  });
+  const externalIds = run.tasks.flatMap((task) => (
+    task.listingJobs.map((job) => job.externalId)
+  ));
+
+  assert.equal(run.providerNumber, "30435");
+  assert.equal(externalIds.length, 8);
+  assert.equal(new Set(externalIds).size, 8);
+  assert.deepEqual(externalIds, [
+    "30435-14001",
+    "30435-14002",
+    "30435-14003",
+    "30435-14004",
+    "30435-14005",
+    "30435-14006",
+    "30435-14007",
+    "30435-14008",
+  ]);
+});
+
 test("builds a total sync only from complete addresses in the selected scope", () => {
   const projects = [
     project("fabian-ready"),

@@ -113,7 +113,243 @@ export type GeneratedListing = {
   uploadedAt?: string;
   promotionImageId?: string;
   projectingSettings?: ProjectingSettings;
+  management?: ListingManagement;
   version: number;
+};
+
+export type ListingLifecycleStatus =
+  | "draft"
+  | "ready"
+  | "transferred"
+  | "online"
+  | "error"
+  | "archived";
+
+export type ListingPortalStatus =
+  | "not-transferred"
+  | "queued"
+  | "transferred"
+  | "online"
+  | "error"
+  | "delete-requested"
+  | "deleted";
+
+export type ListingPortalState = {
+  portalId: string;
+  enabled: boolean;
+  status: ListingPortalStatus;
+  lastTransferAt?: string;
+  lastReportAt?: string;
+  message?: string;
+};
+
+export type ListingMediaKind =
+  | "image"
+  | "floorplan"
+  | "document"
+  | "video"
+  | "link"
+  | "tour";
+
+export type ListingMediaItem = {
+  id: string;
+  kind: ListingMediaKind;
+  name: string;
+  caption: string;
+  released: boolean;
+  order: number;
+  createdAt: string;
+  sourceImageId?: string;
+  mimeType?: string;
+  dataUrl?: string;
+  url?: string;
+  rotation?: 0 | 90 | 180 | 270;
+};
+
+export type ListingAppointmentStatus = "planned" | "completed" | "cancelled";
+
+export type ListingAppointment = {
+  id: string;
+  title: string;
+  startsAt: string;
+  endsAt: string;
+  location: string;
+  contactName: string;
+  contactEmail: string;
+  notes: string;
+  status: ListingAppointmentStatus;
+  createdAt: string;
+};
+
+export type ListingDetails = {
+  objectStatus: "projected" | "in-construction" | "complete";
+  groupId: string;
+  orderNumber: string;
+  currency: "EUR" | "CHF" | "USD";
+  availableFrom: string;
+  addressPublished: boolean;
+  googleMapsPublished: boolean;
+  country: string;
+  street: string;
+  houseNumber: string;
+  zip: string;
+  city: string;
+  district: string;
+  purchasePrice: number;
+  livingArea: number;
+  usableArea: number;
+  plotArea: number;
+  rooms: number;
+  bedrooms: number;
+  bathrooms: number;
+  floors: number;
+  balconies: number;
+  terraces: number;
+  houseType: string;
+  constructionYear: number;
+  renovationYear: number;
+  condition: string;
+  constructionPhase: string;
+  equipmentQuality: string;
+  kitchenType: string;
+  bathroomFeatures: string;
+  flooring: string;
+  heatingType: string;
+  energySource: string;
+  parkingTypes: string;
+  view: string;
+  guestWc: boolean;
+  garden: boolean;
+  attic: boolean;
+  fireplace: boolean;
+  basement: boolean;
+  barrierFree: boolean;
+  seniorFriendly: boolean;
+  sauna: boolean;
+  pool: boolean;
+  conservatory: boolean;
+  airConditioning: boolean;
+  alarmSystem: boolean;
+  elevator: boolean;
+  monument: boolean;
+  rented: boolean;
+  energyCertificateType: string;
+  energyCertificateValidUntil: string;
+  energyClass: string;
+  endEnergyDemand: number;
+  certificateYear: number;
+  warmWaterIncluded: boolean;
+  commissionRequired: boolean;
+  commissionText: string;
+  contactCompany: string;
+  contactFirstName: string;
+  contactLastName: string;
+  contactEmail: string;
+  contactPhone: string;
+  ownerName: string;
+  ownerEmail: string;
+  internalNotes: string;
+};
+
+export type ListingManagement = {
+  lifecycle: ListingLifecycleStatus;
+  released: boolean;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt?: string;
+  copiedFromId?: string;
+  details: ListingDetails;
+  media: ListingMediaItem[];
+  appointments: ListingAppointment[];
+  portals: ListingPortalState[];
+};
+
+export type ManagementRole = "admin" | "editor" | "viewer";
+
+export type ManagementUser = {
+  id: string;
+  name: string;
+  email: string;
+  role: ManagementRole;
+  active: boolean;
+  createdAt: string;
+  lastActiveAt?: string;
+};
+
+export type CompanyOpeningHours = {
+  weekday: string;
+  enabled: boolean;
+  opensAt: string;
+  closesAt: string;
+  pauseFrom: string;
+  pauseUntil: string;
+};
+
+export type CompanySettings = {
+  name: string;
+  legalName: string;
+  street: string;
+  houseNumber: string;
+  zip: string;
+  city: string;
+  country: string;
+  phone: string;
+  email: string;
+  website: string;
+  managingDirector: string;
+  taxId: string;
+  tradeRegister: string;
+  imprint: string;
+  terms: string;
+  privacyNotice: string;
+  openingHours: CompanyOpeningHours[];
+};
+
+export type PortalConfiguration = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  quota: number;
+  currentOnline: number;
+  imageLimit: number;
+  captionLimit: number;
+  lastSyncAt?: string;
+};
+
+export type ImportReportEvent = {
+  externalId: string;
+  portalId?: string;
+  status: ListingPortalStatus;
+  message: string;
+};
+
+export type ImportReportRecord = {
+  id: string;
+  filename: string;
+  importedAt: string;
+  eventCount: number;
+  matchedCount: number;
+  events: ImportReportEvent[];
+};
+
+export type AuditLogEntry = {
+  id: string;
+  at: string;
+  userId: string;
+  action: string;
+  targetType: "listing" | "media" | "appointment" | "portal" | "report" | "user" | "company";
+  targetId: string;
+  description: string;
+};
+
+export type ManagementState = {
+  version: 1;
+  currentUserId: string;
+  users: ManagementUser[];
+  company: CompanySettings;
+  portals: PortalConfiguration[];
+  auditLog: AuditLogEntry[];
+  importReports: ImportReportRecord[];
 };
 
 export type TotalSyncScope = AddressOwner | "all";
@@ -215,6 +451,7 @@ export type TotalSyncRun = {
   id: string;
   kind?: TotalSyncRunKind;
   scope: TotalSyncScope;
+  providerNumber?: string;
   promotionImageCount?: number;
   portalPublicationEnabled?: boolean;
   aiModel?: AiModelId;
@@ -282,6 +519,7 @@ export type StudioState = {
   promotionImage?: HouseImage | null;
   promotionImageEnabled?: boolean;
   portalPublicationEnabled?: boolean;
+  management?: ManagementState;
   totalSyncRun?: TotalSyncRun;
   uploadRunHistory?: UploadRunHistoryEntry[];
 };

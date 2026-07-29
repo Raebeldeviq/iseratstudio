@@ -8,6 +8,7 @@ import { AddressBookTable } from "./components/AddressBookTable";
 import { PreflightPanel } from "./components/PreflightPanel";
 import { SevenDayWorkCenter } from "./components/SevenDayWorkCenter";
 import { UploadJobCenter } from "./components/UploadJobCenter";
+import ManagementCenter from "./components/ManagementCenter";
 import {
   housePriceCatalogEntries,
   resolveHousePrice,
@@ -34,6 +35,11 @@ import {
 } from "./lib/headline-diversity.js";
 import { buildInventoryWorkbook } from "./lib/inventory-export";
 import {
+  allocateProviderExternalIds,
+  isProviderExternalId,
+  migrateDraftExternalIds,
+} from "./lib/external-ids";
+import {
   appendJobAttempt,
   buildUploadRunHistoryEntry,
   interruptedRun,
@@ -44,7 +50,15 @@ import {
   runJobProgress,
   upsertUploadRunHistory,
 } from "./lib/job-center";
-import { buildImportPackage } from "./lib/openimmo";
+import { buildDeletePackage, buildImportPackage } from "./lib/openimmo";
+import {
+  appendAuditLog,
+  currentManagementUser,
+  deriveListingLifecycle,
+  findListing,
+  mapListing,
+  normalizeStudioManagementState,
+} from "./lib/management";
 import {
   MAX_PROMOTED_LISTINGS,
   MAX_PROMOTION_IMAGES,
@@ -89,7 +103,7 @@ import type {
   TotalSyncScope,
 } from "./types";
 
-type Tab = "houses" | "project" | "preview" | "renewal" | "jobs" | "settings";
+type Tab = "management" | "houses" | "project" | "preview" | "renewal" | "jobs" | "settings";
 type MediaLibraryKind = "house" | "floorplan" | "interior" | "location" | "marketing";
 
 type MediaLibraryItem = {
@@ -129,6 +143,7 @@ type MediaLibraryDuplicateGroup = {
 const MIN_HOUSE_IMAGES = 4;
 const MAX_HOUSE_IMAGES = 14;
 const MAX_HOUSE_TEMPLATES = 25;
+const FIXED_HV_PROVIDER_NUMBER = "30435";
 const HOUSE_PRICE_ENTRIES = housePriceCatalogEntries();
 const MEDIA_KIND_LABELS: Record<MediaLibraryKind, string> = {
   house: "Hausansicht",
@@ -236,7 +251,7 @@ const newProject = (owner: AddressOwner): ProjectInput => ({
 });
 
 const defaultProvider: ProviderSettings = {
-  providerNumber: "",
+  providerNumber: FIXED_HV_PROVIDER_NUMBER,
   company: "Fabian Raebel - Freie Handelsvertretung der Living Fertighaus GmbH",
   firstName: "",
   lastName: "",
@@ -244,7 +259,7 @@ const defaultProvider: ProviderSettings = {
   phone: "",
 };
 
-const initialState = (): StudioState => ({
+const initialState = (): StudioState => normalizeStudioManagementState({
   version: 1,
   houses: [newHouse(1)],
   projects: [newProject("fabian")],
@@ -259,6 +274,26 @@ const initialState = (): StudioState => ({
 function promotionPool(state: StudioState): HouseImage[] {
   if (Array.isArray(state.promotionImages)) return state.promotionImages;
   return state.promotionImage ? [state.promotionImage] : [];
+}
+
+function collectedStateExternalIds(state: StudioState): string[] {
+  return [
+    ...state.projects.flatMap((project) => [
+      ...project.listings.map((listing) => listing.externalId),
+      ...(project.renewalHistory ?? []).flatMap((cycle) => [
+        ...cycle.previousExternalIds,
+        ...cycle.externalIds,
+      ]),
+    ]),
+    ...(state.totalSyncRun?.tasks.flatMap((task) => [
+      ...(task.listingJobs ?? []).map((job) => job.externalId),
+      ...task.uploadedExternalIds,
+      ...(task.previousExternalIds ?? []),
+    ]) ?? []),
+    ...(state.uploadRunHistory ?? []).flatMap((run) => (
+      run.listings.map((listing) => listing.externalId)
+    )),
+  ].filter(Boolean);
 }
 
 function effectiveListingImages(
@@ -628,8 +663,9 @@ function snapshotTime(value: string): number {
 }
 
 export default function InseratStudio() {
-  const [tab, setTab] = useState<Tab>("houses");
+  const [tab, setTab] = useState<Tab>("management");
   const [state, setState] = useState<StudioState>(initialState);
+  const managementReadOnly = currentManagementUser(state)?.role === "viewer";
   const [ready, setReady] = useState(false);
   const [saveLabel, setSaveLabel] = useState("Lokaler Speicher wird vorbereitet …");
   const [activeHouseId, setActiveHouseId] = useState("");
@@ -698,7 +734,14 @@ export default function InseratStudio() {
   const addressEditorRef = useRef<HTMLDivElement>(null);
 
   const selectWorkspaceTab = (nextTab: Tab) => {
+    if (managementReadOnly && nextTab !== "management") {
+      setNotice("Der aktuell gewählte Benutzer hat ausschließlich Leserechte.");
+      return;
+    }
     if (nextTab === "renewal") setRenewalNow(new Date());
+    if (nextTab === "management") {
+      setState((current) => normalizeStudioManagementState(current));
+    }
     setTab(nextTab);
   };
 
@@ -718,11 +761,15 @@ export default function InseratStudio() {
 
     const lockLifetime = new Promise<void>((resolve) => { releaseLock = resolve; });
     let acquiredImmediately = false;
+    const lockFallbackTimer = window.setTimeout(() => {
+      if (!cancelled) setIsPrimaryTab(true);
+    }, 3000);
     navigator.locks.request(
       "fabian-pascal-inseratestudio-active-tab",
       { ifAvailable: true, mode: "exclusive" },
       async (lock) => {
         if (cancelled) return;
+        window.clearTimeout(lockFallbackTimer);
         if (!lock) {
           setIsPrimaryTab(false);
           return;
@@ -743,11 +790,13 @@ export default function InseratStudio() {
         },
       );
     }).catch(() => {
+      window.clearTimeout(lockFallbackTimer);
       if (!cancelled) setIsPrimaryTab(true);
     });
 
     return () => {
       cancelled = true;
+      window.clearTimeout(lockFallbackTimer);
       releaseLock?.();
     };
   }, []);
@@ -780,13 +829,26 @@ export default function InseratStudio() {
               houses: houseCatalog.state.houses,
             }
           : selectedState;
-        const normalized = normalizeJobCenterState(
+        const normalizedBase = normalizeJobCenterState(
           normalizeProjectOwners(stateWithCurrentHouseCatalog),
         );
-        const loaded = {
-          ...normalized,
-          houses: normalized.houses.map(applyConfirmedHouseModelDetails),
+        const normalized = {
+          ...normalizedBase,
+          provider: {
+            ...normalizedBase.provider,
+            providerNumber: FIXED_HV_PROVIDER_NUMBER,
+          },
         };
+        const migratedExternalIds = migrateDraftExternalIds(
+          normalized.projects,
+          normalized.provider.providerNumber,
+          collectedStateExternalIds(normalized),
+        );
+        const loaded = normalizeStudioManagementState({
+          ...normalized,
+          projects: migratedExternalIds.projects,
+          houses: normalized.houses.map(applyConfirmedHouseModelDetails),
+        });
         const next = loaded.projects.length
           ? loaded
           : { ...loaded, projects: [newProject("fabian")] };
@@ -809,7 +871,13 @@ export default function InseratStudio() {
           setRenewalPromotionCount(next.totalSyncRun.promotionImageCount ?? 0);
           setSelectedRenewalProjectIds(next.totalSyncRun.tasks.map((task) => task.projectId));
         }
-        setSaveLabel(selected?.source === "windows" ? "Aus lokaler Gerätesicherung geladen" : "Doppelt lokal gespeichert");
+        setSaveLabel(
+          migratedExternalIds.changedCount
+            ? `${migratedExternalIds.changedCount} Entwurfs-Objekt-ID${migratedExternalIds.changedCount === 1 ? "" : "s"} auf ${FIXED_HV_PROVIDER_NUMBER}-… umgestellt`
+            : selected?.source === "windows"
+              ? "Aus lokaler Gerätesicherung geladen"
+              : "Doppelt lokal gespeichert",
+        );
       })
       .catch(() => setSaveLabel("Lokaler Speicher nicht verfügbar"))
       .finally(() => setReady(true));
@@ -2556,17 +2624,30 @@ export default function InseratStudio() {
         projectPromotionCount(projectSnapshot),
         projectSnapshot.promotionAssignments,
       );
+      const providerNumber = FIXED_HV_PROVIDER_NUMBER;
+      const listingsNeedingNewExternalId = generated.filter(({ previous }) => (
+        !previous
+        || Boolean(previous.uploadedAt)
+        || !isProviderExternalId(previous.externalId, providerNumber)
+      )).length;
+      const allocatedExternalIds = allocateProviderExternalIds(
+        providerNumber,
+        collectedStateExternalIds(state),
+        listingsNeedingNewExternalId,
+      );
+      let nextExternalIdIndex = 0;
       const listings: GeneratedListing[] = generated.map(({
         house,
-        index,
         previous,
         texts,
         writingProfile,
       }) => ({
         id: previous?.id ?? uid(),
-        externalId:
-          previous?.externalId ??
-          `FPI-${projectSnapshot.id.slice(0, 8)}-${house.id.slice(0, 6)}-${index + 1}`.toUpperCase(),
+        externalId: previous
+          && !previous.uploadedAt
+          && isProviderExternalId(previous.externalId, providerNumber)
+          ? previous.externalId.trim().toUpperCase()
+          : allocatedExternalIds[nextExternalIdIndex++],
         templateId: house.id,
         templateName: house.name,
         promotionImageId: promotionAssignments[house.id],
@@ -2647,8 +2728,26 @@ export default function InseratStudio() {
         `Für den Import werden pro Haustyp mindestens ${MIN_HOUSE_IMAGES} und maximal ${MAX_HOUSE_IMAGES} Bilder benötigt: ${invalidImageCounts.join(", ")}.`,
       );
     }
-    if (!state.provider.providerNumber || !state.provider.company || !state.provider.email) {
-      throw new Error("Bitte Anbieternummer, Firma und E-Mail unter Export & Upload ergänzen.");
+    if (
+      !state.provider.company
+      || !state.provider.email
+    ) {
+      throw new Error("Bitte Firma und E-Mail unter Export & Upload ergänzen.");
+    }
+    const providerNumber = FIXED_HV_PROVIDER_NUMBER;
+    const invalidExternalIds = listings.filter(
+      (listing) => !isProviderExternalId(listing.externalId, providerNumber),
+    );
+    const belongsToResumableLegacyRun = Boolean(
+      state.totalSyncRun
+      && totalSyncCanResume(state.totalSyncRun)
+      && invalidExternalIds.length
+      && listings.every((listing) => listing.totalSyncRunId === state.totalSyncRun?.id),
+    );
+    if (invalidExternalIds.length && !belongsToResumableLegacyRun) {
+      throw new Error(
+        `Die Objekt-ID muss mit deiner HV-/Anbieternummer beginnen (${providerNumber}-…). Bitte die KI-Texte und Inserate einmal neu erzeugen.`,
+      );
     }
     return {
       project,
@@ -2748,6 +2847,182 @@ export default function InseratStudio() {
     );
     input.onStatus(`${input.position} · ${input.listing.templateName} wird einzeln übertragen …`);
     await uploadBinaryPackage(result.blob, result.filename, input.position, input.onStatus);
+  };
+
+  const transferManagementListing = async (listingId: string): Promise<void> => {
+    const entry = findListing(state, listingId);
+    if (!entry) {
+      setNotice("Das ausgewählte Objekt wurde nicht gefunden.");
+      return;
+    }
+    if (!helperOnline || !ftpUser || !ftpPassword) {
+      setNotice("Bitte zuerst den lokalen Upload-Helfer starten und die FTP-Zugangsdaten unter Upload speichern.");
+      return;
+    }
+    if (uploading || totalSyncBusy) {
+      setNotice("Bitte zuerst die laufende Übertragung abschließen.");
+      return;
+    }
+    setUploading(true);
+    setUploadStatus(`${entry.listing.externalId} wird vorbereitet …`);
+    try {
+      const publishToPortals = Boolean(
+        entry.listing.management?.released
+        && entry.listing.management.portals.some((portal) => portal.enabled),
+      );
+      await uploadSingleListingPackage({
+        project: entry.project,
+        listing: entry.listing,
+        position: `Objekt ${entry.listing.externalId}`,
+        onStatus: setUploadStatus,
+        portalPublicationEnabled: publishToPortals,
+      });
+      const uploadedAt = new Date().toISOString();
+      setState((current) => {
+        let next = mapListing(current, listingId, (listing) => {
+          if (!listing.management) return { ...listing, uploadedAt };
+          const management = {
+            ...listing.management,
+            updatedAt: uploadedAt,
+            portals: listing.management.portals.map((portal) => (
+              portal.enabled
+                ? {
+                    ...portal,
+                    status: "transferred" as const,
+                    lastTransferAt: uploadedAt,
+                    message: "OpenImmo-Paket erfolgreich an Immoprofessional übertragen; Portalbestätigung steht aus.",
+                  }
+                : portal
+            )),
+          };
+          return {
+            ...listing,
+            uploadedAt,
+            management: {
+              ...management,
+              lifecycle: deriveListingLifecycle(management, uploadedAt),
+            },
+          };
+        });
+        next = appendAuditLog(next, {
+          action: "Objekt übertragen",
+          targetType: "listing",
+          targetId: listingId,
+          description: `${entry.listing.externalId} erfolgreich an Immoprofessional übertragen`,
+        }, uploadedAt);
+        return next;
+      });
+      setNotice(
+        publishToPortals
+          ? `${entry.listing.externalId} wurde übertragen und zur Portalweitergabe freigegeben. Bitte den Importbericht einlesen.`
+          : `${entry.listing.externalId} wurde als nicht freigegebenes Objekt an Immoprofessional übertragen.`,
+      );
+    } catch (error) {
+      const failedAt = new Date().toISOString();
+      setState((current) => mapListing(current, listingId, (listing) => {
+        if (!listing.management) return listing;
+        const management = {
+          ...listing.management,
+          updatedAt: failedAt,
+          portals: listing.management.portals.map((portal) => (
+            portal.enabled
+              ? {
+                  ...portal,
+                  status: "error" as const,
+                  lastReportAt: failedAt,
+                  message: error instanceof Error ? error.message : "Übertragung fehlgeschlagen.",
+                }
+              : portal
+          )),
+        };
+        return {
+          ...listing,
+          management: {
+            ...management,
+            lifecycle: deriveListingLifecycle(management, listing.uploadedAt),
+          },
+        };
+      }));
+      setNotice(error instanceof Error ? error.message : "Das Objekt konnte nicht übertragen werden.");
+    } finally {
+      setUploading(false);
+      setUploadStatus("");
+    }
+  };
+
+  const deleteManagementListings = async (listingIds: string[]): Promise<void> => {
+    const entries = listingIds
+      .map((listingId) => findListing(state, listingId))
+      .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+    if (!entries.length) {
+      setNotice("Für den Löschauftrag wurden keine gültigen Objekte gefunden.");
+      return;
+    }
+    if (!helperOnline || !ftpUser || !ftpPassword) {
+      setNotice("Bitte zuerst den lokalen Upload-Helfer starten und die FTP-Zugangsdaten unter Upload speichern.");
+      return;
+    }
+    if (uploading || totalSyncBusy) {
+      setNotice("Bitte zuerst die laufende Übertragung abschließen.");
+      return;
+    }
+    setUploading(true);
+    setUploadStatus("OpenImmo-Löschauftrag wird vorbereitet …");
+    try {
+      const result = await buildDeletePackage({
+        externalIds: entries.map((entry) => entry.listing.externalId),
+        provider: state.provider,
+      });
+      await uploadBinaryPackage(
+        result.blob,
+        result.filename,
+        `${entries.length} Löschauftrag${entries.length === 1 ? "" : "e"}`,
+        setUploadStatus,
+      );
+      const requestedAt = new Date().toISOString();
+      setState((current) => {
+        let next = current;
+        entries.forEach(({ listing }) => {
+          next = mapListing(next, listing.id, (currentListing) => {
+            if (!currentListing.management) return currentListing;
+            const management = {
+              ...currentListing.management,
+              released: false,
+              updatedAt: requestedAt,
+              portals: currentListing.management.portals.map((portal) => (
+                portal.enabled
+                  ? {
+                      ...portal,
+                      status: "delete-requested" as const,
+                      lastTransferAt: requestedAt,
+                      message: "OpenImmo-Löschauftrag übertragen; Bestätigung durch Importbericht steht aus.",
+                    }
+                  : portal
+              )),
+            };
+            return {
+              ...currentListing,
+              management: {
+                ...management,
+                lifecycle: deriveListingLifecycle(management, currentListing.uploadedAt),
+              },
+            };
+          });
+        });
+        return appendAuditLog(next, {
+          action: "Löschauftrag übertragen",
+          targetType: "listing",
+          targetId: entries.map((entry) => entry.listing.id).join(","),
+          description: `${entries.length} OpenImmo-DELETE-Auftrag${entries.length === 1 ? "" : "e"} an Immoprofessional übertragen`,
+        }, requestedAt);
+      });
+      setNotice(`${entries.length} Löschauftrag${entries.length === 1 ? "" : "e"} wurden übertragen. Die Bestätigung erfolgt über den Importbericht.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Der Löschauftrag konnte nicht übertragen werden.");
+    } finally {
+      setUploading(false);
+      setUploadStatus("");
+    }
   };
 
   const downloadPackage = async () => {
@@ -3800,8 +4075,11 @@ export default function InseratStudio() {
         ? "Der lokale Helfer muss vor dem Totalabgleich neu gestartet werden."
         : "Der lokale Helfer ist nicht erreichbar.";
     }
-    if (!state.provider.providerNumber || !state.provider.company || !state.provider.email) {
-      return "Bitte Anbieternummer, Firma und E-Mail unter Export & Upload ergänzen.";
+    if (
+      !state.provider.company
+      || !state.provider.email
+    ) {
+      return "Bitte Firma und E-Mail unter Export & Upload ergänzen.";
     }
     return null;
   };
@@ -3869,6 +4147,8 @@ export default function InseratStudio() {
         houseType: house.houseType,
       })),
       scope: totalSyncScope,
+      providerNumber: FIXED_HV_PROVIDER_NUMBER,
+      existingExternalIds: collectedStateExternalIds(state),
       promotionImageCount: totalSyncPromotionCount,
       portalPublicationEnabled,
       aiModel,
@@ -4018,6 +4298,8 @@ export default function InseratStudio() {
           houseType: house.houseType,
         })),
         scope: renewalScope,
+        providerNumber: FIXED_HV_PROVIDER_NUMBER,
+        existingExternalIds: collectedStateExternalIds(state),
         projectIds: selectedProjects.map((project) => project.id),
         kind: "seven-day",
         promotionImageCount: renewalEffectivePromotionCount,
@@ -4309,10 +4591,26 @@ export default function InseratStudio() {
         if (imported.version !== 1 || !Array.isArray(imported.houses)) {
           throw new Error("Unbekanntes Sicherungsformat.");
         }
-        const normalized = normalizeJobCenterState(normalizeProjectOwners(imported));
-        const next = normalized.projects.length
-          ? normalized
-          : { ...normalized, projects: [newProject("fabian")] };
+        const normalizedBase = normalizeJobCenterState(normalizeProjectOwners(imported));
+        const normalized = {
+          ...normalizedBase,
+          provider: {
+            ...normalizedBase.provider,
+            providerNumber: FIXED_HV_PROVIDER_NUMBER,
+          },
+        };
+        const migratedExternalIds = migrateDraftExternalIds(
+          normalized.projects,
+          FIXED_HV_PROVIDER_NUMBER,
+          collectedStateExternalIds(normalized),
+        );
+        const importedWithHvIds = normalizeStudioManagementState({
+          ...normalized,
+          projects: migratedExternalIds.projects,
+        });
+        const next = importedWithHvIds.projects.length
+          ? importedWithHvIds
+          : { ...importedWithHvIds, projects: [newProject("fabian")] };
         setState(next);
         selectActiveHouse(next.houses[0]?.id ?? "");
         setActiveProjectId(next.projects[0]?.id ?? "");
@@ -4334,7 +4632,11 @@ export default function InseratStudio() {
         } else {
           setSelectedRenewalProjectIds([]);
         }
-        setNotice("Fabian&Pascal-Sicherung wurde lokal eingelesen.");
+        setNotice(
+          migratedExternalIds.changedCount
+            ? `Fabian&Pascal-Sicherung wurde eingelesen; ${migratedExternalIds.changedCount} Entwurfs-Objekt-ID${migratedExternalIds.changedCount === 1 ? "" : "s"} wurden auf ${FIXED_HV_PROVIDER_NUMBER}-… umgestellt.`
+            : "Fabian&Pascal-Sicherung wurde lokal eingelesen.",
+        );
       } catch {
         setNotice("Die ausgewählte Datei ist keine gültige Fabian&Pascal-Sicherung.");
       }
@@ -4410,17 +4712,19 @@ export default function InseratStudio() {
 
       <nav className="step-nav" aria-label="Arbeitsbereiche">
         {([
-          ["houses", "01", "Haustypen", "Haustypen und Bilder"],
-          ["project", "02", "Adressen", "Adresse und Auswahl"],
-          ["preview", "03", "Texte", "Texte und Vorschau"],
-          ["renewal", "04", "7-Tage", "7-Tage-Zentrale"],
-          ["jobs", "05", "Aufträge", "Aufträge und Fehler"],
-          ["settings", "06", "Upload", "Export und Upload"],
+          ["management", "01", "Objekte", "Immobilienverwaltung"],
+          ["houses", "02", "Haustypen", "Haustypen und Bilder"],
+          ["project", "03", "Adressen", "Adresse und Auswahl"],
+          ["preview", "04", "Texte", "Texte und Vorschau"],
+          ["renewal", "05", "7-Tage", "7-Tage-Zentrale"],
+          ["jobs", "06", "Aufträge", "Aufträge und Fehler"],
+          ["settings", "07", "Upload", "Export und Upload"],
         ] as Array<[Tab, string, string, string]>).map(([id, number, label, accessibleLabel]) => (
           <button
             type="button"
             key={id}
             className={tab === id ? "active" : ""}
+            disabled={managementReadOnly && id !== "management"}
             aria-current={tab === id ? "page" : undefined}
             aria-label={`${number}. ${accessibleLabel}`}
             title={accessibleLabel}
@@ -4437,6 +4741,18 @@ export default function InseratStudio() {
           <span>{notice}</span>
           <button onClick={() => setNotice(null)} aria-label="Hinweis schließen">×</button>
         </div>
+      ) : null}
+
+      {tab === "management" ? (
+        <ManagementCenter
+          state={state}
+          setState={setState}
+          uploadAvailable={helperOnline && Boolean(ftpUser && ftpPassword)}
+          busy={uploading || totalSyncBusy}
+          onTransferListing={transferManagementListing}
+          onDeleteListings={deleteManagementListings}
+          notify={setNotice}
+        />
       ) : null}
 
       {tab === "houses" ? (
@@ -5326,6 +5642,7 @@ export default function InseratStudio() {
                         <TextField label="4 · Sonstiges" rows={7} value={listing.texts.other} onChange={(value) => updateListingText(listing.id, "other", value)} />
                       </div>
                       <footer>
+                        <span>Objekt-ID: <b>{listing.externalId}</b></span>
                         <span>{displayImages.length} Bilder automatisch zugeordnet{listing.promotionImageId ? " · Aktionsbild an Position 1" : ""}</span>
                         <span>Weitergabe an Portale: <b>{portalPublicationEnabled ? "automatisch nach Import" : "deaktiviert"}</b></span>
                       </footer>
@@ -5404,7 +5721,7 @@ export default function InseratStudio() {
           <div className="content-card">
             <div className="section-heading"><div><span className="eyebrow">OpenImmo-Absender</span><h2>Anbieterdaten</h2></div></div>
             <div className="form-grid two">
-              <Field label="Anbieternummer" value={state.provider.providerNumber} onChange={(value) => setState((current) => ({ ...current, provider: { ...current.provider, providerNumber: value } }))} />
+              <Field disabled label="HV-/Anbieternummer (fest)" value={FIXED_HV_PROVIDER_NUMBER} onChange={() => undefined} />
               <Field label="Firma" value={state.provider.company} onChange={(value) => setState((current) => ({ ...current, provider: { ...current.provider, company: value } }))} />
               <Field label="Vorname" value={state.provider.firstName} onChange={(value) => setState((current) => ({ ...current, provider: { ...current.provider, firstName: value } }))} />
               <Field label="Nachname" value={state.provider.lastName} onChange={(value) => setState((current) => ({ ...current, provider: { ...current.provider, lastName: value } }))} />
