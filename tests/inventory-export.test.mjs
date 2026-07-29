@@ -81,7 +81,7 @@ test("creates a valid Excel container with the complete inventory sheets", async
   assert.equal(result.houseCount, 1);
   assert.equal(result.activeHouseCount, 1);
   assert.equal(result.archivedHouseCount, 0);
-  assert.match(result.filename, /^Fabian-Pascal-Inseratestudio-Bestand-\d{4}-\d{2}-\d{2}\.xlsx$/);
+  assert.match(result.filename, /^Inserate-Studio-Bestand-\d{4}-\d{2}-\d{2}\.xlsx$/);
   assert.equal(
     result.blob.type,
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

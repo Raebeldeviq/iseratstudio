@@ -524,7 +524,7 @@ export function buildOpenImmoDeleteXml(input: {
     .join("");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <openimmo xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
-  <uebertragung art="OFFLINE" umfang="TEIL" modus="DELETE" version="1.2.7" sendersoftware="Fabian&amp;Pascal Inseratestudio" senderversion="${xml(APP_VERSION)}" techn_email="${xml(input.provider.email)}" regi_id="${xml(input.provider.providerNumber)}" timestamp="${xml(timestamp)}" />
+  <uebertragung art="OFFLINE" umfang="TEIL" modus="DELETE" version="1.2.7" sendersoftware="Inserate Studio" senderversion="${xml(APP_VERSION)}" techn_email="${xml(input.provider.email)}" regi_id="${xml(input.provider.providerNumber)}" timestamp="${xml(timestamp)}" />
   <anbieter>
     <anbieternr>${xml(input.provider.providerNumber)}</anbieternr>
     <firma>${xml(input.provider.company)}</firma>
@@ -555,7 +555,7 @@ export function buildOpenImmoXml(input: PackageInput): string {
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <openimmo xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
-  <uebertragung art="OFFLINE" umfang="TEIL" modus="CHANGE" version="1.2.7" sendersoftware="Fabian&amp;Pascal Inseratestudio" senderversion="${xml(APP_VERSION)}" techn_email="${xml(provider.email)}" regi_id="${xml(provider.providerNumber)}" timestamp="${xml(timestamp)}" />
+  <uebertragung art="OFFLINE" umfang="TEIL" modus="CHANGE" version="1.2.7" sendersoftware="Inserate Studio" senderversion="${xml(APP_VERSION)}" techn_email="${xml(provider.email)}" regi_id="${xml(provider.providerNumber)}" timestamp="${xml(timestamp)}" />
   <anbieter>
     <anbieternr>${xml(provider.providerNumber)}</anbieternr>
     <firma>${xml(provider.company)}</firma>
@@ -585,7 +585,7 @@ export async function buildImportPackage(input: PackageInput): Promise<{
   const listingSuffix = input.listings.length === 1
     ? slug(`${input.listings[0].templateName}-${input.listings[0].externalId}`)
     : `${input.listings.length}-inserate`;
-  const packageBaseName = `${packageSlug || "fabian-pascal-import"}-${listingSuffix}`;
+  const packageBaseName = `${packageSlug || "inserate-studio-import"}-${listingSuffix}`;
   const xmlFilename = `${packageBaseName}.xml`;
   zip.file(xmlFilename, xmlText);
 

@@ -10,7 +10,7 @@ $nodeExe = Join-Path $runtimeRoot "node\bin\node.exe"
 $pnpmExe = Join-Path $runtimeRoot "bin\fallback\pnpm.cmd"
 
 if (-not (Test-Path -LiteralPath $nodeExe) -or -not (Test-Path -LiteralPath $pnpmExe)) {
-  throw "Die lokale Codex-Laufzeit wurde nicht gefunden. Bitte das Inseratestudio aus Codex starten."
+  throw "Die lokale Codex-Laufzeit wurde nicht gefunden. Bitte Inserate Studio aus Codex starten."
 }
 
 $env:PATH = "$(Split-Path $nodeExe);$(Split-Path $pnpmExe);$env:PATH"
@@ -46,7 +46,7 @@ if (-not $studioPort) {
 } else {
   try {
     $studioPage = Invoke-WebRequest -UseBasicParsing -Uri "http://localhost:43181" -TimeoutSec 2
-    if ($studioPage.Content -notmatch "Fabian(&|&amp;)Pascal Inseratestudio") { throw "Fremder Dienst" }
+    if ($studioPage.Content -notmatch "Inserate Studio") { throw "Fremder Dienst" }
   } catch {
     throw "Port 43181 wird bereits von einem anderen Programm verwendet."
   }

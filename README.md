@@ -1,16 +1,16 @@
-# Fabian&Pascal Inseratestudio
+# Inserate Studio
 
 Lokale Anwendung für die Konfiguration von bis zu 25 Haustypen und die
 Erstellung von bis zu vier Inseratentwürfen je Adresse.
 
 ## Start
 
-Unter Windows `Start-Fabian-Pascal-Inseratestudio.cmd` doppelt anklicken. Die
+Unter Windows `Start-Inserate-Studio.cmd` doppelt anklicken. Die
 Anwendung öffnet sich anschließend unter `http://localhost:43181`.
 Der lokale Helfer speichert heruntergeladene Importpakete zuverlässig direkt
 im Ordner `Downloads`.
 
-Unter macOS `Start-Fabian-Pascal-Inseratestudio.command` doppelt anklicken. Beim
+Unter macOS `Start-Inserate-Studio.command` doppelt anklicken. Beim
 ersten Start können die Apple Command Line Tools sowie die Freigabe für iCloud
 Drive erforderlich sein. Pascals Anzeigen- und Innenraumordner in iCloud Drive
 werden automatisch als Medienbibliothek eingebunden.

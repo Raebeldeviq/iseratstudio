@@ -942,7 +942,7 @@ export default function ManagementCenter({
     const ics = [
       "BEGIN:VCALENDAR",
       "VERSION:2.0",
-      "PRODID:-//Fabian Pascal//InseratStudio//DE",
+      "PRODID:-//Inserate Studio//DE",
       "BEGIN:VEVENT",
       `UID:${appointment.id}@inseratstudio.local`,
       `DTSTAMP:${stamp(new Date().toISOString())}`,

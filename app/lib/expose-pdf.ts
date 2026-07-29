@@ -65,7 +65,7 @@ function addHeader(
     doc.setFont("helvetica", "bold");
     doc.setFontSize(13);
     doc.setTextColor(34, 53, 42);
-    doc.text(pdfText(company.name || "Fabian & Pascal"), 16, 22);
+    doc.text(pdfText(company.name || "Inserate Studio"), 16, 22);
   }
 }
 
@@ -81,7 +81,7 @@ function addFooter(
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8);
   doc.setTextColor(105, 113, 107);
-  doc.text(pdfText(company.name || "Fabian & Pascal InseratStudio"), 16, 290);
+  doc.text(pdfText(company.name || "Inserate Studio"), 16, 290);
   if (options.includePageNumbers) {
     doc.text(`Seite ${page} von ${pageCount}`, 194, 290, { align: "right" });
   }

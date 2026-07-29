@@ -420,7 +420,7 @@ function summaryRows(state: StudioState, addressCount: number, listingCount: num
   const listingEnd = Math.max(listingCount + 1, 2);
   const houseEnd = Math.max(state.houses.length + 1, 2);
   return [
-    [{ value: "Fabian&Pascal Inseratestudio – Bestandsübersicht", style: STYLE.title }, {}, {}, {}],
+    [{ value: "Inserate Studio – Bestandsübersicht", style: STYLE.title }, {}, {}, {}],
     [{ value: "Exportiert am", style: STYLE.metricLabel }, { value: dateText(new Date()), style: STYLE.date }, {}, {}],
     [{ value: "Die Datei enthält keine Zugangsdaten und keine Bilddateien.", style: STYLE.note }, {}, {}, {}],
     [{}, {}, {}, {}],
@@ -532,13 +532,13 @@ export async function buildInventoryWorkbook(state: StudioState): Promise<Invent
 </Relationships>`);
   zip.file("docProps/app.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
-  <Application>Fabian&amp;Pascal Inseratestudio</Application>
+  <Application>Inserate Studio</Application>
   <AppVersion>1.0</AppVersion>
 </Properties>`);
   zip.file("docProps/core.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-  <dc:title>Fabian&amp;Pascal Inseratestudio – Bestand</dc:title>
-  <dc:creator>Fabian&amp;Pascal Inseratestudio</dc:creator>
+  <dc:title>Inserate Studio – Bestand</dc:title>
+  <dc:creator>Inserate Studio</dc:creator>
   <dcterms:created xsi:type="dcterms:W3CDTF">${exportedAt.toISOString()}</dcterms:created>
   <dcterms:modified xsi:type="dcterms:W3CDTF">${exportedAt.toISOString()}</dcterms:modified>
 </cp:coreProperties>`);
@@ -558,7 +558,7 @@ export async function buildInventoryWorkbook(state: StudioState): Promise<Invent
   const date = exportedAt.toISOString().slice(0, 10);
   return {
     blob: new Blob([bytes.buffer as ArrayBuffer], { type: XLSX_MIME }),
-    filename: `Fabian-Pascal-Inseratestudio-Bestand-${date}.xlsx`,
+    filename: `Inserate-Studio-Bestand-${date}.xlsx`,
     addressCount: state.projects.length,
     listingCount: state.projects.reduce((sum, project) => sum + project.listings.length, 0),
     houseCount: state.houses.length,

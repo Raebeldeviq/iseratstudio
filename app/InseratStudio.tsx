@@ -315,8 +315,8 @@ function AppVersionBadge() {
   return (
     <div
       className="app-version-badge"
-      aria-label={`Geöffnete InseratStudio-Version ${APP_VERSION}`}
-      title={`Fabian&Pascal Inseratestudio · Version ${APP_VERSION}`}
+      aria-label={`Geöffnete Inserate-Studio-Version ${APP_VERSION}`}
+      title={`Inserate Studio · Version ${APP_VERSION}`}
     >
       v{APP_VERSION}
     </div>
@@ -2553,7 +2553,7 @@ export default function InseratStudio() {
     }
     if (!helperOnline) {
       setNotice(helperNeedsRestart
-        ? "Der lokale Textgenerator verwendet noch eine ältere Programmfassung. Bitte das Inseratestudio schließen und erneut über den Startknopf öffnen."
+        ? "Der lokale Textgenerator verwendet noch eine ältere Programmfassung. Bitte Inserate Studio schließen und erneut über den Startknopf öffnen."
         : "Der lokale Helfer ist nicht erreichbar. Bitte die Anwendung über den Startknopf öffnen.");
       return;
     }
@@ -4578,7 +4578,7 @@ export default function InseratStudio() {
     const blob = new Blob([JSON.stringify(state, null, 2)], {
       type: "application/json",
     });
-    downloadBlob(blob, `fabian-pascal-inseratstudio-sicherung-${new Date().toISOString().slice(0, 10)}.json`);
+    downloadBlob(blob, `inserate-studio-sicherung-${new Date().toISOString().slice(0, 10)}.json`);
   };
 
   const importCatalog = (event: ChangeEvent<HTMLInputElement>) => {
@@ -4634,11 +4634,11 @@ export default function InseratStudio() {
         }
         setNotice(
           migratedExternalIds.changedCount
-            ? `Fabian&Pascal-Sicherung wurde eingelesen; ${migratedExternalIds.changedCount} Entwurfs-Objekt-ID${migratedExternalIds.changedCount === 1 ? "" : "s"} wurden auf ${FIXED_HV_PROVIDER_NUMBER}-… umgestellt.`
-            : "Fabian&Pascal-Sicherung wurde lokal eingelesen.",
+            ? `Inserate-Studio-Sicherung wurde eingelesen; ${migratedExternalIds.changedCount} Entwurfs-Objekt-ID${migratedExternalIds.changedCount === 1 ? "" : "s"} wurden auf ${FIXED_HV_PROVIDER_NUMBER}-… umgestellt.`
+            : "Inserate-Studio-Sicherung wurde lokal eingelesen.",
         );
       } catch {
-        setNotice("Die ausgewählte Datei ist keine gültige Fabian&Pascal-Sicherung.");
+        setNotice("Die ausgewählte Datei ist keine gültige Inserate-Studio-Sicherung.");
       }
     };
     reader.readAsText(file);
@@ -4649,9 +4649,9 @@ export default function InseratStudio() {
     return (
       <main className="loading-screen duplicate-tab-screen">
         <AppVersionBadge />
-        <div className="loading-mark">F&amp;P</div>
-        <h1>Inseratestudio ist bereits geöffnet</h1>
-        <p>Bitte nur einen Inseratestudio-Tab verwenden. Schließe den anderen Tab; dieser Tab wird danach automatisch freigeschaltet.</p>
+        <div className="loading-mark">IS</div>
+        <h1>Inserate Studio ist bereits geöffnet</h1>
+        <p>Bitte nur einen Inserate-Studio-Tab verwenden. Schließe den anderen Tab; dieser Tab wird danach automatisch freigeschaltet.</p>
       </main>
     );
   }
@@ -4660,8 +4660,8 @@ export default function InseratStudio() {
     return (
       <main className="loading-screen">
         <AppVersionBadge />
-        <div className="loading-mark">F&amp;P</div>
-        <p>Fabian&amp;Pascal Inseratestudio wird vorbereitet …</p>
+        <div className="loading-mark">IS</div>
+        <p>Inserate Studio wird vorbereitet …</p>
       </main>
     );
   }
@@ -4671,10 +4671,10 @@ export default function InseratStudio() {
       <AppVersionBadge />
       <header className="topbar">
         <div className="brand-lockup">
-          <div className="brand-mark">F&amp;P</div>
+          <div className="brand-mark">IS</div>
           <div>
-            <strong>Fabian&amp;Pascal Inseratestudio</strong>
-            <span>Lokaler Arbeitsbereich</span>
+            <strong>Inserate Studio</strong>
+            <span>AI-gestützte Objektverwaltung</span>
           </div>
         </div>
         <div className="storage-pill" title={STORAGE_ID}>
@@ -5423,7 +5423,7 @@ export default function InseratStudio() {
                 >
                   {exportingInventory ? "Bestand wird erstellt …" : "Bestand als Excel herunterladen"}
                 </button>
-                <a className="secondary" href="/Fabian-Pascal-Adressimport-Vorlage.xlsx" download>Excel-Vorlage herunterladen</a>
+                <a className="secondary" href="/Inserate-Studio-Adressimport-Vorlage.xlsx" download>Excel-Vorlage herunterladen</a>
                 <label className={`primary file-label${importingAddresses ? " disabled" : ""}`}>
                   {importingAddresses ? "Excel wird eingelesen …" : "Excel-Adressen importieren"}
                   <input
@@ -5780,7 +5780,7 @@ export default function InseratStudio() {
               <Field label="FTP-Benutzername" value={ftpUser} onChange={setFtpUser} />
               <Field label="FTP-Passwort" type="password" value={ftpPassword} onChange={setFtpPassword} />
             </div>
-            <p className="security-note">FTP-Benutzername und Passwort bleiben nach einem Upload erhalten. Sie liegen getrennt von Haustypen und Projekten im plattformgeschützten Zugangstresor und werden nicht in eine Inseratstudio-Sicherung aufgenommen.</p>
+            <p className="security-note">FTP-Benutzername und Passwort bleiben nach einem Upload erhalten. Sie liegen getrennt von Haustypen und Projekten im plattformgeschützten Zugangstresor und werden nicht in eine Inserate-Studio-Sicherung aufgenommen.</p>
 
             <div className="credential-vault-card">
               <div><span className="eyebrow">Lokaler Zugangstresor</span><b>{credentialSaveLabel}</b><small>Windows-DPAPI oder Apple-Schlüsselbund – nur für das angemeldete Benutzerkonto.</small></div>

@@ -3,7 +3,7 @@ set -euo pipefail
 
 APP_ROOT="${0:A:h}"
 WORK_ROOT="$APP_ROOT/work"
-DATA_ROOT="$HOME/Library/Application Support/Fabian-Pascal Inseratestudio"
+DATA_ROOT="$HOME/Library/Application Support/Inserate Studio"
 
 mkdir -p "$WORK_ROOT" "$DATA_ROOT"
 chmod 700 "$DATA_ROOT"
@@ -54,6 +54,6 @@ for attempt in {1..30}; do
   sleep 1
 done
 
-print -u2 "Das Inseratestudio konnte nicht gestartet werden. Details stehen unter $WORK_ROOT."
+print -u2 "Inserate Studio konnte nicht gestartet werden. Details stehen unter $WORK_ROOT."
 read -k 1 "?Taste drücken zum Schließen …"
 exit 1
