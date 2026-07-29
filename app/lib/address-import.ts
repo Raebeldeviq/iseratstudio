@@ -1,4 +1,5 @@
 import type { AddressOwner, ProjectInput } from "../types";
+import { legacyUserId, projectResponsibleUserId } from "./responsibility.ts";
 
 type AddressColumn =
   | "owner"
@@ -36,7 +37,7 @@ export type AddressReplacementResult = {
 };
 
 const HEADER_ALIASES: Record<AddressColumn, string[]> = {
-  owner: ["benutzer", "bearbeiter", "eigentumer", "owner"],
+  owner: ["mitarbeiter", "benutzer", "bearbeiter", "eigentumer", "owner", "email"],
   name: ["projektname", "projekt", "bezeichnung", "name"],
   street: ["strasse", "straße"],
   houseNumber: ["hausnummer", "hausnr", "nr"],
@@ -100,8 +101,23 @@ function ownerFromCell(value: unknown): AddressOwner | null {
   return null;
 }
 
+export type AddressImportUserResolver = (value: string) => string | null;
+
+function importedResponsibility(
+  value: unknown,
+  resolveUserId?: AddressImportUserResolver,
+): { owner: AddressOwner; responsibleUserId: string } | null {
+  const raw = text(value);
+  const resolved = resolveUserId ? resolveUserId(raw) : ownerFromCell(raw);
+  if (!resolved) return null;
+  return {
+    owner: resolved,
+    responsibleUserId: legacyUserId(resolved) ?? resolved,
+  };
+}
+
 function addressKey(project: Pick<ProjectInput, "owner" | "street" | "houseNumber" | "zip" | "city">): string {
-  return [project.owner, project.street, project.houseNumber, project.zip, project.city]
+  return [projectResponsibleUserId(project), project.street, project.houseNumber, project.zip, project.city]
     .map(normalize)
     .join("|");
 }
@@ -109,13 +125,13 @@ function addressKey(project: Pick<ProjectInput, "owner" | "street" | "houseNumbe
 function locationKey(
   project: Pick<ProjectInput, "owner" | "street" | "zip" | "city">,
 ): string {
-  return [project.owner, project.street, project.zip, project.city]
+  return [projectResponsibleUserId(project), project.street, project.zip, project.city]
     .map(normalize)
     .join("|");
 }
 
 function projectNameKey(project: Pick<ProjectInput, "owner" | "name">): string {
-  return [project.owner, project.name].map(normalize).join("|");
+  return [projectResponsibleUserId(project), project.name].map(normalize).join("|");
 }
 
 function columnMap(row: readonly unknown[]): Partial<Record<AddressColumn, number>> {
@@ -140,6 +156,7 @@ export function parseAddressWorkbookRows(
   rows: readonly (readonly unknown[])[],
   existingProjects: readonly ProjectInput[],
   createId: () => string,
+  resolveUserId?: AddressImportUserResolver,
 ): AddressImportResult {
   const headerIndex = rows.findIndex((row) => hasRequiredColumns(columnMap(row)));
   if (headerIndex < 0) {
@@ -171,12 +188,12 @@ export function parseAddressWorkbookRows(
     const excelRow = headerIndex + relativeIndex + 2;
     if (row.every((value) => text(value) === "")) return;
 
-    const owner = ownerFromCell(cell(row, "owner"));
+    const responsibility = importedResponsibility(cell(row, "owner"), resolveUserId);
     const street = text(cell(row, "street"));
     const zip = postalCode(cell(row, "zip"));
     const city = text(cell(row, "city"));
-    if (!owner || !street || !zip || !city) {
-      errors.push(`Zeile ${excelRow}: Benutzer (Fabian/Pascal), Straße, PLZ oder Ort fehlt.`);
+    if (!responsibility || !street || !zip || !city) {
+      errors.push(`Zeile ${excelRow}: Mitarbeiter konnte nicht zugeordnet werden oder Straße, PLZ bzw. Ort fehlt.`);
       return;
     }
 
@@ -189,7 +206,8 @@ export function parseAddressWorkbookRows(
     const additionalCostsCell = cell(row, "additionalCosts");
     const project: ProjectInput = {
       id: createId(),
-      owner,
+      owner: responsibility.owner,
+      responsibleUserId: responsibility.responsibleUserId,
       name: text(cell(row, "name")) || defaultName,
       street,
       houseNumber,
@@ -256,6 +274,7 @@ export function replaceAddressWorkbookRows(
   rows: readonly (readonly unknown[])[],
   existingProjects: readonly ProjectInput[],
   createId: () => string,
+  resolveUserId?: AddressImportUserResolver,
 ): AddressReplacementResult {
   const headerIndex = rows.findIndex((row) => hasRequiredColumns(columnMap(row)));
   if (headerIndex < 0) {
@@ -303,9 +322,9 @@ export function replaceAddressWorkbookRows(
     const excelRow = headerIndex + relativeIndex + 2;
     if (row.every((value) => text(value) === "")) return;
 
-    const owner = ownerFromCell(cell(row, "owner"));
-    if (!owner) {
-      errors.push(`Zeile ${excelRow}: Benutzer muss Fabian oder Pascal sein.`);
+    const responsibility = importedResponsibility(cell(row, "owner"), resolveUserId);
+    if (!responsibility) {
+      errors.push(`Zeile ${excelRow}: Mitarbeiter konnte keinem aktiven Konto zugeordnet werden.`);
       return;
     }
 
@@ -320,7 +339,8 @@ export function replaceAddressWorkbookRows(
     const name = suppliedName || defaultName || `Neues Adressprojekt ${excelRow}`;
     const incoming: ProjectInput = {
       id: createId(),
-      owner,
+      owner: responsibility.owner,
+      responsibleUserId: responsibility.responsibleUserId,
       name,
       street,
       houseNumber,

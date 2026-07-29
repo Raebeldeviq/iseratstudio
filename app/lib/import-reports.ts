@@ -12,6 +12,7 @@ import {
   deriveListingLifecycle,
   mapListing,
 } from "./management.ts";
+import { portalReportConfirmed } from "./portal-operations.ts";
 
 const EXTERNAL_ID_PATTERN = /\b[A-Z0-9]{2,}(?:[-_/][A-Z0-9]+)*-\d{3,}\b/gi;
 
@@ -128,7 +129,7 @@ function updatePortal(
   event: ImportReportEvent,
   importedAt: string,
 ): ListingPortalState {
-  return {
+  const updated = {
     ...portal,
     status: event.status,
     lastReportAt: importedAt,
@@ -137,6 +138,7 @@ function updatePortal(
       : portal.lastTransferAt,
     message: event.message,
   };
+  return portalReportConfirmed(updated, importedAt, event.message);
 }
 
 function applyEventToListing(

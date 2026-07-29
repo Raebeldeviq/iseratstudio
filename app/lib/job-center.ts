@@ -14,6 +14,11 @@ import type {
   UploadRunHistoryEntry,
 } from "../types";
 import { totalSyncExternalId } from "./total-sync";
+import {
+  normalizedResponsibilityScope,
+  projectOrganizationUnitId,
+  projectResponsibleUserId,
+} from "./responsibility.ts";
 
 export const UPLOAD_RUN_HISTORY_LIMIT = 30;
 
@@ -195,6 +200,7 @@ export function normalizeTotalSyncRun(
   });
   return {
     ...run,
+    scope: normalizedResponsibilityScope(run.scope),
     aiModel,
     kind: run.kind ?? "total-sync",
     status: run.status === "running" ? "paused" : run.status,
@@ -405,7 +411,15 @@ export function buildUploadRunHistoryEntry(
           || projectId,
         owner: project?.owner
           || run.tasks.find((task) => task.projectId === projectId)?.protectedLocation?.owner
-          || "fabian",
+          || "",
+        responsibleUserId: project
+          ? projectResponsibleUserId(project)
+          : run.tasks.find((task) => task.projectId === projectId)
+            ?.protectedLocation?.responsibleUserId,
+        organizationUnitId: project
+          ? projectOrganizationUnitId(project)
+          : run.tasks.find((task) => task.projectId === projectId)
+            ?.protectedLocation?.organizationUnitId,
         city: project?.city
           || run.tasks.find((task) => task.projectId === projectId)?.protectedLocation?.city
           || "",

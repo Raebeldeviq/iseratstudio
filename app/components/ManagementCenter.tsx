@@ -53,6 +53,12 @@ import {
   visibleUserIds,
 } from "../lib/organization";
 import {
+  portalDesiredStatus,
+  portalSyncHealth,
+  schedulePortalDesiredState,
+  schedulePortalUpdate,
+} from "../lib/portal-operations";
+import {
   applyImportReport,
   parseImportReport,
 } from "../lib/import-reports";
@@ -441,6 +447,18 @@ export default function ManagementCenter({
   const [newFolderScope, setNewFolderScope] = useState<ManagementFileScope>("personal");
 
   const rows = useMemo(() => listingRows(state), [state]);
+  const activePortalStates = rows.flatMap((row) => (
+    row.management.archivedAt ? [] : row.management.portals
+  ));
+  const synchronizedPortalCount = activePortalStates.filter((portal) => (
+    portalSyncHealth(portal) === "synchronized"
+  )).length;
+  const pendingPortalCount = activePortalStates.filter((portal) => (
+    portalSyncHealth(portal) === "pending"
+  )).length;
+  const failedPortalCount = activePortalStates.filter((portal) => (
+    portalSyncHealth(portal) === "error"
+  )).length;
   const currentUser = currentManagementUser(state);
   const canEdit = currentUser
     ? managementPermission(currentUser.role, "edit-listings")
@@ -608,7 +626,25 @@ export default function ManagementCenter({
 
   const updateActiveManagement = (patch: Partial<ListingManagement>) => {
     if (!activeListing) return;
-    updateListing(activeListing.id, (listing) => withUpdatedManagement(listing, patch));
+    updateListing(activeListing.id, (listing) => {
+      const updated = withUpdatedManagement(listing, patch);
+      if (
+        !updated.management
+        || patch.portals
+        || !updated.management.released
+        || !updated.management.details.transferOnSave
+      ) return updated;
+      const at = new Date().toISOString();
+      return {
+        ...updated,
+        management: {
+          ...updated.management,
+          portals: updated.management.portals.map((portal) => (
+            schedulePortalUpdate(portal, at)
+          )),
+        },
+      };
+    });
   };
 
   const updateDetails = (patch: Partial<ListingDetails>) => {
@@ -620,13 +656,25 @@ export default function ManagementCenter({
 
   const updateTexts = (patch: Partial<GeneratedListing["texts"]>) => {
     if (!activeListing) return;
-    updateListing(activeListing.id, (listing) => ({
-      ...listing,
-      texts: { ...listing.texts, ...patch },
-      management: listing.management
-        ? { ...listing.management, updatedAt: new Date().toISOString() }
-        : listing.management,
-    }));
+    updateListing(activeListing.id, (listing) => {
+      const at = new Date().toISOString();
+      return {
+        ...listing,
+        texts: { ...listing.texts, ...patch },
+        management: listing.management
+          ? {
+              ...listing.management,
+              updatedAt: at,
+              portals: listing.management.released
+                && listing.management.details.transferOnSave
+                ? listing.management.portals.map((portal) => (
+                    schedulePortalUpdate(portal, at)
+                  ))
+                : listing.management.portals,
+            }
+          : listing.management,
+      };
+    });
   };
 
   const selectAllVisible = (checked: boolean) => {
@@ -651,7 +699,21 @@ export default function ManagementCenter({
             : action === "restore"
               ? { archivedAt: undefined }
               : { released: action === "release" };
-          return withUpdatedManagement(listing, patch, at);
+          const updated = withUpdatedManagement(listing, patch, at);
+          if (
+            action !== "release"
+            || !updated.management
+            || !updated.management.details.transferOnSave
+          ) return updated;
+          return {
+            ...updated,
+            management: {
+              ...updated.management,
+              portals: updated.management.portals.map((portal) => (
+                schedulePortalUpdate(portal, at, 0)
+              )),
+            },
+          };
         });
       });
       return record(
@@ -2108,12 +2170,41 @@ export default function ManagementCenter({
                                 disabled={!canEdit}
                                 onChange={(enabled) => updateActiveManagement({
                                   portals: activeListing.management!.portals.map((item) => (
-                                    item.portalId === portalState.portalId ? { ...item, enabled } : item
+                                    item.portalId === portalState.portalId
+                                      ? schedulePortalDesiredState(item, enabled)
+                                      : item
                                   )),
                                 })}
                               />
-                              <span className={`portal-status ${portalState.status}`}>{PORTAL_STATUS_LABELS[portalState.status]}</span>
+                              <div className={`portal-sync-pair ${portalSyncHealth(portalState)}`}>
+                                <span>
+                                  <small>Soll</small>
+                                  <b>{portalDesiredStatus(portalState) === "online" ? "Online" : "Gelöscht"}</b>
+                                </span>
+                                <span>
+                                  <small>Ist</small>
+                                  <b className={`portal-status ${portalState.status}`}>{PORTAL_STATUS_LABELS[portalState.status]}</b>
+                                </span>
+                              </div>
                               <small>{portalState.message || `Letzte Übertragung: ${formatDate(portalState.lastTransferAt, true)}`}</small>
+                              {portalState.nextRetryAt ? (
+                                <small>
+                                  Nächster automatischer Versuch: {formatDate(portalState.nextRetryAt, true)}
+                                  {" · "}
+                                  Versuch {(portalState.retryCount ?? 0) + 1}/4
+                                </small>
+                              ) : null}
+                              {(portalState.operationLog?.length ?? 0) > 0 ? (
+                                <details className="portal-operation-log">
+                                  <summary>Übertragungsprotokoll</summary>
+                                  {portalState.operationLog!.map((entry) => (
+                                    <div key={entry.id}>
+                                      <b>{formatDate(entry.at, true)} · {entry.kind === "delete" ? "Löschung" : entry.kind === "status-report" ? "Rückmeldung" : entry.kind === "update" ? "Änderung" : "Veröffentlichung"}</b>
+                                      <span>{entry.message}</span>
+                                    </div>
+                                  ))}
+                                </details>
+                              ) : null}
                             </article>
                           );
                         })}
@@ -2347,6 +2438,11 @@ export default function ManagementCenter({
               <p>Kontingente und lokale Statuswerte werden durch Importberichte aktualisiert.</p>
             </div>
           </header>
+          <div className="portal-operation-summary">
+            <div className="synchronized"><span>Synchron</span><b>{synchronizedPortalCount}</b><small>Soll und Ist stimmen überein</small></div>
+            <div className="pending"><span>Ausstehend</span><b>{pendingPortalCount}</b><small>Übertragung oder Rückmeldung offen</small></div>
+            <div className="error"><span>Fehler</span><b>{failedPortalCount}</b><small>Automatische Wiederholung aktiv</small></div>
+          </div>
           <div className="portal-config-grid">
             {management.portals.map((portal) => (
               <article key={portal.id}>
@@ -2381,7 +2477,14 @@ export default function ManagementCenter({
                     <td><b>{row.listing.externalId}</b><small>{row.listing.texts.title}</small></td>
                     {management.portals.map((portal) => {
                       const status = row.management.portals.find((item) => item.portalId === portal.id);
-                      return <td key={portal.id}><span className={`portal-status ${status?.status ?? "not-transferred"}`}>{PORTAL_STATUS_LABELS[status?.status ?? "not-transferred"]}</span></td>;
+                      return (
+                        <td key={portal.id}>
+                          <div className={`portal-matrix-status ${status ? portalSyncHealth(status) : "pending"}`}>
+                            <small>Soll {status && portalDesiredStatus(status) === "deleted" ? "gelöscht" : "online"}</small>
+                            <span className={`portal-status ${status?.status ?? "not-transferred"}`}>{PORTAL_STATUS_LABELS[status?.status ?? "not-transferred"]}</span>
+                          </div>
+                        </td>
+                      );
                     })}
                   </tr>
                 ))}

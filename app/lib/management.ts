@@ -25,6 +25,11 @@ import type {
   StudioState,
   VisibilityScope,
 } from "../types";
+import {
+  legacyUserId,
+  projectOrganizationUnitId,
+  projectResponsibleUserId,
+} from "./responsibility.ts";
 import { allocateProviderExternalIds } from "./external-ids.ts";
 
 const DEFAULT_PORTALS: PortalConfiguration[] = [
@@ -486,12 +491,19 @@ function normalizedPortalStates(
   value: ListingPortalState[] | undefined,
 ): ListingPortalState[] {
   const byId = new Map((value ?? []).map((item) => [item.portalId, item]));
-  return configurations.map((portal) => ({
-    portalId: portal.id,
-    enabled: portal.enabled,
-    status: "not-transferred",
-    ...byId.get(portal.id),
-  }));
+  return configurations.map((portal) => {
+    const current = byId.get(portal.id);
+    const enabled = current?.enabled ?? portal.enabled;
+    return {
+      portalId: portal.id,
+      enabled,
+      status: "not-transferred",
+      ...current,
+      desiredStatus: current?.desiredStatus ?? (enabled ? "online" : "deleted"),
+      retryCount: Math.max(0, Number(current?.retryCount) || 0),
+      operationLog: current?.operationLog ?? [],
+    };
+  });
 }
 
 export function deriveListingLifecycle(
@@ -527,10 +539,9 @@ function normalizeListing(
   };
   const users = state.management?.users ?? [];
   const fallbackAssignee = users.find((user) => (
-    project.owner === "pascal"
-      ? user.id === "user-pascal"
-      : user.id === "user-fabian"
-  )) ?? users.find((user) => user.active);
+    user.id === projectResponsibleUserId(project)
+  )) ?? users.find((user) => user.id === legacyUserId(project.owner))
+    ?? users.find((user) => user.active);
   const assignedUser = users.find((user) => (
     user.id === current?.assignedUserId && user.active
   )) ?? fallbackAssignee;
@@ -633,12 +644,24 @@ export function normalizeStudioManagementState(
   const sourceState = { ...state, management };
   return {
     ...sourceState,
-    projects: sourceState.projects.map((project) => ({
-      ...project,
-      listings: project.listings.map((listing) => (
-        normalizeListing(sourceState, project, listing, portals, now)
-      )),
-    })),
+    projects: sourceState.projects.map((project) => {
+      const responsibleUserId = projectResponsibleUserId(project)
+        ?? activeUser?.id;
+      const responsibleUser = users.find((user) => user.id === responsibleUserId);
+      const normalizedProject = {
+        ...project,
+        responsibleUserId,
+        organizationUnitId: projectOrganizationUnitId(project, management)
+          ?? responsibleUser?.organizationUnitIds[0]
+          ?? "unit-company",
+      };
+      return {
+        ...normalizedProject,
+        listings: project.listings.map((listing) => (
+          normalizeListing(sourceState, normalizedProject, listing, portals, now)
+        )),
+      };
+    }),
   };
 }
 
@@ -818,6 +841,8 @@ export function createDirectObject(
   const project: ProjectInput = {
     id: projectId,
     owner: draft.owner,
+    responsibleUserId: draft.assignedUserId || state.management?.currentUserId,
+    organizationUnitId: draft.organizationUnitId,
     name: draft.city.trim()
       ? `${directCategoryName(draft.objectCategory)} · ${draft.city.trim()}`
       : `${directCategoryName(draft.objectCategory)} · ${externalId}`,

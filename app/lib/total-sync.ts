@@ -1,6 +1,7 @@
 import type {
   AiModelId,
   HouseTemplate,
+  ManagementState,
   ProtectedProjectLocation,
   ProjectInput,
   TotalSyncRun,
@@ -11,6 +12,11 @@ import {
   allocateProviderExternalIds,
   normalizeProviderNumber,
 } from "./external-ids.ts";
+import {
+  normalizedResponsibilityScope,
+  projectMatchesResponsibilityScope,
+  projectResponsibleUserId,
+} from "./responsibility.ts";
 
 export const TOTAL_SYNC_LISTINGS_PER_ADDRESS = 4;
 export const REQUIRED_TOTAL_SYNC_HOUSE_TYPES = [
@@ -52,7 +58,9 @@ export function snapshotProtectedProjectLocation(
 ): ProtectedProjectLocation {
   return {
     id: project.id,
-    owner: project.owner === "pascal" ? "pascal" : "fabian",
+    owner: project.owner,
+    responsibleUserId: projectResponsibleUserId(project),
+    organizationUnitId: project.organizationUnitId,
     name: project.name,
     street: project.street,
     houseNumber: project.houseNumber,
@@ -85,12 +93,11 @@ export function protectedProjectLocationMatches(
 export function projectsInTotalSyncScope(
   projects: ProjectInput[],
   scope: TotalSyncScope,
+  management?: ManagementState,
 ): ProjectInput[] {
-  return scope === "all"
-    ? projects
-    : projects.filter((project) => (
-      (project.owner === "pascal" ? "pascal" : "fabian") === scope
-    ));
+  return projects.filter((project) => (
+    projectMatchesResponsibilityScope(project, scope, management)
+  ));
 }
 
 export function pickRandomHouseIds(
@@ -196,11 +203,17 @@ export function createTotalSyncRun(input: {
   runId: string;
   createdAt: string;
   random?: () => number;
+  management?: ManagementState;
 }): TotalSyncRun {
   const selectedProjectIds = input.projectIds
     ? new Set(input.projectIds)
     : undefined;
-  const scopedProjects = projectsInTotalSyncScope(input.projects, input.scope)
+  const normalizedScope = normalizedResponsibilityScope(input.scope);
+  const scopedProjects = projectsInTotalSyncScope(
+    input.projects,
+    normalizedScope,
+    input.management,
+  )
     .filter((project) => !selectedProjectIds || selectedProjectIds.has(project.id));
   const readyProjects = scopedProjects.filter(projectIsReadyForTotalSync);
   if (!readyProjects.length) {
@@ -218,7 +231,7 @@ export function createTotalSyncRun(input: {
   return {
     id: input.runId,
     kind: input.kind ?? "total-sync",
-    scope: input.scope,
+    scope: normalizedScope,
     providerNumber: normalizedProviderNumber || undefined,
     promotionImageCount: Math.min(
       TOTAL_SYNC_LISTINGS_PER_ADDRESS,

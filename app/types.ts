@@ -52,11 +52,14 @@ export type HouseTemplate = {
   images: HouseImage[];
 };
 
-export type AddressOwner = "fabian" | "pascal";
+/** @deprecated Kept only for loading older address inventories. */
+export type AddressOwner = string;
 
 export type ProjectInput = {
   id: string;
   owner: AddressOwner;
+  responsibleUserId?: string;
+  organizationUnitId?: string;
   name: string;
   street: string;
   houseNumber: string;
@@ -144,9 +147,26 @@ export type ListingPortalState = {
   portalId: string;
   enabled: boolean;
   status: ListingPortalStatus;
+  desiredStatus?: "online" | "deleted";
+  retryCount?: number;
+  nextRetryAt?: string;
+  lastAttemptAt?: string;
+  lastSuccessAt?: string;
+  operationLog?: PortalOperationLog[];
   lastTransferAt?: string;
   lastReportAt?: string;
   message?: string;
+};
+
+export type PortalOperationKind = "publish" | "update" | "delete" | "status-report";
+
+export type PortalOperationLog = {
+  id: string;
+  kind: PortalOperationKind;
+  status: "queued" | "running" | "succeeded" | "failed" | "confirmed";
+  at: string;
+  message: string;
+  attempt: number;
 };
 
 export type ListingMediaKind =
@@ -494,7 +514,7 @@ export type ManagementState = {
   files: ManagementFileItem[];
 };
 
-export type TotalSyncScope = AddressOwner | "all";
+export type TotalSyncScope = string;
 
 export type TotalSyncRunKind = "total-sync" | "seven-day";
 export type TotalSyncListingStatus =
@@ -520,6 +540,8 @@ export type AiTokenUsage = {
 export type ProtectedProjectLocation = {
   id: string;
   owner: AddressOwner;
+  responsibleUserId?: string;
+  organizationUnitId?: string;
   name: string;
   street: string;
   houseNumber: string;
@@ -612,6 +634,8 @@ export type UploadRunHistoryListing = {
   projectId: string;
   projectName: string;
   owner: AddressOwner;
+  responsibleUserId?: string;
+  organizationUnitId?: string;
   city: string;
   externalId: string;
   houseId: string;

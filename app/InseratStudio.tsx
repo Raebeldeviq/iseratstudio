@@ -60,7 +60,7 @@ import {
   mapListing,
   normalizeStudioManagementState,
 } from "./lib/management";
-import { BUSINESS_ROLE_LABELS } from "./lib/organization";
+import { BUSINESS_ROLE_LABELS, visibleUserIds } from "./lib/organization";
 import {
   MAX_PROMOTED_LISTINGS,
   MAX_PROMOTION_IMAGES,
@@ -68,6 +68,12 @@ import {
   randomPromotionAssignments,
   reconcilePromotionAssignments,
 } from "./lib/promotion-images.js";
+import {
+  duePortalOperations,
+  portalOperationFailed,
+  portalOperationStarted,
+  portalOperationSucceeded,
+} from "./lib/portal-operations";
 import {
   buildPreflightReport,
   houseIsReadyForUpload,
@@ -83,7 +89,14 @@ import {
   type CloudSession,
 } from "./lib/cloud-workspace";
 import { runBoundedProductionPipeline } from "./lib/production-pipeline";
-import { ADDRESS_OWNERS, normalizeProjectOwners, projectOwner } from "./lib/project-owners";
+import { normalizeProjectOwners, projectOwner } from "./lib/project-owners";
+import {
+  resolveImportedUserId,
+  responsibilityLabel,
+  responsibilityScopeOptions,
+  scopeLabel,
+  userScope,
+} from "./lib/responsibility";
 import { buildRenewalSchedule } from "./lib/renewal-schedule";
 import { totalPrice } from "./lib/text-generator";
 import {
@@ -277,9 +290,14 @@ const newHouse = (index = 1): HouseTemplate => ({
   images: [],
 });
 
-const newProject = (owner: AddressOwner): ProjectInput => ({
+const newProject = (
+  owner: AddressOwner,
+  organizationUnitId?: string,
+): ProjectInput => ({
   id: uid(),
   owner,
+  responsibleUserId: owner,
+  organizationUnitId,
   name: `Neues Adressprojekt ${new Date().toLocaleDateString("de-DE")}`,
   street: "",
   houseNumber: "",
@@ -313,7 +331,7 @@ const defaultProvider: ProviderSettings = {
 const initialState = (): StudioState => normalizeStudioManagementState({
   version: 1,
   houses: [newHouse(1)],
-  projects: [newProject("fabian")],
+  projects: [newProject("user-fabian", "unit-company")],
   provider: defaultProvider,
   promotionImages: [],
   promotionImage: null,
@@ -726,8 +744,18 @@ export default function InseratStudio() {
   const cloudRevisionRef = useRef(0);
   const cloudQueueRef = useRef<Promise<void>>(Promise.resolve());
   const latestStateRef = useRef(state);
+  const automaticPortalBusyRef = useRef(false);
+  const portalTransferRef = useRef<(listingId: string) => Promise<void>>(async () => undefined);
+  const portalDeleteRef = useRef<(listingIds: string[]) => Promise<void>>(async () => undefined);
   latestStateRef.current = state;
   const currentManagementAccount = currentManagementUser(state);
+  const currentVisibleUserIds = state.management && currentManagementAccount
+    ? visibleUserIds(state.management, currentManagementAccount.id)
+    : new Set<string>();
+  const responsibilityOptions = responsibilityScopeOptions(
+    state.management,
+    currentVisibleUserIds,
+  );
   const currentRole: ManagementRole =
     cloudSession?.role ?? currentManagementAccount?.role ?? "viewer";
   const managementReadOnly = currentRole === "viewer";
@@ -752,7 +780,7 @@ export default function InseratStudio() {
   const [saveLabel, setSaveLabel] = useState("Lokaler Speicher wird vorbereitet …");
   const [activeHouseId, setActiveHouseId] = useState("");
   const [activeProjectId, setActiveProjectId] = useState("");
-  const [activeOwner, setActiveOwner] = useState<AddressOwner>("fabian");
+  const [activeOwner, setActiveOwner] = useState<AddressOwner>("user-fabian");
   const [notice, setNotice] = useState<string | null>(null);
   const [ftpHost, setFtpHost] = useState("fabianraebel.livinghaus.info");
   const [ftpUser, setFtpUser] = useState("");
@@ -803,7 +831,7 @@ export default function InseratStudio() {
   const [mediaDuplicateKeepIds, setMediaDuplicateKeepIds] = useState<Record<string, string>>({});
   const [scanningMediaDuplicates, setScanningMediaDuplicates] = useState(false);
   const [deletingMediaDuplicates, setDeletingMediaDuplicates] = useState(false);
-  const [totalSyncScope, setTotalSyncScope] = useState<TotalSyncScope>("fabian");
+  const [totalSyncScope, setTotalSyncScope] = useState<TotalSyncScope>("all");
   const [totalSyncPromotionCount, setTotalSyncPromotionCount] = useState(0);
   const [totalSyncBusy, setTotalSyncBusy] = useState(false);
   const [totalSyncStopping, setTotalSyncStopping] = useState(false);
@@ -1011,9 +1039,16 @@ export default function InseratStudio() {
         const loaded = cloud?.session
           ? bindSessionToState(normalizedManagement, cloud.session)
           : normalizedManagement;
+        const defaultResponsibleUser = loaded.management?.currentUserId || "user-fabian";
+        const defaultOrganizationUnit = loaded.management?.users.find((user) => (
+          user.id === defaultResponsibleUser
+        ))?.organizationUnitIds[0] ?? "unit-company";
         const next = loaded.projects.length
           ? loaded
-          : { ...loaded, projects: [newProject("fabian")] };
+          : {
+              ...loaded,
+              projects: [newProject(defaultResponsibleUser, defaultOrganizationUnit)],
+            };
         setState(next);
         selectActiveHouse(next.houses[0]?.id ?? "");
         setActiveProjectId(next.projects[0]?.id ?? "");
@@ -1021,7 +1056,7 @@ export default function InseratStudio() {
         setTotalSyncScope(
           totalSyncCanResume(next.totalSyncRun) && next.totalSyncRun
             ? next.totalSyncRun.scope
-            : projectOwner(next.projects[0]),
+            : userScope(projectOwner(next.projects[0])),
         );
         setTotalSyncPromotionCount(
           totalSyncCanResume(next.totalSyncRun) && next.totalSyncRun
@@ -1300,7 +1335,11 @@ export default function InseratStudio() {
   const totalSyncEffectivePortalPublication = resumableTotalSync && state.totalSyncRun
     ? state.totalSyncRun.portalPublicationEnabled === true
     : portalPublicationEnabled;
-  const totalSyncScopedProjects = projectsInTotalSyncScope(state.projects, totalSyncEffectiveScope);
+  const totalSyncScopedProjects = projectsInTotalSyncScope(
+    state.projects,
+    totalSyncEffectiveScope,
+    state.management,
+  );
   const configuredTotalSyncReadyProjects = totalSyncScopedProjects.filter(projectIsReadyForTotalSync);
   const totalSyncReadyProjects = resumableTotalSync && state.totalSyncRun
     ? state.projects.filter((project) => (
@@ -1314,12 +1353,17 @@ export default function InseratStudio() {
     houseIsReadyForUpload(house, MIN_HOUSE_IMAGES, MAX_HOUSE_IMAGES)
   ));
   const totalSyncRunProgress = totalSyncProgress(state.totalSyncRun);
-  const renewalScopedProjects = projectsInTotalSyncScope(state.projects, renewalScope);
+  const renewalScopedProjects = projectsInTotalSyncScope(
+    state.projects,
+    renewalScope,
+    state.management,
+  );
   const renewalReadyProjects = renewalScopedProjects.filter(projectIsReadyForTotalSync);
   const renewalEntries = buildRenewalSchedule(
     renewalReadyProjects,
     renewalNow,
     renewalScope,
+    state.management,
   );
   const activeMainSection = mainSectionForTab(tab);
   const visibleSaveStatus = saveStatus(saveLabel, cloudConflictRevision);
@@ -1500,8 +1544,8 @@ export default function InseratStudio() {
       } else {
         setSaveLabel("Lokal im Browser gespeichert");
       }
-      const ownerLabel = activeOwner === "pascal" ? "Pascal" : "Fabian";
-      setNotice(`Die Grundstücksadresse „${activeProject.name}“ wurde für ${ownerLabel} gespeichert und kann wieder ausgewählt werden.`);
+      const responsibleName = responsibilityLabel(state.management, activeOwner);
+      setNotice(`Die Grundstücksadresse „${activeProject.name}“ wurde für ${responsibleName} gespeichert und kann wieder ausgewählt werden.`);
     } catch (error) {
       setSaveLabel("Speichern fehlgeschlagen");
       setNotice(error instanceof Error ? error.message : "Die Grundstücksadresse konnte nicht gespeichert werden.");
@@ -2328,22 +2372,28 @@ export default function InseratStudio() {
       (project) => projectOwner(project) === owner,
     );
     setActiveOwner(owner);
-    if (!resumableTotalSync && !totalSyncBusy) setTotalSyncScope(owner);
+    if (!resumableTotalSync && !totalSyncBusy) setTotalSyncScope(userScope(owner));
     if (existingProject) {
       setActiveProjectId(existingProject.id);
       return;
     }
-    const project = newProject(owner);
+    const project = newProject(
+      owner,
+      state.management?.users.find((user) => user.id === owner)?.organizationUnitIds[0],
+    );
     setState((current) => ({
       ...current,
       projects: [project, ...current.projects],
     }));
     setActiveProjectId(project.id);
-    setNotice(`Der Adressbereich für ${owner === "pascal" ? "Pascal" : "Fabian"} wurde angelegt.`);
+    setNotice(`Der Adressbereich für ${responsibilityLabel(state.management, owner)} wurde angelegt.`);
   };
 
   const addProject = () => {
-    const project = newProject(activeOwner);
+    const project = newProject(
+      activeOwner,
+      state.management?.users.find((user) => user.id === activeOwner)?.organizationUnitIds[0],
+    );
     setState((current) => ({
       ...current,
       projects: [project, ...current.projects],
@@ -2357,7 +2407,7 @@ export default function InseratStudio() {
     const owner = projectOwner(project);
     setActiveOwner(owner);
     setActiveProjectId(project.id);
-    if (!resumableTotalSync && !totalSyncBusy) setTotalSyncScope(owner);
+    if (!resumableTotalSync && !totalSyncBusy) setTotalSyncScope(userScope(owner));
     setNotice(`„${projectSelectionLabel(project)}“ ist jetzt zur Bearbeitung geöffnet.`);
     window.requestAnimationFrame(() => {
       addressEditorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -2415,7 +2465,7 @@ export default function InseratStudio() {
       setActiveProjectId(nextActiveProject.id);
       setActiveOwner(projectOwner(nextActiveProject));
       if (!resumableTotalSync && !totalSyncBusy) {
-        setTotalSyncScope(projectOwner(nextActiveProject));
+        setTotalSyncScope(userScope(projectOwner(nextActiveProject)));
       }
     }
 
@@ -2442,7 +2492,12 @@ export default function InseratStudio() {
     setAddressImportReport([]);
     try {
       const rows = await readSheet(file);
-      const result = parseAddressWorkbookRows(rows, state.projects, uid);
+      const result = parseAddressWorkbookRows(
+        rows,
+        state.projects,
+        uid,
+        (value) => resolveImportedUserId(state.management, value),
+      );
       setAddressImportReport(result.errors.slice(0, 8));
       if (!result.projects.length && !result.projectUpdates.length) {
         const details = [
@@ -2457,7 +2512,7 @@ export default function InseratStudio() {
       const updatesById = new Map(
         result.projectUpdates.map((update) => [update.id, update.changes]),
       );
-      setState((current) => ({
+      setState((current) => normalizeStudioManagementState({
         ...current,
         projects: [
           ...result.projects,
@@ -2470,9 +2525,9 @@ export default function InseratStudio() {
       const firstProject = result.projects[0]
         ?? state.projects.find((project) => project.id === result.projectUpdates[0]?.id);
       if (firstProject) {
-        setActiveOwner(firstProject.owner);
+        setActiveOwner(projectOwner(firstProject));
         setActiveProjectId(firstProject.id);
-        if (!resumableTotalSync) setTotalSyncScope(firstProject.owner);
+        if (!resumableTotalSync) setTotalSyncScope(userScope(projectOwner(firstProject)));
       }
       const details = [
         result.duplicateCount ? `${result.duplicateCount} Dubletten übersprungen` : "",
@@ -2505,7 +2560,12 @@ export default function InseratStudio() {
     setAddressImportReport([]);
     try {
       const rows = await readSheet(file);
-      const result = replaceAddressWorkbookRows(rows, state.projects, uid);
+      const result = replaceAddressWorkbookRows(
+        rows,
+        state.projects,
+        uid,
+        (value) => resolveImportedUserId(state.management, value),
+      );
       setAddressImportReport(result.errors.slice(0, 8));
       if (!result.projects.length) {
         setNotice(result.errors[0] ?? "Die Excel-Datei enthält keinen ersetzbaren Adressbestand.");
@@ -2524,13 +2584,13 @@ export default function InseratStudio() {
       }
 
       const firstProject = result.projects[0];
-      setState((current) => ({
+      setState((current) => normalizeStudioManagementState({
         ...current,
         projects: result.projects,
       }));
-      setActiveOwner(firstProject.owner);
+      setActiveOwner(projectOwner(firstProject));
       setActiveProjectId(firstProject.id);
-      if (!resumableTotalSync) setTotalSyncScope(firstProject.owner);
+      if (!resumableTotalSync) setTotalSyncScope(userScope(projectOwner(firstProject)));
       const details = [
         `${result.preservedProjectCount} mit Verlauf erhalten`,
         result.newProjectCount ? `${result.newProjectCount} neu` : "",
@@ -3105,6 +3165,22 @@ export default function InseratStudio() {
       return;
     }
     setUploading(true);
+    const operationKind = entry.listing.uploadedAt ? "update" as const : "publish" as const;
+    const startedAt = new Date().toISOString();
+    setState((current) => mapListing(current, listingId, (listing) => {
+      if (!listing.management) return listing;
+      return {
+        ...listing,
+        management: {
+          ...listing.management,
+          portals: listing.management.portals.map((portal) => (
+            portal.enabled
+              ? portalOperationStarted(portal, operationKind, startedAt)
+              : portal
+          )),
+        },
+      };
+    }));
     setUploadStatus(`${entry.listing.externalId} wird vorbereitet …`);
     try {
       const publishToPortals = Boolean(
@@ -3127,12 +3203,12 @@ export default function InseratStudio() {
             updatedAt: uploadedAt,
             portals: listing.management.portals.map((portal) => (
               portal.enabled
-                ? {
-                    ...portal,
-                    status: "transferred" as const,
-                    lastTransferAt: uploadedAt,
-                    message: "OpenImmo-Paket erfolgreich an Immoprofessional übertragen; Portalbestätigung steht aus.",
-                  }
+                ? portalOperationSucceeded(
+                    portal,
+                    operationKind,
+                    uploadedAt,
+                    "OpenImmo-Paket erfolgreich übertragen; Portalbestätigung steht aus.",
+                  )
                 : portal
             )),
           };
@@ -3167,12 +3243,12 @@ export default function InseratStudio() {
           updatedAt: failedAt,
           portals: listing.management.portals.map((portal) => (
             portal.enabled
-              ? {
-                  ...portal,
-                  status: "error" as const,
-                  lastReportAt: failedAt,
-                  message: error instanceof Error ? error.message : "Übertragung fehlgeschlagen.",
-                }
+              ? portalOperationFailed(
+                  portal,
+                  operationKind,
+                  failedAt,
+                  error instanceof Error ? error.message : "Übertragung fehlgeschlagen.",
+                )
               : portal
           )),
         };
@@ -3208,6 +3284,27 @@ export default function InseratStudio() {
       return;
     }
     setUploading(true);
+    const deleteStartedAt = new Date().toISOString();
+    setState((current) => {
+      let next = current;
+      entries.forEach(({ listing }) => {
+        next = mapListing(next, listing.id, (currentListing) => {
+          if (!currentListing.management) return currentListing;
+          return {
+            ...currentListing,
+            management: {
+              ...currentListing.management,
+              portals: currentListing.management.portals.map((portal) => (
+                portal.enabled || portal.desiredStatus === "deleted"
+                  ? portalOperationStarted(portal, "delete", deleteStartedAt)
+                  : portal
+              )),
+            },
+          };
+        });
+      });
+      return next;
+    });
     setUploadStatus("OpenImmo-Löschauftrag wird vorbereitet …");
     try {
       const result = await buildDeletePackage({
@@ -3231,13 +3328,13 @@ export default function InseratStudio() {
               released: false,
               updatedAt: requestedAt,
               portals: currentListing.management.portals.map((portal) => (
-                portal.enabled
-                  ? {
-                      ...portal,
-                      status: "delete-requested" as const,
-                      lastTransferAt: requestedAt,
-                      message: "OpenImmo-Löschauftrag übertragen; Bestätigung durch Importbericht steht aus.",
-                    }
+                portal.enabled || portal.desiredStatus === "deleted"
+                  ? portalOperationSucceeded(
+                      portal,
+                      "delete",
+                      requestedAt,
+                      "OpenImmo-Löschauftrag übertragen; Bestätigung durch Importbericht steht aus.",
+                    )
                   : portal
               )),
             };
@@ -3259,12 +3356,83 @@ export default function InseratStudio() {
       });
       setNotice(`${entries.length} Löschauftrag${entries.length === 1 ? "" : "e"} wurden übertragen. Die Bestätigung erfolgt über den Importbericht.`);
     } catch (error) {
+      const failedAt = new Date().toISOString();
+      setState((current) => {
+        let next = current;
+        entries.forEach(({ listing }) => {
+          next = mapListing(next, listing.id, (currentListing) => {
+            if (!currentListing.management) return currentListing;
+            return {
+              ...currentListing,
+              management: {
+                ...currentListing.management,
+                portals: currentListing.management.portals.map((portal) => (
+                  portal.enabled || portal.desiredStatus === "deleted"
+                    ? portalOperationFailed(
+                        portal,
+                        "delete",
+                        failedAt,
+                        error instanceof Error ? error.message : "Löschauftrag fehlgeschlagen.",
+                      )
+                    : portal
+                )),
+              },
+            };
+          });
+        });
+        return next;
+      });
       setNotice(error instanceof Error ? error.message : "Der Löschauftrag konnte nicht übertragen werden.");
     } finally {
       setUploading(false);
       setUploadStatus("");
     }
   };
+
+  portalTransferRef.current = transferManagementListing;
+  portalDeleteRef.current = deleteManagementListings;
+
+  useEffect(() => {
+    if (
+      !ready
+      || managementReadOnly
+      || !helperOnline
+      || !ftpUser
+      || !ftpPassword
+      || uploading
+      || totalSyncBusy
+    ) return undefined;
+
+    const processNextOperation = async () => {
+      if (automaticPortalBusyRef.current) return;
+      const operation = duePortalOperations(latestStateRef.current)[0];
+      if (!operation) return;
+      automaticPortalBusyRef.current = true;
+      try {
+        if (operation.kind === "delete") {
+          await portalDeleteRef.current([operation.listingId]);
+        } else {
+          await portalTransferRef.current(operation.listingId);
+        }
+      } finally {
+        automaticPortalBusyRef.current = false;
+      }
+    };
+    const initialTimer = window.setTimeout(() => void processNextOperation(), 2_000);
+    const interval = window.setInterval(() => void processNextOperation(), 30_000);
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.clearInterval(interval);
+    };
+  }, [
+    ftpPassword,
+    ftpUser,
+    helperOnline,
+    managementReadOnly,
+    ready,
+    totalSyncBusy,
+    uploading,
+  ]);
 
   const downloadPackage = async () => {
     try {
@@ -4363,11 +4531,9 @@ export default function InseratStudio() {
     }
 
     const totalListings = totalSyncReadyProjects.length * TOTAL_SYNC_LISTINGS_PER_ADDRESS;
-    const scopeLabel = totalSyncScope === "all"
-      ? "Fabian und Pascal"
-      : totalSyncScope === "pascal" ? "Pascal" : "Fabian";
+    const selectedScopeLabel = scopeLabel(state.management, totalSyncScope);
     const confirmed = window.confirm(
-      `Totalabgleich für ${scopeLabel} starten?\n\n`
+      `Totalabgleich für ${selectedScopeLabel} starten?\n\n`
       + `${totalSyncReadyProjects.length} vollständige Adressen × ${TOTAL_SYNC_LISTINGS_PER_ADDRESS} Haustypen = ${totalListings} neue Inserate. Pro Adresse werden mindestens ein Einfamilienhaus, ein Bungalow und ein Zweifamilienhaus ausgelost; der vierte Haustyp wird zusätzlich zufällig gewählt.\n\n`
       + `${totalSyncPromotionCount === 0
         ? "Die Inserate werden ohne Aktionsbilder erstellt."
@@ -4383,6 +4549,7 @@ export default function InseratStudio() {
 
     const run = createTotalSyncRun({
       projects: state.projects,
+      management: state.management,
       eligibleHouses: totalSyncEligibleHouses.map((house) => ({
         id: house.id,
         houseType: house.houseType,
@@ -4534,6 +4701,7 @@ export default function InseratStudio() {
     try {
       const run = createTotalSyncRun({
         projects: state.projects,
+        management: state.management,
         eligibleHouses: totalSyncEligibleHouses.map((house) => ({
           id: house.id,
           houseType: house.houseType,
@@ -4849,9 +5017,17 @@ export default function InseratStudio() {
           ...normalized,
           projects: migratedExternalIds.projects,
         });
+        const defaultResponsibleUser = importedWithHvIds.management?.currentUserId
+          || "user-fabian";
+        const defaultOrganizationUnit = importedWithHvIds.management?.users.find((user) => (
+          user.id === defaultResponsibleUser
+        ))?.organizationUnitIds[0] ?? "unit-company";
         const next = importedWithHvIds.projects.length
           ? importedWithHvIds
-          : { ...importedWithHvIds, projects: [newProject("fabian")] };
+          : {
+              ...importedWithHvIds,
+              projects: [newProject(defaultResponsibleUser, defaultOrganizationUnit)],
+            };
         setState(next);
         selectActiveHouse(next.houses[0]?.id ?? "");
         setActiveProjectId(next.projects[0]?.id ?? "");
@@ -4859,7 +5035,7 @@ export default function InseratStudio() {
         setTotalSyncScope(
           totalSyncCanResume(next.totalSyncRun) && next.totalSyncRun
             ? next.totalSyncRun.scope
-            : projectOwner(next.projects[0]),
+            : userScope(projectOwner(next.projects[0])),
         );
         setTotalSyncPromotionCount(
           totalSyncCanResume(next.totalSyncRun) && next.totalSyncRun
@@ -5722,7 +5898,7 @@ export default function InseratStudio() {
                   <span className="eyebrow">Adresszentrale</span>
                   <strong>Adressbücher, Excel und gespeicherte Grundstücke</strong>
                   <small>
-                    Fabian und Pascal verwalten · {state.projects.length} Adressen gespeichert
+                    {state.management?.users.length ?? 0} Mitarbeiter verwalten · {state.projects.length} Adressen gespeichert
                   </small>
                 </span>
                 <span className="address-center-summary-meta">
@@ -5740,20 +5916,22 @@ export default function InseratStudio() {
               <div className="address-center-body">
                 <div className="address-owner-panel">
               <div>
-                <span className="eyebrow">Getrennte Adressbücher</span>
+                <span className="eyebrow">Zuständigkeiten</span>
                 <h2>Wer bearbeitet diese Grundstücksadresse?</h2>
-                <p>Fabian und Pascal sehen jeweils ihre eigenen gespeicherten Adressen und können sie jederzeit wieder auswählen.</p>
+                <p>Jeder Mitarbeiter arbeitet ausschließlich mit den für ihn oder seinen sichtbaren Bereich freigegebenen Adressen.</p>
               </div>
               <div className="owner-switch" role="group" aria-label="Benutzer für Grundstücksadressen wählen">
-                {ADDRESS_OWNERS.map((owner) => (
+                {(state.management?.users ?? []).filter((user) => (
+                  user.active && currentVisibleUserIds.has(user.id)
+                )).map((owner) => (
                   <button
                     key={owner.id}
                     className={activeOwner === owner.id ? "active" : ""}
                     onClick={() => selectOwner(owner.id)}
                     aria-pressed={activeOwner === owner.id}
                   >
-                    <span>{owner.label.slice(0, 1)}</span>
-                    <b>{owner.label}</b>
+                    <span>{owner.name.slice(0, 1)}</span>
+                    <b>{owner.name}</b>
                     <small>{state.projects.filter((project) => projectOwner(project) === owner.id).length} gespeichert</small>
                   </button>
                 ))}
@@ -5762,7 +5940,7 @@ export default function InseratStudio() {
             <div className="address-import-bar">
               <div>
                 <b>Mehrere Adressen aus Excel übernehmen</b>
-                <span>Eine Zeile pro Grundstück. Die Spalte Benutzer ordnet jede Adresse automatisch Fabian oder Pascal zu.</span>
+                <span>Eine Zeile pro Grundstück. Die Spalte Mitarbeiter kann Name, E-Mail oder Benutzer-ID eines aktiven Kontos enthalten.</span>
               </div>
               <div className="button-row">
                 <button
@@ -5810,6 +5988,7 @@ export default function InseratStudio() {
             ) : null}
                 <AddressBookTable
                   projects={state.projects}
+                  management={state.management}
                   activeProjectId={activeProject.id}
                   duplicateGroups={addressDuplicateGroups}
                   duplicateMutationLocked={addressDuplicateMutationLocked}
@@ -5820,7 +5999,7 @@ export default function InseratStudio() {
             </details>
             <div className="section-heading address-editor-heading" ref={addressEditorRef}>
               <div>
-                <span className="eyebrow">Geöffnete Adresse · {activeOwner === "pascal" ? "Pascal" : "Fabian"}</span>
+                <span className="eyebrow">Geöffnete Adresse · {responsibilityLabel(state.management, activeOwner)}</span>
                 <h2>{projectSelectionLabel(activeProject)}</h2>
               </div>
               <div className="button-row">
@@ -6011,6 +6190,11 @@ export default function InseratStudio() {
           entries={renewalEntries}
           incompleteProjectCount={renewalIncompleteProjectCount}
           ownerScope={renewalScope}
+          scopeOptions={responsibilityOptions.map((option) => ({
+            value: option.value,
+            label: option.kind === "unit" ? `Bereich · ${option.label}` : option.label,
+          }))}
+          management={state.management}
           selectedProjectIds={selectedRenewalProjectIds}
           previousExternalIdsByProject={renewalPreviousExternalIds}
           promotionImageCount={renewalEffectivePromotionCount}
@@ -6049,6 +6233,7 @@ export default function InseratStudio() {
           history={state.uploadRunHistory ?? []}
           projects={state.projects}
           houses={state.houses}
+          management={state.management}
           fallbackAiModel={aiModel}
           busy={totalSyncBusy}
           stopping={totalSyncStopping}
@@ -6267,9 +6452,15 @@ export default function InseratStudio() {
                     disabled={totalSyncBusy || resumableTotalSync}
                     onChange={(event) => setTotalSyncScope(event.target.value as TotalSyncScope)}
                   >
-                    <option value="fabian">Nur Fabian</option>
-                    <option value="pascal">Nur Pascal</option>
-                    <option value="all">Fabian und Pascal</option>
+                    {responsibilityOptions.map((option) => (
+                      <option key={`${option.kind}:${option.value}`} value={option.value}>
+                        {option.kind === "all"
+                          ? option.label
+                          : option.kind === "unit"
+                            ? `Bereich · ${option.label}`
+                            : `Mitarbeiter · ${option.label}`}
+                      </option>
+                    ))}
                   </select>
                 </label>
                 <div className="total-sync-metrics">
@@ -6389,7 +6580,7 @@ export default function InseratStudio() {
           </section>
 
           <section className="workspace content-card backup-card settings-backup-card">
-            <div><span className="eyebrow">Strikt getrennte Speicherung</span><h3>Fabian&amp;Pascal-Sicherung</h3><p>Haustypen, Bilder und Adressprojekte werden doppelt lokal gespeichert: im Speicher <code>{STORAGE_ID}</code> und als automatische Gerätesicherung. Zugangsdaten sind separat verschlüsselt. deviq und Plotverium werden weder gelesen noch beschrieben.</p></div>
+            <div><span className="eyebrow">Strikt getrennte Speicherung</span><h3>Inserate-Studio-Sicherung</h3><p>Haustypen, Bilder und Adressprojekte werden doppelt lokal gespeichert: im Speicher <code>{STORAGE_ID}</code> und als automatische Gerätesicherung. Zugangsdaten sind separat verschlüsselt. deviq und Plotverium werden weder gelesen noch beschrieben.</p></div>
             <div className="button-row"><button className="secondary" onClick={exportCatalog}>Sicherung herunterladen</button><label className="secondary file-label">Sicherung einlesen<input type="file" accept="application/json" onChange={importCatalog} /></label></div>
           </section>
         </>

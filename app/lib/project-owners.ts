@@ -5,13 +5,14 @@ import {
   reconcilePromotionAssignments,
 } from "./promotion-images.js";
 
-export const ADDRESS_OWNERS: Array<{ id: AddressOwner; label: string }> = [
-  { id: "fabian", label: "Fabian" },
-  { id: "pascal", label: "Pascal" },
-];
+import {
+  legacyUserId,
+  projectOrganizationUnitId,
+  projectResponsibleUserId,
+} from "./responsibility.ts";
 
 export function projectOwner(project: Partial<ProjectInput>): AddressOwner {
-  return project.owner === "pascal" ? "pascal" : "fabian";
+  return projectResponsibleUserId(project) ?? legacyUserId(project.owner) ?? project.owner ?? "user-fabian";
 }
 
 export function normalizeProjectOwners(state: StudioState): StudioState {
@@ -46,7 +47,11 @@ export function normalizeProjectOwners(state: StudioState): StudioState {
             ?? promotionAssignments[listing.templateId],
           projectingSettings: fillMissingProjectingDefaults(listing.projectingSettings),
         })),
-        owner: projectOwner(project),
+        // Keep the legacy field readable for old backups while all new logic uses
+        // the stable responsibleUserId.
+        owner: project.owner || "fabian",
+        responsibleUserId: projectResponsibleUserId(project) ?? projectOwner(project),
+        organizationUnitId: projectOrganizationUnitId(project, state.management),
         promotionImageCount,
         promotionAssignments,
       };

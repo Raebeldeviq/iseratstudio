@@ -8,9 +8,14 @@ import {
 import type { PreflightReport } from "../lib/preflight";
 import { PreflightPanel } from "./PreflightPanel";
 import type {
+  ManagementState,
   TotalSyncRunKind,
   TotalSyncScope,
 } from "../types";
+import {
+  projectResponsibleUserId,
+  responsibilityLabel,
+} from "../lib/responsibility";
 
 const STATUS_GROUPS: Array<{
   id: RenewalStatus;
@@ -44,6 +49,8 @@ type SevenDayWorkCenterProps = {
   entries: RenewalScheduleEntry[];
   incompleteProjectCount: number;
   ownerScope: TotalSyncScope;
+  scopeOptions: Array<{ value: TotalSyncScope; label: string }>;
+  management?: ManagementState;
   selectedProjectIds: string[];
   previousExternalIdsByProject: Record<string, string[]>;
   promotionImageCount: number;
@@ -68,10 +75,6 @@ type SevenDayWorkCenterProps = {
   onDiscardRun: () => void;
 };
 
-function ownerLabel(owner: string): string {
-  return owner === "pascal" ? "Pascal" : "Fabian";
-}
-
 function addressLabel(entry: RenewalScheduleEntry): string {
   const { project } = entry;
   return [
@@ -94,6 +97,8 @@ export function SevenDayWorkCenter({
   entries,
   incompleteProjectCount,
   ownerScope,
+  scopeOptions,
+  management,
   selectedProjectIds,
   previousExternalIdsByProject,
   promotionImageCount,
@@ -169,11 +174,7 @@ export function SevenDayWorkCenter({
         <div>
           <span className="eyebrow">Adressbücher</span>
           <div className="renewal-owner-buttons" role="group" aria-label="Adressbuch für die 7-Tage-Zentrale">
-            {([
-              ["fabian", "Fabian"],
-              ["pascal", "Pascal"],
-              ["all", "Beide"],
-            ] as Array<[TotalSyncScope, string]>).map(([scope, label]) => (
+            {scopeOptions.map(({ value: scope, label }) => (
               <button
                 type="button"
                 key={scope}
@@ -290,8 +291,8 @@ export function SevenDayWorkCenter({
                         </label>
                         <div className="renewal-address-main">
                           <div className="renewal-address-title">
-                            <span className={`renewal-owner ${entry.project.owner}`}>
-                              {ownerLabel(entry.project.owner)}
+                            <span className="renewal-owner responsibility">
+                              {responsibilityLabel(management, projectResponsibleUserId(entry.project))}
                             </span>
                             {entry.untracked ? <span className="renewal-unknown">Uploaddatum fehlt</span> : null}
                             <b>{entry.project.name}</b>

@@ -5,19 +5,20 @@ import {
   projectLastUploadAt,
 } from "../lib/address-catalog";
 import type { AddressDuplicateGroup } from "../lib/address-duplicates";
-import type { ProjectInput } from "../types";
+import {
+  projectResponsibleUserId,
+  responsibilityLabel,
+} from "../lib/responsibility";
+import type { ManagementState, ProjectInput } from "../types";
 
 type AddressDuplicatePanelProps = {
   projects: ProjectInput[];
+  management?: ManagementState;
   groups: AddressDuplicateGroup[];
   mutationLocked: boolean;
   onOpenProject: (projectId: string) => void;
   onDeleteDuplicates: (keepIdsByGroup: Record<string, string>) => void;
 };
-
-function ownerLabel(project: ProjectInput): string {
-  return project.owner === "pascal" ? "Pascal" : "Fabian";
-}
 
 function addressLabel(project: ProjectInput): string {
   return [
@@ -58,6 +59,7 @@ function hasDifferentPropertyData(projects: ProjectInput[]): boolean {
 
 export function AddressDuplicatePanel({
   projects,
+  management,
   groups,
   mutationLocked,
   onOpenProject,
@@ -108,8 +110,8 @@ export function AddressDuplicatePanel({
           <span className="eyebrow">Bestandsbereinigung</span>
           <b id="address-duplicate-title">Doppelte Grundstücksadressen finden</b>
           <small>
-            Geprüft werden Straße, Hausnummer, PLZ und Ort – auch gemeinsam über
-            Fabian und Pascal.
+            Geprüft werden Straße, Hausnummer, PLZ und Ort – über alle sichtbaren
+            Mitarbeiter und Bereiche hinweg.
           </small>
         </div>
         <button
@@ -202,8 +204,8 @@ export function AddressDuplicatePanel({
                             />
                             <span>
                               <b>
-                                <span className={`address-owner-badge ${project.owner}`}>
-                                  {ownerLabel(project)}
+                                <span className="address-owner-badge responsibility">
+                                  {responsibilityLabel(management, projectResponsibleUserId(project))}
                                 </span>
                                 {project.name}
                               </b>

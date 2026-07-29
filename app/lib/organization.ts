@@ -8,6 +8,7 @@ import type {
   ProjectInput,
   StudioState,
 } from "../types";
+import { projectResponsibleUserId } from "./responsibility.ts";
 
 export const BUSINESS_ROLE_LABELS: Record<BusinessRole, string> = {
   administrator: "Administrator",
@@ -225,16 +226,22 @@ export function filterStudioStateForActor(
   actor: ManagementUser,
 ): StudioState {
   if (!state.management) return state;
-  const management = state.management;
+  // The scoped state is handed to a different account. Isolate it completely so
+  // client-side edits can never mutate the authoritative state by shared reference.
+  const isolatedState = structuredClone(state);
+  const management = isolatedState.management!;
   const allowedUsers = visibleUserIds(management, actor.id);
-  const projects = state.projects
+  const projects = isolatedState.projects
     .map((project) => ({
       ...project,
       listings: project.listings.filter((listing) => (
         listingVisibleToUser(listing, allowedUsers)
       )),
     }))
-    .filter((project) => project.listings.length > 0);
+    .filter((project) => (
+      project.listings.length > 0
+      || allowedUsers.has(projectResponsibleUserId(project) ?? "")
+    ));
   const visibleProjectIds = new Set(projects.map((project) => project.id));
   const visibleListingIds = new Set(projects.flatMap((project) => (
     project.listings.map((listing) => listing.id)
@@ -261,18 +268,20 @@ export function filterStudioStateForActor(
     fileFolders: management.fileFolders.filter((folder) => folderIds.has(folder.id)),
     files: management.files.filter((file) => folderIds.has(file.folderId)),
   };
-  const totalSyncRun = state.totalSyncRun
+  const totalSyncRun = isolatedState.totalSyncRun
     ? {
-        ...state.totalSyncRun,
-        tasks: state.totalSyncRun.tasks.filter((task) => visibleProjectIds.has(task.projectId)),
+        ...isolatedState.totalSyncRun,
+        tasks: isolatedState.totalSyncRun.tasks.filter((task) => (
+          visibleProjectIds.has(task.projectId)
+        )),
       }
     : undefined;
-  const uploadRunHistory = state.uploadRunHistory?.map((entry) => ({
+  const uploadRunHistory = isolatedState.uploadRunHistory?.map((entry) => ({
     ...entry,
     listings: entry.listings.filter((listing) => visibleProjectIds.has(listing.projectId)),
   })).filter((entry) => entry.listings.length > 0);
   return {
-    ...state,
+    ...isolatedState,
     projects,
     management: filteredManagement,
     totalSyncRun: totalSyncRun?.tasks.length ? totalSyncRun : undefined,
@@ -290,6 +299,9 @@ export function mergeScopedStudioState(
   const submittedProjects = new Map(submitted.projects.map((project) => [project.id, project]));
   const projects: ProjectInput[] = current.projects.flatMap((project) => {
     const submittedProject = submittedProjects.get(project.id);
+    const projectVisible = allowedUsers.has(projectResponsibleUserId(project) ?? "")
+      || project.listings.some((listing) => listingVisibleToUser(listing, allowedUsers));
+    if (!projectVisible) return [project];
     const currentListingIds = new Set(project.listings.map((listing) => listing.id));
     const submittedListings = new Map(
       (submittedProject?.listings ?? []).map((listing) => [listing.id, listing]),
@@ -313,8 +325,19 @@ export function mergeScopedStudioState(
       }
     }
     if (!submittedProject && hiddenListings.length === 0) return [];
-    const base = submittedProject && hiddenListings.length === 0
+    const safeSubmittedProject = submittedProject
+      && allowedUsers.has(projectResponsibleUserId(submittedProject) ?? "")
       ? submittedProject
+      : submittedProject
+        ? {
+            ...submittedProject,
+            responsibleUserId: project.responsibleUserId,
+            organizationUnitId: project.organizationUnitId,
+            owner: project.owner,
+          }
+        : undefined;
+    const base = safeSubmittedProject && hiddenListings.length === 0
+      ? safeSubmittedProject
       : project;
     return [{ ...base, listings: [...hiddenListings, ...visibleListings] }];
   });
@@ -322,7 +345,7 @@ export function mergeScopedStudioState(
   for (const project of submitted.projects) {
     if (
       !currentProjectIds.has(project.id)
-      && project.listings.length > 0
+      && allowedUsers.has(projectResponsibleUserId(project) ?? "")
       && project.listings.every((listing) => listingVisibleToUser(listing, allowedUsers))
     ) {
       projects.push(project);

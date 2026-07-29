@@ -6,6 +6,10 @@ import type {
   ProjectInput,
   StudioState,
 } from "../types";
+import {
+  projectResponsibleUserId,
+  responsibilityLabel,
+} from "./responsibility.ts";
 
 type CellValue = string | number | boolean | Date | null | undefined;
 
@@ -95,8 +99,12 @@ function validDate(value: string | undefined): string | null {
   return Number.isNaN(date.getTime()) ? null : dateText(date);
 }
 
-function ownerId(project: Pick<ProjectInput, "owner">): "fabian" | "pascal" {
-  return project.owner === "pascal" ? "pascal" : "fabian";
+function ownerId(project: ProjectInput): string {
+  return projectResponsibleUserId(project) ?? "";
+}
+
+function ownerName(state: StudioState, project: ProjectInput): string {
+  return responsibilityLabel(state.management, ownerId(project));
 }
 
 function workbookCellXml(cell: WorkbookCell, rowIndex: number, columnIndex: number): string {
@@ -287,7 +295,7 @@ function addressRows(state: StudioState): WorkbookCell[][] {
       "Letzter Totalabgleich",
     ]),
     ...projects.map((project) => [
-      { value: ownerId(project) === "pascal" ? "Pascal" : "Fabian" },
+      { value: ownerName(state, project) },
       { value: project.name },
       { value: project.street },
       { value: project.houseNumber },
@@ -338,7 +346,7 @@ function listingRows(state: StudioState): WorkbookCell[][] {
   projects.forEach((project) => {
     project.listings.forEach((listing: GeneratedListing) => {
       rows.push([
-        { value: ownerId(project) === "pascal" ? "Pascal" : "Fabian" },
+        { value: ownerName(state, project) },
         { value: project.name },
         { value: project.street },
         { value: project.houseNumber },
@@ -430,18 +438,9 @@ function summaryRows(state: StudioState, addressCount: number, listingCount: num
       { formula: `COUNTA('Adressbestand'!A2:A${addressEnd})`, cachedValue: addressCount, style: STYLE.metricValue },
     ],
     [
-      { value: "Davon Fabian", style: STYLE.metricLabel },
+      { value: "Mitarbeiter mit Adressen", style: STYLE.metricLabel },
       {
-        formula: `COUNTIF('Adressbestand'!A2:A${addressEnd},"Fabian")`,
-        cachedValue: state.projects.filter((project) => ownerId(project) === "fabian").length,
-        style: STYLE.metricValue,
-      },
-    ],
-    [
-      { value: "Davon Pascal", style: STYLE.metricLabel },
-      {
-        formula: `COUNTIF('Adressbestand'!A2:A${addressEnd},"Pascal")`,
-        cachedValue: state.projects.filter((project) => ownerId(project) === "pascal").length,
+        value: new Set(state.projects.map(ownerId).filter(Boolean)).size,
         style: STYLE.metricValue,
       },
     ],

@@ -25,7 +25,9 @@ test("assigns legacy address projects to Fabian and preserves Pascal", () => {
   assert.equal(normalized.promotionImageEnabled, false);
   assert.deepEqual(normalized.promotionImages, []);
   assert.equal(normalized.projects[0].promotionImageCount, 0);
-  assert.equal(projectOwner({ owner: "fabian" }), "fabian");
+  assert.equal(normalized.projects[0].responsibleUserId, "user-fabian");
+  assert.equal(normalized.projects[1].responsibleUserId, "user-pascal");
+  assert.equal(projectOwner({ owner: "fabian" }), "user-fabian");
 });
 
 test("migrates one legacy global promotion image into the new saved pool", () => {

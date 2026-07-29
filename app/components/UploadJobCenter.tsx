@@ -9,23 +9,28 @@ import {
   PIPELINE_PRICE_SNAPSHOT_DATE,
 } from "../lib/pipeline-estimate";
 import type {
-  AddressOwner,
   AiModelId,
   HouseTemplate,
+  ManagementState,
   ProjectInput,
   TotalSyncListingStatus,
   TotalSyncRun,
   UploadRunHistoryEntry,
 } from "../types";
+import {
+  projectResponsibleUserId,
+  responsibilityLabel,
+} from "../lib/responsibility";
 
 type StatusFilter = "all" | "open" | "uploaded" | "failed" | "unknown";
-type OwnerFilter = "all" | AddressOwner;
+type OwnerFilter = string;
 
 type UploadJobCenterProps = {
   run?: TotalSyncRun;
   history: UploadRunHistoryEntry[];
   projects: ProjectInput[];
   houses: HouseTemplate[];
+  management?: ManagementState;
   fallbackAiModel: AiModelId;
   busy: boolean;
   stopping: boolean;
@@ -86,6 +91,7 @@ export function UploadJobCenter({
   history,
   projects,
   houses,
+  management,
   fallbackAiModel,
   busy,
   stopping,
@@ -119,7 +125,9 @@ export function UploadJobCenter({
         ...job,
         projectId: task.projectId,
         projectName: project?.name || task.protectedLocation?.name || task.projectId,
-        owner: project?.owner || task.protectedLocation?.owner || "fabian",
+        owner: project
+          ? projectResponsibleUserId(project)
+          : task.protectedLocation?.responsibleUserId,
         street: project?.street || task.protectedLocation?.street || "",
         houseNumber: project?.houseNumber || task.protectedLocation?.houseNumber || "",
         zip: project?.zip || task.protectedLocation?.zip || "",
@@ -515,9 +523,10 @@ export function UploadJobCenter({
                   setPage(1);
                 }}
               >
-                <option value="all">Fabian und Pascal</option>
-                <option value="fabian">Fabian</option>
-                <option value="pascal">Pascal</option>
+                <option value="all">Alle sichtbaren Mitarbeiter</option>
+                {(management?.users ?? []).filter((user) => user.active).map((user) => (
+                  <option key={user.id} value={user.id}>{user.name}</option>
+                ))}
               </select>
             </label>
             <label className="field">
@@ -560,7 +569,7 @@ export function UploadJobCenter({
                         {" · "}
                         {[row.zip, row.city].filter(Boolean).join(" ") || "Ort fehlt"}
                       </span>
-                      <span>{row.owner === "pascal" ? "Pascal" : "Fabian"}</span>
+                      <span>{responsibilityLabel(management, row.owner)}</span>
                     </td>
                     <td>
                       <b>{row.houseName}</b>

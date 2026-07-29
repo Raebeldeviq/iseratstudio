@@ -19,23 +19,24 @@ import {
   type AddressUploadFilter,
 } from "../lib/address-catalog";
 import type { AddressDuplicateGroup } from "../lib/address-duplicates";
-import type { ProjectInput } from "../types";
+import type { ManagementState, ProjectInput } from "../types";
+import {
+  projectResponsibleUserId,
+  responsibilityLabel,
+} from "../lib/responsibility";
 import { AddressDuplicatePanel } from "./AddressDuplicatePanel";
 
 const DEFAULT_PAGE_SIZE = 25;
 
 type AddressBookTableProps = {
   projects: ProjectInput[];
+  management?: ManagementState;
   activeProjectId: string;
   duplicateGroups: AddressDuplicateGroup[];
   duplicateMutationLocked: boolean;
   onOpenProject: (projectId: string) => void;
   onDeleteDuplicates: (keepIdsByGroup: Record<string, string>) => void;
 };
-
-function ownerLabel(project: ProjectInput): string {
-  return project.owner === "pascal" ? "Pascal" : "Fabian";
-}
 
 function addressLine(project: ProjectInput): string {
   const street = [project.street, project.houseNumber].filter(Boolean).join(" ");
@@ -62,6 +63,7 @@ function formatUploadDate(value: string | undefined): string {
 
 export function AddressBookTable({
   projects,
+  management,
   activeProjectId,
   duplicateGroups,
   duplicateMutationLocked,
@@ -85,6 +87,9 @@ export function AddressBookTable({
   }, []);
 
   const cities = useMemo(() => addressCatalogCities(projects), [projects]);
+  const responsibilityLabels = useMemo(() => Object.fromEntries(
+    (management?.users ?? []).map((user) => [user.id, user.name]),
+  ), [management?.users]);
   const filteredProjects = useMemo(
     () => filterAddressProjects(
       projects,
@@ -96,10 +101,11 @@ export function AddressBookTable({
         completeness,
         upload,
         sort,
+        responsibilityLabels,
       } satisfies AddressCatalogFilters,
       now,
     ),
-    [city, completeness, now, owner, projects, query, sort, upload, zip],
+    [city, completeness, now, owner, projects, query, responsibilityLabels, sort, upload, zip],
   );
   const paginated = paginateAddressProjects(filteredProjects, page, pageSize);
   const filtersActive = Boolean(
@@ -144,6 +150,7 @@ export function AddressBookTable({
 
       <AddressDuplicatePanel
         projects={projects}
+        management={management}
         groups={duplicateGroups}
         mutationLocked={duplicateMutationLocked}
         onOpenProject={onOpenProject}
@@ -182,9 +189,10 @@ export function AddressBookTable({
             value={owner}
             onChange={(event) => resetPage(setOwner, event.target.value as AddressOwnerFilter)}
           >
-            <option value="all">Fabian &amp; Pascal</option>
-            <option value="fabian">Nur Fabian</option>
-            <option value="pascal">Nur Pascal</option>
+            <option value="all">Alle sichtbaren Mitarbeiter</option>
+            {(management?.users ?? []).filter((user) => user.active).map((user) => (
+              <option key={user.id} value={user.id}>{user.name}</option>
+            ))}
           </select>
         </label>
         <label>
@@ -259,8 +267,8 @@ export function AddressBookTable({
                 return (
                   <tr className={active ? "active" : ""} key={project.id}>
                     <td>
-                      <span className={`address-owner-badge ${project.owner === "pascal" ? "pascal" : "fabian"}`}>
-                        {ownerLabel(project)}
+                      <span className="address-owner-badge responsibility">
+                        {responsibilityLabel(management, projectResponsibleUserId(project))}
                       </span>
                     </td>
                     <td>

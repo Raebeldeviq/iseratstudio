@@ -9,6 +9,7 @@ import {
   visibleUserIds,
 } from "../lib/organization";
 import TeamOverview from "./TeamOverview";
+import ExecutiveReport from "./ExecutiveReport";
 
 type StudioDashboardProps = {
   state: StudioState;
@@ -206,7 +207,10 @@ export default function StudioDashboard({
         </aside>
 
         {leadershipAccess(currentUser) || (state.management?.users.length ?? 0) > 1 ? (
-          <TeamOverview state={state} onOpenMember={onOpenMember} />
+          <>
+            <TeamOverview state={state} onOpenMember={onOpenMember} />
+            <ExecutiveReport state={state} onOpenMember={onOpenMember} />
+          </>
         ) : null}
 
         <section className="dashboard-card dashboard-recent">

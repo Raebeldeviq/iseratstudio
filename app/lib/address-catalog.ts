@@ -1,9 +1,7 @@
-import type {
-  AddressOwner,
-  ProjectInput,
-} from "../types";
+import type { ProjectInput } from "../types";
+import { legacyUserId, projectResponsibleUserId } from "./responsibility.ts";
 
-export type AddressOwnerFilter = AddressOwner | "all";
+export type AddressOwnerFilter = string;
 export type AddressCompletenessFilter = "all" | "complete" | "incomplete";
 export type AddressUploadFilter = "all" | "recent" | "older" | "never";
 export type AddressCatalogSort = "city" | "zip" | "upload-newest" | "upload-oldest";
@@ -16,6 +14,7 @@ export type AddressCatalogFilters = {
   completeness: AddressCompletenessFilter;
   upload: AddressUploadFilter;
   sort: AddressCatalogSort;
+  responsibilityLabels?: Record<string, string>;
 };
 
 const GERMAN_COLLATOR = new Intl.Collator("de", {
@@ -54,10 +53,6 @@ function berlinDayNumber(value: Date | number): number {
   const month = Number(parts.find((part) => part.type === "month")?.value);
   const day = Number(parts.find((part) => part.type === "day")?.value);
   return Math.floor(Date.UTC(year, month - 1, day) / 86_400_000);
-}
-
-function projectOwner(project: ProjectInput): AddressOwner {
-  return project.owner === "pascal" ? "pascal" : "fabian";
 }
 
 export function addressProjectIsComplete(project: ProjectInput): boolean {
@@ -177,11 +172,14 @@ export function filterAddressProjects(
   const query = normalized(filters.query);
   const city = normalized(filters.city);
   const zip = normalized(filters.zip);
+  const ownerFilter = filters.owner === "all"
+    ? "all"
+    : legacyUserId(filters.owner) ?? filters.owner;
 
   return projects
     .filter((project) => {
       const complete = addressProjectIsComplete(project);
-      const owner = projectOwner(project);
+      const owner = projectResponsibleUserId(project) ?? "";
       const lastUploadAt = projectLastUploadAt(project);
       const searchValue = normalized([
         project.name,
@@ -190,7 +188,8 @@ export function filterAddressProjects(
         project.zip,
         project.city,
         project.district,
-        owner === "pascal" ? "Pascal" : "Fabian",
+        owner,
+        filters.responsibilityLabels?.[owner],
         complete ? "vollständig" : "unvollständig",
         lastUploadAt?.slice(0, 10),
         germanDateSearchValue(lastUploadAt),
@@ -204,7 +203,7 @@ export function filterAddressProjects(
       return queryMatches
         && (!city || normalized(project.city) === city)
         && (!zip || normalized(project.zip).includes(zip))
-        && (filters.owner === "all" || owner === filters.owner)
+        && (ownerFilter === "all" || owner === ownerFilter)
         && (
           filters.completeness === "all"
           || (filters.completeness === "complete" ? complete : !complete)

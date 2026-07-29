@@ -1,7 +1,9 @@
 import type {
+  ManagementState,
   ProjectInput,
   TotalSyncScope,
 } from "../types";
+import { projectMatchesResponsibilityScope } from "./responsibility.ts";
 
 export const RENEWAL_INTERVAL_DAYS = 7;
 export const RENEWAL_LISTINGS_PER_ADDRESS = 4;
@@ -110,11 +112,10 @@ export function buildRenewalSchedule(
   projects: ProjectInput[],
   now = new Date(),
   scope: TotalSyncScope = "all",
+  management?: ManagementState,
 ): RenewalScheduleEntry[] {
   const entries = projects
-    .filter((project) => (
-      scope === "all" || (project.owner === "pascal" ? "pascal" : "fabian") === scope
-    ))
+    .filter((project) => projectMatchesResponsibilityScope(project, scope, management))
     .map((project) => classifyRenewal(project, now));
 
   return entries.sort((left, right) => {

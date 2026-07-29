@@ -117,7 +117,7 @@ function initialDraft(state: StudioState): DirectObjectDraft {
     objectCategory: "house-purchase",
     templateId: firstHouse?.id,
     title: "",
-    owner: "fabian",
+    owner: currentUser?.id ?? "",
     assignedUserId: currentUser?.id ?? "",
     organizationUnitId: currentUser?.organizationUnitIds[0] ?? "unit-company",
     country: "Deutschland",
@@ -330,7 +330,7 @@ export default function ObjectCreationWizard({
                     onChange={(event) => {
                       const assigned = assignableUsers.find((user) => user.id === event.target.value);
                       patch({
-                        owner: event.target.value === "user-pascal" ? "pascal" : "fabian",
+                        owner: event.target.value,
                         assignedUserId: event.target.value,
                         organizationUnitId: assigned?.organizationUnitIds[0] ?? draft.organizationUnitId,
                       });

@@ -5,6 +5,10 @@ import type {
   ProjectInput,
   ProviderSettings,
 } from "../types";
+import {
+  projectResponsibleUserId,
+  responsibilityLabel,
+} from "./responsibility.ts";
 import { findAddressDuplicateGroups } from "./address-duplicates";
 import { missingRequiredTotalSyncHouseTypes } from "./total-sync";
 
@@ -123,7 +127,7 @@ function finitePositive(value: number): boolean {
 }
 
 function ownerLabel(project: ProjectInput): string {
-  return project.owner === "pascal" ? "Pascal" : "Fabian";
+  return responsibilityLabel(undefined, projectResponsibleUserId(project));
 }
 
 function projectAddress(project: ProjectInput): string {

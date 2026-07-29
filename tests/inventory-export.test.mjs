@@ -101,7 +101,7 @@ test("creates a valid Excel container with the complete inventory sheets", async
   assert.match(addresses, /Grundstücksfläche m²/);
   assert.match(addresses, /Bergstraße/);
   assert.match(addresses, /SUN 142 V2/);
-  assert.match(overview, /COUNTIF\(&apos;Adressbestand&apos;!A2:A2,&quot;Fabian&quot;\)/);
+  assert.match(overview, /Mitarbeiter mit Adressen/);
   assert.match(listings, /Hier wohnt das gute Leben/);
   assert.match(houses, /397330/);
   assert.doesNotMatch(addresses + overview + listings + houses, /fabian@example\.invalid/);
