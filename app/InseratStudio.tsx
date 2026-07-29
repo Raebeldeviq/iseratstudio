@@ -60,6 +60,7 @@ import {
   mapListing,
   normalizeStudioManagementState,
 } from "./lib/management";
+import { BUSINESS_ROLE_LABELS } from "./lib/organization";
 import {
   MAX_PROMOTED_LISTINGS,
   MAX_PROMOTION_IMAGES,
@@ -717,6 +718,7 @@ export default function InseratStudio() {
   const [adminView, setAdminView] = useState<AdminView>("organization");
   const [managementCreateRequest, setManagementCreateRequest] = useState(0);
   const [requestedListingId, setRequestedListingId] = useState("");
+  const [requestedAssigneeId, setRequestedAssigneeId] = useState("");
   const [state, setState] = useState<StudioState>(initialState);
   const [cloudSession, setCloudSession] = useState<CloudSession | null>(null);
   const [cloudAccessError, setCloudAccessError] = useState("");
@@ -725,10 +727,27 @@ export default function InseratStudio() {
   const cloudQueueRef = useRef<Promise<void>>(Promise.resolve());
   const latestStateRef = useRef(state);
   latestStateRef.current = state;
+  const currentManagementAccount = currentManagementUser(state);
   const currentRole: ManagementRole =
-    cloudSession?.role ?? currentManagementUser(state)?.role ?? "viewer";
+    cloudSession?.role ?? currentManagementAccount?.role ?? "viewer";
   const managementReadOnly = currentRole === "viewer";
   const canAdminister = currentRole === "admin";
+  const currentBusinessRole = cloudSession?.businessRole
+    ?? currentManagementAccount?.businessRole
+    ?? (currentRole === "admin" ? "administrator" : "sales-representative");
+  const canUseLibrary = canAdminister || currentBusinessRole === "backoffice";
+  const canUseWork = canAdminister || [
+    "executive",
+    "sales-director",
+    "team-lead",
+    "backoffice",
+  ].includes(currentBusinessRole);
+  const canUseBatchObjectTools = canAdminister || [
+    "executive",
+    "sales-director",
+    "team-lead",
+    "backoffice",
+  ].includes(currentBusinessRole);
   const [ready, setReady] = useState(false);
   const [saveLabel, setSaveLabel] = useState("Lokaler Speicher wird vorbereitet …");
   const [activeHouseId, setActiveHouseId] = useState("");
@@ -805,17 +824,31 @@ export default function InseratStudio() {
       setNotice("Die Administration ist ausschließlich für Administratoren sichtbar.");
       return;
     }
+    if (!canUseLibrary && nextTab === "houses") {
+      setNotice("Vorlagen und globale Medien werden ausschließlich durch Backoffice oder Administration verwaltet.");
+      return;
+    }
+    if (!canUseWork && (nextTab === "renewal" || nextTab === "jobs")) {
+      setNotice("Auftrags- und Erneuerungszentralen sind für Führung, Backoffice und Administration verfügbar.");
+      return;
+    }
+    if (!canUseBatchObjectTools && (nextTab === "project" || nextTab === "preview")) {
+      setNotice("Die Sammelwerkzeuge sind für Führung, Backoffice und Administration vorgesehen.");
+      return;
+    }
     if (nextTab === "renewal") setRenewalNow(new Date());
     if (nextTab === "management") {
       setState((current) => normalizeStudioManagementState(current));
     }
     setManagementCreateRequest(0);
     setRequestedListingId("");
+    setRequestedAssigneeId("");
     setTab(nextTab);
   };
 
   const openObjectCenter = () => {
     setRequestedListingId("");
+    setRequestedAssigneeId("");
     selectWorkspaceTab("management");
   };
 
@@ -826,6 +859,7 @@ export default function InseratStudio() {
     }
     setState((current) => normalizeStudioManagementState(current));
     setRequestedListingId("");
+    setRequestedAssigneeId("");
     setManagementCreateRequest((request) => request + 1);
     setTab("management");
   };
@@ -833,6 +867,15 @@ export default function InseratStudio() {
   const openManagementListing = (listingId: string) => {
     setState((current) => normalizeStudioManagementState(current));
     setRequestedListingId(listingId);
+    setRequestedAssigneeId("");
+    setTab("management");
+  };
+
+  const openMemberObjects = (userId: string) => {
+    setState((current) => normalizeStudioManagementState(current));
+    setRequestedListingId("");
+    setRequestedAssigneeId(userId);
+    setManagementCreateRequest(0);
     setTab("management");
   };
 
@@ -4909,6 +4952,7 @@ export default function InseratStudio() {
                   : cloudSession.role === "editor"
                     ? "Bearbeitung"
                     : "Nur lesen"}
+                {` · ${BUSINESS_ROLE_LABELS[currentBusinessRole]}`}
               </small>
               <a href="/signout-with-chatgpt?return_to=%2F">Abmelden</a>
             </div>
@@ -4927,6 +4971,8 @@ export default function InseratStudio() {
           .filter(([id]) => {
             if (id === "settings") return canAdminister;
             if (managementReadOnly) return id === "overview" || id === "management";
+            if (id === "houses") return canUseLibrary;
+            if (id === "renewal") return canUseWork;
             return true;
           })
           .map(([id, label, description]) => (
@@ -4944,7 +4990,7 @@ export default function InseratStudio() {
         ))}
       </nav>
 
-      {activeMainSection === "objects" && !managementReadOnly ? (
+      {activeMainSection === "objects" && !managementReadOnly && canUseBatchObjectTools ? (
         <nav className="context-navigation" aria-label="Objektwerkzeuge">
           {([
             ["management", "Objektbestand"],
@@ -5034,12 +5080,15 @@ export default function InseratStudio() {
           onOpenRenewals={() => selectWorkspaceTab("renewal")}
           onOpenJobs={() => selectWorkspaceTab("jobs")}
           onOpenLibrary={() => selectWorkspaceTab("houses")}
+          onOpenMember={openMemberObjects}
+          canUseLibrary={canUseLibrary}
+          canUseWork={canUseWork}
         />
       ) : null}
 
       {tab === "management" ? (
         <ManagementCenter
-          key={`objects-${managementCreateRequest}-${requestedListingId}`}
+          key={`objects-${managementCreateRequest}-${requestedListingId}-${requestedAssigneeId}`}
           state={state}
           setState={setState}
           uploadAvailable={helperOnline && Boolean(ftpUser && ftpPassword)}
@@ -5051,6 +5100,7 @@ export default function InseratStudio() {
           mode="objects"
           createRequestId={managementCreateRequest}
           requestedListingId={requestedListingId}
+          requestedAssigneeId={requestedAssigneeId}
         />
       ) : null}
 

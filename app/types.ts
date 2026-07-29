@@ -331,6 +331,10 @@ export type ListingManagement = {
   released: boolean;
   createdAt: string;
   updatedAt: string;
+  assignedUserId?: string;
+  organizationUnitId?: string;
+  lastReviewedAt?: string;
+  nextActionDueAt?: string;
   archivedAt?: string;
   copiedFromId?: string;
   details: ListingDetails;
@@ -340,15 +344,49 @@ export type ListingManagement = {
 };
 
 export type ManagementRole = "admin" | "editor" | "viewer";
+export type BusinessRole =
+  | "administrator"
+  | "executive"
+  | "sales-director"
+  | "team-lead"
+  | "sales-representative"
+  | "backoffice";
+export type VisibilityScope = "self" | "team" | "area" | "organization" | "custom";
+export type OrganizationUnitType = "company" | "division" | "region" | "team";
+export type OperationalStatus = "current" | "attention" | "critical";
 
 export type ManagementUser = {
   id: string;
   name: string;
   email: string;
   role: ManagementRole;
+  businessRole: BusinessRole;
+  visibilityScope: VisibilityScope;
+  organizationUnitIds: string[];
+  managerUserId?: string;
+  customVisibleUserIds: string[];
   active: boolean;
   createdAt: string;
   lastActiveAt?: string;
+};
+
+export type OrganizationUnit = {
+  id: string;
+  name: string;
+  type: OrganizationUnitType;
+  parentId?: string;
+  managerUserId?: string;
+  active: boolean;
+  createdAt: string;
+};
+
+export type EscalationRules = {
+  staleWarningDays: number;
+  staleCriticalDays: number;
+  inactivityWarningDays: number;
+  inactivityCriticalDays: number;
+  renewalWarningDays: number;
+  portalErrorsCritical: boolean;
 };
 
 export type CompanyOpeningHours = {
@@ -437,15 +475,17 @@ export type AuditLogEntry = {
   at: string;
   userId: string;
   action: string;
-  targetType: "listing" | "media" | "appointment" | "portal" | "report" | "user" | "company" | "file" | "folder";
+  targetType: "listing" | "media" | "appointment" | "portal" | "report" | "user" | "company" | "file" | "folder" | "organization";
   targetId: string;
   description: string;
 };
 
 export type ManagementState = {
-  version: 2;
+  version: 3;
   currentUserId: string;
   users: ManagementUser[];
+  organizationUnits: OrganizationUnit[];
+  escalationRules: EscalationRules;
   company: CompanySettings;
   portals: PortalConfiguration[];
   auditLog: AuditLogEntry[];

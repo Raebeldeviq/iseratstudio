@@ -1,4 +1,11 @@
 import { getCloudDatabase, getCloudFiles } from "../../../db";
+import { WORKSPACE_ID } from "../../../db/schema";
+import type { StudioState } from "../../types";
+import { normalizeStudioManagementState } from "../../lib/management";
+import {
+  filterStudioStateForActor,
+  resolveActor,
+} from "../../lib/organization";
 import {
   requireWorkspaceSession,
   routeErrorResponse,
@@ -7,6 +14,18 @@ import {
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const KEY_PATTERN = /^assets\/[a-f0-9]{64}$/;
+
+function assetKeys(state: StudioState): Set<string> {
+  return new Set([
+    ...state.houses.flatMap((house) => house.images),
+    ...(state.promotionImages ?? []),
+    ...(state.promotionImage ? [state.promotionImage] : []),
+    ...state.projects.flatMap((project) => (
+      project.listings.flatMap((listing) => listing.management?.media ?? [])
+    )),
+    ...(state.management?.files ?? []),
+  ].flatMap((item) => item.storageKey ? [item.storageKey] : []));
+}
 
 function safeFilename(value: string | null): string {
   if (!value) return "Datei";
@@ -25,10 +44,28 @@ function hexDigest(buffer: ArrayBuffer): string {
 
 export async function GET(request: Request) {
   try {
-    await requireWorkspaceSession();
+    const session = await requireWorkspaceSession();
     const key = new URL(request.url).searchParams.get("key") ?? "";
     if (!KEY_PATTERN.test(key)) {
       throw new WorkspaceHttpError(400, "Ungültiger Dateischlüssel.");
+    }
+    const database = await getCloudDatabase();
+    const workspace = await database
+      .prepare("SELECT state_json FROM workspace_state WHERE id = ?")
+      .bind(WORKSPACE_ID)
+      .first<{ state_json: string }>();
+    if (workspace) {
+      const fullState = normalizeStudioManagementState(
+        JSON.parse(workspace.state_json) as StudioState,
+      );
+      const actor = resolveActor(fullState.management, session);
+      if (!actor) {
+        throw new WorkspaceHttpError(403, "Kein Zugriff auf diese Datei.");
+      }
+      const visibleState = filterStudioStateForActor(fullState, actor);
+      if (!assetKeys(visibleState).has(key)) {
+        throw new WorkspaceHttpError(403, "Diese Datei gehört nicht zu deinem sichtbaren Bereich.");
+      }
     }
 
     const object = await (await getCloudFiles()).get(key);

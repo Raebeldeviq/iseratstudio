@@ -185,6 +185,6 @@ test("creates a complete direct land object without exposing a catalog template"
   );
   const template = result.state.houses.find((house) => house.id === entry.listing.templateId);
   assert.equal(template.archived, true);
-  assert.equal(result.state.management.version, 2);
+  assert.equal(result.state.management.version, 3);
   assert.ok(result.state.management.fileFolders.some((folder) => folder.id === "folder-public"));
 });

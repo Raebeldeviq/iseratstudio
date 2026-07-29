@@ -16,6 +16,11 @@ import type {
   ListingObjectCategory,
   StudioState,
 } from "../types";
+import {
+  BUSINESS_ROLE_LABELS,
+  canReassignObjects,
+  visibleUserIds,
+} from "../lib/organization";
 
 type ObjectCreationWizardProps = {
   state: StudioState;
@@ -105,11 +110,16 @@ function Toggle(props: {
 
 function initialDraft(state: StudioState): DirectObjectDraft {
   const firstHouse = state.houses.find((house) => house.archived !== true);
+  const currentUser = state.management?.users.find((user) => (
+    user.id === state.management?.currentUserId
+  ));
   return {
     objectCategory: "house-purchase",
     templateId: firstHouse?.id,
     title: "",
     owner: "fabian",
+    assignedUserId: currentUser?.id ?? "",
+    organizationUnitId: currentUser?.organizationUnitIds[0] ?? "unit-company",
     country: "Deutschland",
     street: "",
     houseNumber: "",
@@ -167,6 +177,15 @@ export default function ObjectCreationWizard({
     item.id === draft.objectCategory
   )) ?? CATEGORY_OPTIONS[0];
   const selectedTemplate = activeHouses.find((house) => house.id === draft.templateId);
+  const currentUser = state.management?.users.find((user) => (
+    user.id === state.management?.currentUserId
+  ));
+  const allowedUserIds = state.management && currentUser
+    ? visibleUserIds(state.management, currentUser.id)
+    : new Set<string>();
+  const assignableUsers = state.management?.users.filter((user) => (
+    user.active && allowedUserIds.has(user.id)
+  )) ?? [];
 
   const patch = (value: Partial<DirectObjectDraft>) => {
     setDraft((current) => ({ ...current, ...value }));
@@ -304,10 +323,22 @@ export default function ObjectCreationWizard({
                   onChange={(title) => patch({ title })}
                 />
                 <label className="management-field">
-                  <span>Zuständiges Adressbuch</span>
-                  <select value={draft.owner} onChange={(event) => patch({ owner: event.target.value as DirectObjectDraft["owner"] })}>
-                    <option value="fabian">Fabian</option>
-                    <option value="pascal">Pascal</option>
+                  <span>Verantwortlicher Mitarbeiter</span>
+                  <select
+                    value={draft.assignedUserId}
+                    disabled={!canReassignObjects(currentUser)}
+                    onChange={(event) => {
+                      const assigned = assignableUsers.find((user) => user.id === event.target.value);
+                      patch({
+                        owner: event.target.value === "user-pascal" ? "pascal" : "fabian",
+                        assignedUserId: event.target.value,
+                        organizationUnitId: assigned?.organizationUnitIds[0] ?? draft.organizationUnitId,
+                      });
+                    }}
+                  >
+                    {assignableUsers.map((user) => (
+                      <option key={user.id} value={user.id}>{user.name} · {BUSINESS_ROLE_LABELS[user.businessRole]}</option>
+                    ))}
                   </select>
                 </label>
                 <label className="management-field">

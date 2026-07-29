@@ -1,9 +1,11 @@
 "use client";
 
 import type {
+  BusinessRole,
   ManagementRole,
   ManagementUser,
   StudioState,
+  VisibilityScope,
 } from "../types";
 
 export type CloudSession = {
@@ -11,6 +13,9 @@ export type CloudSession = {
   email: string;
   name: string;
   role: ManagementRole;
+  businessRole?: BusinessRole;
+  visibilityScope?: VisibilityScope;
+  organizationUnitIds?: string[];
 };
 
 export type CloudWorkspaceSnapshot = {
@@ -328,6 +333,14 @@ export function bindSessionToState(
       name: session.name,
       email: normalizedEmail,
       role: session.role,
+      businessRole: session.businessRole
+        ?? (session.role === "admin" ? "administrator" : "sales-representative"),
+      visibilityScope: session.visibilityScope
+        ?? (session.role === "admin" ? "organization" : "self"),
+      organizationUnitIds: session.organizationUnitIds?.length
+        ? session.organizationUnitIds
+        : ["unit-company"],
+      customVisibleUserIds: [],
       active: true,
       createdAt,
     } satisfies ManagementUser;
@@ -345,6 +358,11 @@ export function bindSessionToState(
   user.name = session.name || user.name;
   user.email = normalizedEmail;
   user.role = session.role;
+  if (session.businessRole) user.businessRole = session.businessRole;
+  if (session.visibilityScope) user.visibilityScope = session.visibilityScope;
+  if (session.organizationUnitIds?.length) {
+    user.organizationUnitIds = session.organizationUnitIds;
+  }
   user.active = true;
   user.lastActiveAt = new Date().toISOString();
   management.currentUserId = user.id;

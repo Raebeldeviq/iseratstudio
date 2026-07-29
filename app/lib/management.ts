@@ -1,7 +1,9 @@
 import type {
   AuditLogEntry,
+  BusinessRole,
   CompanyOpeningHours,
   CompanySettings,
+  EscalationRules,
   GeneratedListing,
   HouseImage,
   HouseTemplate,
@@ -16,10 +18,12 @@ import type {
   ManagementRole,
   ManagementState,
   ManagementUser,
+  OrganizationUnit,
   PortalConfiguration,
   ProjectInput,
   ProviderSettings,
   StudioState,
+  VisibilityScope,
 } from "../types";
 import { allocateProviderExternalIds } from "./external-ids.ts";
 
@@ -72,6 +76,22 @@ const WEEKDAYS = [
   "Sonntag",
 ];
 
+export const DEFAULT_ESCALATION_RULES: EscalationRules = {
+  staleWarningDays: 4,
+  staleCriticalDays: 8,
+  inactivityWarningDays: 7,
+  inactivityCriticalDays: 14,
+  renewalWarningDays: 2,
+  portalErrorsCritical: true,
+};
+
+function defaultVisibilityScope(businessRole: BusinessRole): VisibilityScope {
+  if (businessRole === "administrator" || businessRole === "executive") return "organization";
+  if (businessRole === "sales-director") return "area";
+  if (businessRole === "team-lead") return "team";
+  return "self";
+}
+
 function uid(prefix: string): string {
   const random = globalThis.crypto?.randomUUID?.()
     ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -118,6 +138,10 @@ function defaultUsers(provider: ProviderSettings, now: string): ManagementUser[]
       name: provider.firstName || "Fabian",
       email: provider.email,
       role: "admin",
+      businessRole: "administrator",
+      visibilityScope: "organization",
+      organizationUnitIds: ["unit-company"],
+      customVisibleUserIds: [],
       active: true,
       createdAt: now,
     },
@@ -126,6 +150,45 @@ function defaultUsers(provider: ProviderSettings, now: string): ManagementUser[]
       name: "Pascal",
       email: "",
       role: "editor",
+      businessRole: "sales-representative",
+      visibilityScope: "self",
+      organizationUnitIds: ["unit-sales-pascal"],
+      managerUserId: "user-fabian",
+      customVisibleUserIds: [],
+      active: true,
+      createdAt: now,
+    },
+  ];
+}
+
+function defaultOrganizationUnits(
+  provider: ProviderSettings,
+  now: string,
+): OrganizationUnit[] {
+  return [
+    {
+      id: "unit-company",
+      name: provider.company || "Unternehmen",
+      type: "company",
+      managerUserId: "user-fabian",
+      active: true,
+      createdAt: now,
+    },
+    {
+      id: "unit-sales-fabian",
+      name: "Vertrieb Fabian",
+      type: "region",
+      parentId: "unit-company",
+      managerUserId: "user-fabian",
+      active: true,
+      createdAt: now,
+    },
+    {
+      id: "unit-sales-pascal",
+      name: "Vertrieb Pascal",
+      type: "region",
+      parentId: "unit-company",
+      managerUserId: "user-pascal",
       active: true,
       createdAt: now,
     },
@@ -168,9 +231,11 @@ export function createManagementState(
 ): ManagementState {
   const users = defaultUsers(provider, now);
   return {
-    version: 2,
+    version: 3,
     currentUserId: users[0].id,
     users,
+    organizationUnits: defaultOrganizationUnits(provider, now),
+    escalationRules: { ...DEFAULT_ESCALATION_RULES },
     company: defaultCompany(provider),
     portals: DEFAULT_PORTALS.map((portal) => ({ ...portal })),
     auditLog: [],
@@ -460,11 +525,26 @@ function normalizeListing(
     ...defaultDetails(project, listing, house, state.provider),
     ...current?.details,
   };
+  const users = state.management?.users ?? [];
+  const fallbackAssignee = users.find((user) => (
+    project.owner === "pascal"
+      ? user.id === "user-pascal"
+      : user.id === "user-fabian"
+  )) ?? users.find((user) => user.active);
+  const assignedUser = users.find((user) => (
+    user.id === current?.assignedUserId && user.active
+  )) ?? fallbackAssignee;
   const management: ListingManagement = {
     lifecycle: current?.lifecycle ?? (listing.uploadedAt ? "transferred" : "draft"),
     released: current?.released ?? Boolean(listing.uploadedAt),
     createdAt: current?.createdAt ?? project.createdAt ?? now,
     updatedAt: current?.updatedAt ?? listing.uploadedAt ?? project.createdAt ?? now,
+    assignedUserId: assignedUser?.id,
+    organizationUnitId: current?.organizationUnitId
+      ?? assignedUser?.organizationUnitIds[0]
+      ?? "unit-company",
+    lastReviewedAt: current?.lastReviewedAt,
+    nextActionDueAt: current?.nextActionDueAt,
     archivedAt: current?.archivedAt,
     copiedFromId: current?.copiedFromId,
     details,
@@ -482,9 +562,32 @@ export function normalizeStudioManagementState(
 ): StudioState {
   const fallback = createManagementState(state.provider, now);
   const current = state.management;
+  const organizationUnits = current?.organizationUnits?.length
+    ? current.organizationUnits.map((unit) => ({
+        ...unit,
+        active: unit.active !== false,
+        createdAt: unit.createdAt || now,
+      }))
+    : fallback.organizationUnits;
+  const validUnitIds = new Set(organizationUnits.map((unit) => unit.id));
   const users = current?.users?.length
     ? current.users.map((user) => ({
         ...user,
+        businessRole: user.businessRole
+          ?? (user.role === "admin" ? "administrator" : "sales-representative"),
+        visibilityScope: user.visibilityScope
+          ?? defaultVisibilityScope(
+            user.businessRole
+              ?? (user.role === "admin" ? "administrator" : "sales-representative"),
+          ),
+        organizationUnitIds: (user.organizationUnitIds ?? [])
+          .filter((unitId) => validUnitIds.has(unitId))
+          .concat(
+            (user.organizationUnitIds ?? []).some((unitId) => validUnitIds.has(unitId))
+              ? []
+              : ["unit-company"],
+          ),
+        customVisibleUserIds: user.customVisibleUserIds ?? [],
         active: user.active !== false,
         createdAt: user.createdAt || now,
       }))
@@ -508,9 +611,14 @@ export function normalizeStudioManagementState(
     )),
   ];
   const management: ManagementState = {
-    version: 2,
+    version: 3,
     currentUserId: activeUser?.id ?? "",
     users,
+    organizationUnits,
+    escalationRules: {
+      ...DEFAULT_ESCALATION_RULES,
+      ...current?.escalationRules,
+    },
     company: {
       ...fallback.company,
       ...current?.company,
@@ -610,6 +718,8 @@ export type DirectObjectDraft = {
   templateId?: string;
   title: string;
   owner: ProjectInput["owner"];
+  assignedUserId: string;
+  organizationUnitId: string;
   country: string;
   street: string;
   houseNumber: string;
@@ -799,6 +909,12 @@ export function createDirectObject(
       ...listing.management,
       released: draft.released,
       updatedAt: now,
+      assignedUserId: draft.assignedUserId || state.management?.currentUserId,
+      organizationUnitId: draft.organizationUnitId
+        || state.management?.users.find((user) => (
+          user.id === (draft.assignedUserId || state.management?.currentUserId)
+        ))?.organizationUnitIds[0]
+        || "unit-company",
       details,
       portals: listing.management.portals.map((portal) => ({
         ...portal,
@@ -895,11 +1011,18 @@ export function createManagementUser(
   role: ManagementRole,
   now = new Date().toISOString(),
 ): ManagementUser {
+  const businessRole: BusinessRole = role === "admin"
+    ? "administrator"
+    : "sales-representative";
   return {
     id: uid("user"),
     name,
     email,
     role,
+    businessRole,
+    visibilityScope: defaultVisibilityScope(businessRole),
+    organizationUnitIds: ["unit-company"],
+    customVisibleUserIds: [],
     active: true,
     createdAt: now,
   };

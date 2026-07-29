@@ -1,11 +1,18 @@
-import type { StudioState } from "../../types";
+import type { ManagementUser, StudioState } from "../../types";
 import { getCloudDatabase } from "../../../db";
 import { WORKSPACE_ID } from "../../../db/schema";
+import { normalizeStudioManagementState } from "../../lib/management";
+import {
+  filterStudioStateForActor,
+  mergeScopedStudioState,
+  resolveActor,
+} from "../../lib/organization";
 import {
   requireWorkspaceSession,
   routeErrorResponse,
   synchronizeWorkspaceUsers,
   WorkspaceHttpError,
+  type WorkspaceSession,
 } from "../../lib/server/workspace-auth";
 
 type WorkspaceRow = {
@@ -37,22 +44,28 @@ function parseState(row: WorkspaceRow | null): StudioState | null {
   if (!validStudioState(state)) {
     throw new WorkspaceHttpError(500, "Der zentrale Arbeitsstand ist beschädigt.");
   }
-  return state;
+  return normalizeStudioManagementState(state);
 }
 
-function preserveAdminSections(
-  submitted: StudioState,
-  current: StudioState | null,
-): StudioState {
-  if (!current?.management || !submitted.management) return submitted;
+function clientSession(session: WorkspaceSession, actor?: ManagementUser) {
   return {
-    ...submitted,
-    management: {
-      ...submitted.management,
-      users: current.management.users,
-      company: current.management.company,
-    },
+    ...session,
+    businessRole: actor?.businessRole,
+    visibilityScope: actor?.visibilityScope,
+    organizationUnitIds: actor?.organizationUnitIds ?? [],
   };
+}
+
+function actorForState(state: StudioState | null, session: WorkspaceSession) {
+  if (!state?.management) return undefined;
+  const actor = resolveActor(state.management, session);
+  if (!actor) {
+    throw new WorkspaceHttpError(
+      403,
+      "Dein Benutzerkonto ist keiner aktiven Organisationsrolle zugeordnet.",
+    );
+  }
+  return actor;
 }
 
 export async function GET() {
@@ -68,12 +81,16 @@ export async function GET() {
       .bind(WORKSPACE_ID)
       .first<WorkspaceRow>();
 
+    const fullState = parseState(row);
+    const actor = actorForState(fullState, session);
     return Response.json({
-      session,
+      session: clientSession(session, actor),
       workspace: row
         ? {
             revision: row.revision,
-            state: parseState(row),
+            state: actor && fullState
+              ? filterStudioStateForActor(fullState, actor)
+              : fullState,
             savedAt: row.updated_at,
             savedBy: row.updated_by,
           }
@@ -106,6 +123,7 @@ export async function PUT(request: Request) {
       .bind(WORKSPACE_ID)
       .first<WorkspaceRow>();
     const currentState = parseState(currentRow);
+    const actor = actorForState(currentState, session);
     const baseRevision = Number.isInteger(payload.baseRevision)
       ? Number(payload.baseRevision)
       : 0;
@@ -115,15 +133,18 @@ export async function PUT(request: Request) {
         error: "Der Arbeitsstand wurde inzwischen auf einem anderen Gerät geändert.",
         conflict: {
           revision: currentRow.revision,
-          state: currentState,
+          state: actor && currentState
+            ? filterStudioStateForActor(currentState, actor)
+            : currentState,
           savedAt: currentRow.updated_at,
         },
       }, { status: 409 });
     }
 
-    const state = session.role === "admin"
-      ? payload.state
-      : preserveAdminSections(payload.state, currentState);
+    const submittedState = normalizeStudioManagementState(payload.state);
+    const state = session.role === "admin" || !currentState || !actor
+      ? submittedState
+      : mergeScopedStudioState(submittedState, currentState, actor);
     await synchronizeWorkspaceUsers(state, session);
 
     const now = new Date().toISOString();
@@ -208,18 +229,25 @@ export async function PUT(request: Request) {
         conflict: latest
           ? {
               revision: latest.revision,
-              state: parseState(latest),
+              state: (() => {
+                const latestState = parseState(latest);
+                const latestActor = actorForState(latestState, session);
+                return latestState && latestActor
+                  ? filterStudioStateForActor(latestState, latestActor)
+                  : latestState;
+              })(),
               savedAt: latest.updated_at,
             }
           : null,
       }, { status: 409 });
     }
 
+    const savedActor = actorForState(state, session);
     return Response.json({
-      session,
+      session: clientSession(session, savedActor),
       workspace: {
         revision: nextRevision,
-        state,
+        state: savedActor ? filterStudioStateForActor(state, savedActor) : state,
         savedAt: now,
         savedBy: session.id,
       },

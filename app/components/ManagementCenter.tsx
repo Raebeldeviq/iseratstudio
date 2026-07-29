@@ -13,6 +13,7 @@ import type {
 import JSZip from "jszip";
 import type {
   AuditLogEntry,
+  BusinessRole,
   CompanySettings,
   GeneratedListing,
   ImportReportRecord,
@@ -27,9 +28,12 @@ import type {
   ManagementFileScope,
   ManagementRole,
   ManagementUser,
+  OrganizationUnit,
+  OrganizationUnitType,
   PortalConfiguration,
   ProjectInput,
   StudioState,
+  VisibilityScope,
 } from "../types";
 import {
   appendAuditLog,
@@ -43,6 +47,12 @@ import {
   resolveListingMediaDataUrl,
 } from "../lib/management";
 import {
+  BUSINESS_ROLE_LABELS,
+  canReassignObjects,
+  VISIBILITY_SCOPE_LABELS,
+  visibleUserIds,
+} from "../lib/organization";
+import {
   applyImportReport,
   parseImportReport,
 } from "../lib/import-reports";
@@ -54,7 +64,7 @@ import { buildImportPackage } from "../lib/openimmo";
 import { allocateProviderExternalIds } from "../lib/external-ids";
 import ObjectCreationWizard from "./ObjectCreationWizard";
 
-type ManagementSection = "objects" | "files" | "portals" | "reports" | "company" | "users" | "audit";
+type ManagementSection = "objects" | "files" | "portals" | "reports" | "organization" | "company" | "users" | "audit";
 type EditorTab =
   | "object"
   | "address"
@@ -98,6 +108,7 @@ type ManagementCenterProps = {
   mode?: "objects" | "administration";
   createRequestId?: number;
   requestedListingId?: string;
+  requestedAssigneeId?: string;
 };
 
 const LIFECYCLE_LABELS: Record<ListingLifecycleStatus, string> = {
@@ -366,10 +377,11 @@ export default function ManagementCenter({
   mode = "objects",
   createRequestId = 0,
   requestedListingId = "",
+  requestedAssigneeId = "",
 }: ManagementCenterProps) {
   const management = state.management;
   const [section, setSection] = useState<ManagementSection>(
-    mode === "administration" ? "company" : "objects",
+    mode === "administration" ? "organization" : "objects",
   );
   const [showCreateWizard, setShowCreateWizard] = useState(
     mode === "objects" && createRequestId > 0,
@@ -382,6 +394,7 @@ export default function ManagementCenter({
   const [query, setQuery] = useState("");
   const [archiveFilter, setArchiveFilter] = useState<ArchiveFilter>("active");
   const [releaseFilter, setReleaseFilter] = useState<ReleaseFilter>("all");
+  const [assigneeFilter, setAssigneeFilter] = useState(requestedAssigneeId);
   const [sortKey, setSortKey] = useState<SortKey>("updated-desc");
   const [mediaLinkKind, setMediaLinkKind] = useState<ListingMediaKind>("video");
   const [mediaLinkUrl, setMediaLinkUrl] = useState("");
@@ -411,6 +424,16 @@ export default function ManagementCenter({
     name: "",
     email: "",
     role: "editor" as ManagementRole,
+    businessRole: "sales-representative" as BusinessRole,
+    visibilityScope: "self" as VisibilityScope,
+    organizationUnitId: "unit-company",
+    managerUserId: "",
+  });
+  const [newUnit, setNewUnit] = useState({
+    name: "",
+    type: "team" as OrganizationUnitType,
+    parentId: "unit-company",
+    managerUserId: "",
   });
   const [auditQuery, setAuditQuery] = useState("");
   const [activeFolderId, setActiveFolderId] = useState("");
@@ -434,22 +457,44 @@ export default function ManagementCenter({
   const canManageCompany = currentUser
     ? managementPermission(currentUser.role, "manage-company")
     : false;
+  const canAssign = canReassignObjects(currentUser);
+  const allowedUserIds = management && currentUser
+    ? visibleUserIds(management, currentUser.id)
+    : new Set<string>();
+  const assignableUsers = management?.users.filter((user) => (
+    user.active && allowedUserIds.has(user.id)
+  )) ?? [];
   const effectiveRole = authenticatedUser?.role ?? currentUser?.role ?? "viewer";
+  const canUseLibrary = effectiveRole === "admin"
+    || currentUser?.businessRole === "backoffice";
+  const canUseOperations = effectiveRole === "admin"
+    || currentUser?.businessRole === "executive"
+    || currentUser?.businessRole === "sales-director"
+    || currentUser?.businessRole === "team-lead"
+    || currentUser?.businessRole === "backoffice";
   const availableSections: Array<[ManagementSection, string]> = mode === "administration"
     ? effectiveRole === "admin"
-      ? [["company", "Firmendaten"], ["users", "Benutzer & Rollen"], ["audit", "Aktivitäten"]]
+      ? [["organization", "Organisation"], ["users", "Mitarbeiter & Rollen"], ["company", "Firmendaten"], ["audit", "Aktivitäten"]]
       : []
-    : [["objects", "Objektzentrale"], ["files", "Vorlagen & Dateien"], ["portals", "Portale"], ["reports", "Importberichte"]];
-  const visibleFolders = useMemo(() => {
-    if (!management || !currentUser) return [];
-    return management.fileFolders.filter((folder) => (
+    : [
+        ["objects", "Objektzentrale"],
+        ...(canUseLibrary ? [["files", "Vorlagen & Dateien"] as [ManagementSection, string]] : []),
+        ...(canUseOperations
+          ? [
+              ["portals", "Portale"] as [ManagementSection, string],
+              ["reports", "Importberichte"] as [ManagementSection, string],
+            ]
+          : []),
+      ];
+  const visibleFolders = management && currentUser
+    ? management.fileFolders.filter((folder) => (
       currentUser.role === "admin"
       || folder.scope === "public"
       || folder.scope === "templates"
       || folder.ownerUserId === currentUser.id
       || folder.accessUserIds.includes(currentUser.id)
-    ));
-  }, [currentUser, management]);
+    ))
+    : [];
   const activeFolder = visibleFolders.find((folder) => (
     folder.id === activeFolderId
   )) ?? visibleFolders[0];
@@ -462,6 +507,7 @@ export default function ManagementCenter({
       if (archiveFilter === "archived" && !archived) return false;
       if (releaseFilter === "released" && !listingManagement.released) return false;
       if (releaseFilter === "not-released" && listingManagement.released) return false;
+      if (assigneeFilter && listingManagement.assignedUserId !== assigneeFilter) return false;
       if (!normalizedQuery) return true;
       return [
         listing.externalId,
@@ -497,7 +543,7 @@ export default function ManagementCenter({
       }
       return right.management.updatedAt.localeCompare(left.management.updatedAt);
     });
-  }, [archiveFilter, query, releaseFilter, rows, sortKey]);
+  }, [archiveFilter, assigneeFilter, query, releaseFilter, rows, sortKey]);
 
   if (!management) {
     return (
@@ -1218,7 +1264,13 @@ export default function ManagementCenter({
       notify("Für eine echte Anmeldung werden Name und E-Mail benötigt.");
       return;
     }
-    const user = createManagementUser(newUser.name.trim(), newUser.email.trim(), newUser.role);
+    const user = {
+      ...createManagementUser(newUser.name.trim(), newUser.email.trim(), newUser.role),
+      businessRole: newUser.businessRole,
+      visibilityScope: newUser.visibilityScope,
+      organizationUnitIds: [newUser.organizationUnitId || "unit-company"],
+      managerUserId: newUser.managerUserId || undefined,
+    };
     const personalFolder: ManagementFileFolder = {
       id: `folder-personal-${user.id}`,
       name: user.name,
@@ -1244,7 +1296,15 @@ export default function ManagementCenter({
         `${user.name} – ${ROLE_LABELS[user.role]}`,
       );
     });
-    setNewUser({ name: "", email: "", role: "editor" });
+    setNewUser({
+      name: "",
+      email: "",
+      role: "editor",
+      businessRole: "sales-representative",
+      visibilityScope: "self",
+      organizationUnitId: "unit-company",
+      managerUserId: "",
+    });
   };
 
   const updateUser = (userId: string, patch: Partial<ManagementUser>) => {
@@ -1272,6 +1332,78 @@ export default function ManagementCenter({
         },
       };
     });
+  };
+
+  const addOrganizationUnit = () => {
+    if (!canManageUsers || !newUnit.name.trim()) return;
+    const unit: OrganizationUnit = {
+      id: uid("unit"),
+      name: newUnit.name.trim(),
+      type: newUnit.type,
+      parentId: newUnit.type === "company" ? undefined : newUnit.parentId || "unit-company",
+      managerUserId: newUnit.managerUserId || undefined,
+      active: true,
+      createdAt: new Date().toISOString(),
+    };
+    setState((current) => {
+      if (!current.management) return current;
+      return record({
+        ...current,
+        management: {
+          ...current.management,
+          organizationUnits: [...current.management.organizationUnits, unit],
+        },
+      }, "Organisationseinheit angelegt", "organization", unit.id, unit.name);
+    });
+    setNewUnit({
+      name: "",
+      type: "team",
+      parentId: newUnit.parentId || "unit-company",
+      managerUserId: "",
+    });
+  };
+
+  const updateOrganizationUnit = (
+    unitId: string,
+    patch: Partial<OrganizationUnit>,
+  ) => {
+    if (!canManageUsers) return;
+    setState((current) => current.management
+      ? {
+          ...current,
+          management: {
+            ...current.management,
+            organizationUnits: current.management.organizationUnits.map((unit) => (
+              unit.id === unitId ? { ...unit, ...patch } : unit
+            )),
+          },
+        }
+      : current);
+  };
+
+  const removeOrganizationUnit = (unitId: string) => {
+    if (!canManageUsers || unitId === "unit-company") return;
+    const unit = management.organizationUnits.find((item) => item.id === unitId);
+    if (!unit) return;
+    const used = (
+      management.organizationUnits.some((item) => item.parentId === unitId)
+      || management.users.some((user) => user.organizationUnitIds.includes(unitId))
+      || rows.some((row) => row.management.organizationUnitId === unitId)
+    );
+    if (used) {
+      notify("Der Bereich ist noch Mitarbeitern, Unterbereichen oder Objekten zugeordnet.");
+      return;
+    }
+    if (!window.confirm(`Bereich „${unit.name}“ löschen?`)) return;
+    setState((current) => current.management
+      ? {
+          ...current,
+          management: {
+            ...current.management,
+            organizationUnits: current.management.organizationUnits.filter((item) => item.id !== unitId),
+          },
+        }
+      : current);
   };
 
   const auditEntries = management.auditLog.filter((entry) => {
@@ -1306,6 +1438,7 @@ export default function ManagementCenter({
               {authenticatedUser?.email || currentUser?.email || "Lokale Rückfallebene"}
               {" · "}
               {ROLE_LABELS[authenticatedUser?.role ?? currentUser?.role ?? "viewer"]}
+              {currentUser ? ` · ${BUSINESS_ROLE_LABELS[currentUser.businessRole]}` : ""}
             </small>
           </div>
         </div>
@@ -1347,6 +1480,12 @@ export default function ManagementCenter({
               aria-label="Objekte durchsuchen"
               onChange={(event) => setQuery(event.target.value)}
             />
+            <select value={assigneeFilter} aria-label="Mitarbeiter filtern" onChange={(event) => setAssigneeFilter(event.target.value)}>
+              <option value="">Alle sichtbaren Mitarbeiter</option>
+              {assignableUsers.map((user) => (
+                <option key={user.id} value={user.id}>{user.name} · {BUSINESS_ROLE_LABELS[user.businessRole]}</option>
+              ))}
+            </select>
             <select value={archiveFilter} aria-label="Archivfilter" onChange={(event) => setArchiveFilter(event.target.value as ArchiveFilter)}>
               <option value="active">Aktive Objekte</option>
               <option value="archived">Archiv</option>
@@ -1396,6 +1535,7 @@ export default function ManagementCenter({
                   <th>Objekt</th>
                   <th>Ort</th>
                   <th>Kennzahlen</th>
+                  <th>Mitarbeiter</th>
                   <th>Freigabe</th>
                   <th>Geändert</th>
                   <th />
@@ -1432,6 +1572,10 @@ export default function ManagementCenter({
                     </td>
                     <td>{listingManagement.details.zip} {listingManagement.details.city}<small>{listingManagement.details.district}</small></td>
                     <td>{euro(listingManagement.details.purchasePrice)}<small>{listingAreaLabel(listingManagement.details)}</small></td>
+                    <td>
+                      {management.users.find((user) => user.id === listingManagement.assignedUserId)?.name ?? "Nicht zugeordnet"}
+                      <small>{management.organizationUnits.find((unit) => unit.id === listingManagement.organizationUnitId)?.name ?? "Kein Bereich"}</small>
+                    </td>
                     <td>{listingManagement.released ? "Ja" : "Nein"}</td>
                     <td>{formatDate(listingManagement.updatedAt, true)}</td>
                     <td>
@@ -1461,6 +1605,14 @@ export default function ManagementCenter({
                   <p>{activeListing.externalId} · {activeProject.name}</p>
                 </div>
                 <div className="management-editor-actions">
+                  <button
+                    type="button"
+                    disabled={!canEdit}
+                    title={`Zuletzt geprüft: ${formatDate(activeListing.management.lastReviewedAt, true)}`}
+                    onClick={() => updateActiveManagement({ lastReviewedAt: new Date().toISOString() })}
+                  >
+                    Als geprüft markieren
+                  </button>
                   {currentWorkflowIndex === WORKFLOW_STEPS.length - 1 ? (
                     <>
                       <button type="button" onClick={generateExpose} disabled={exposeBusy}>{exposeBusy ? "PDF wird erstellt …" : "Exposé-PDF"}</button>
@@ -1536,6 +1688,35 @@ export default function ManagementCenter({
                     <div className="management-form-grid three">
                       <Field label="Objekt-ID" value={activeListing.externalId} disabled onChange={() => undefined} />
                       <SelectField
+                        label="Verantwortlicher Mitarbeiter"
+                        value={activeListing.management.assignedUserId ?? ""}
+                        disabled={!canAssign}
+                        options={[
+                          ["", "Nicht zugeordnet"],
+                          ...assignableUsers.map((user) => [
+                            user.id,
+                            `${user.name} · ${BUSINESS_ROLE_LABELS[user.businessRole]}`,
+                          ] as [string, string]),
+                        ]}
+                        onChange={(assignedUserId) => {
+                          const assigned = management.users.find((user) => user.id === assignedUserId);
+                          updateActiveManagement({
+                            assignedUserId,
+                            organizationUnitId: assigned?.organizationUnitIds[0]
+                              ?? activeListing.management?.organizationUnitId,
+                          });
+                        }}
+                      />
+                      <SelectField
+                        label="Organisationseinheit"
+                        value={activeListing.management.organizationUnitId ?? ""}
+                        disabled={!canAssign}
+                        options={management.organizationUnits
+                          .filter((unit) => unit.active)
+                          .map((unit) => [unit.id, unit.name])}
+                        onChange={(organizationUnitId) => updateActiveManagement({ organizationUnitId })}
+                      />
+                      <SelectField
                         label="Hauptrubrik"
                         value={activeDetails.objectCategory}
                         disabled={!canEdit}
@@ -1562,6 +1743,15 @@ export default function ManagementCenter({
                       <Field label="Status des Objektes" value={activeDetails.objectStatusText} disabled={!canEdit} onChange={(objectStatusText) => updateDetails({ objectStatusText })} />
                       <SelectField label="Währung" value={activeDetails.currency} disabled={!canEdit} options={[["EUR", "EUR"], ["CHF", "CHF"], ["USD", "USD"]]} onChange={(value) => updateDetails({ currency: value as ListingDetails["currency"] })} />
                       <Field label="Verfügbar ab" type="date" value={activeDetails.availableFrom} disabled={!canEdit} onChange={(value) => updateDetails({ availableFrom: value })} />
+                      <Field
+                        label="Nächste Aktion fällig"
+                        type="date"
+                        value={activeListing.management.nextActionDueAt?.slice(0, 10) ?? ""}
+                        disabled={!canEdit}
+                        onChange={(value) => updateActiveManagement({
+                          nextActionDueAt: value ? `${value}T12:00:00.000Z` : undefined,
+                        })}
+                      />
                       <SelectField
                         label="IS24 Platzierung"
                         value={activeDetails.is24Placement}
@@ -2243,6 +2433,120 @@ export default function ManagementCenter({
         </div>
       ) : null}
 
+      {section === "organization" ? (
+        <div className="management-panel organization-panel">
+          <header>
+            <div>
+              <span className="eyebrow">Unternehmensstruktur</span>
+              <h3>Bereiche, Regionen und Teams</h3>
+              <p>Die Hierarchie steuert automatisch, welche Mitarbeiter, Objekte und Kennzahlen eine Führungskraft sehen darf.</p>
+            </div>
+            <span className="permission-note">{management.organizationUnits.length} Einheiten</span>
+          </header>
+
+          <div className="organization-layout">
+            <section className="organization-units">
+              {management.organizationUnits.map((unit) => {
+                const assignedCount = management.users.filter((user) => (
+                  user.organizationUnitIds.includes(unit.id)
+                )).length;
+                return (
+                  <article key={unit.id} className={unit.active ? "" : "inactive"}>
+                    <div className="organization-unit-mark">{unit.type === "company" ? "U" : unit.type === "division" ? "B" : unit.type === "region" ? "R" : "T"}</div>
+                    <div className="organization-unit-fields">
+                      <input
+                        value={unit.name}
+                        disabled={!canManageUsers}
+                        aria-label="Name der Organisationseinheit"
+                        onChange={(event) => updateOrganizationUnit(unit.id, { name: event.target.value })}
+                      />
+                      <div>
+                        <select
+                          value={unit.type}
+                          disabled={!canManageUsers || unit.id === "unit-company"}
+                          aria-label="Art der Organisationseinheit"
+                          onChange={(event) => updateOrganizationUnit(unit.id, { type: event.target.value as OrganizationUnitType })}
+                        >
+                          <option value="company">Unternehmen</option>
+                          <option value="division">Bereich</option>
+                          <option value="region">Region</option>
+                          <option value="team">Team</option>
+                        </select>
+                        <select
+                          value={unit.parentId ?? ""}
+                          disabled={!canManageUsers || unit.id === "unit-company"}
+                          aria-label="Übergeordneter Bereich"
+                          onChange={(event) => updateOrganizationUnit(unit.id, { parentId: event.target.value || undefined })}
+                        >
+                          <option value="">Keine übergeordnete Einheit</option>
+                          {management.organizationUnits.filter((candidate) => candidate.id !== unit.id).map((candidate) => (
+                            <option key={candidate.id} value={candidate.id}>{candidate.name}</option>
+                          ))}
+                        </select>
+                        <select
+                          value={unit.managerUserId ?? ""}
+                          disabled={!canManageUsers}
+                          aria-label="Leitung der Organisationseinheit"
+                          onChange={(event) => updateOrganizationUnit(unit.id, { managerUserId: event.target.value || undefined })}
+                        >
+                          <option value="">Keine Leitung</option>
+                          {management.users.filter((user) => user.active).map((user) => (
+                            <option key={user.id} value={user.id}>{user.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    <div className="organization-unit-meta">
+                      <b>{assignedCount}</b>
+                      <span>Mitarbeiter</span>
+                    </div>
+                    <Toggle
+                      label={unit.active ? "Aktiv" : "Inaktiv"}
+                      checked={unit.active}
+                      disabled={!canManageUsers || unit.id === "unit-company"}
+                      onChange={(active) => updateOrganizationUnit(unit.id, { active })}
+                    />
+                    <button
+                      type="button"
+                      className="danger ghost"
+                      disabled={!canManageUsers || unit.id === "unit-company"}
+                      onClick={() => removeOrganizationUnit(unit.id)}
+                    >
+                      Löschen
+                    </button>
+                  </article>
+                );
+              })}
+            </section>
+
+            <aside className="organization-create">
+              <span className="eyebrow">Neue Einheit</span>
+              <h4>Bereich hinzufügen</h4>
+              <Field label="Bezeichnung" value={newUnit.name} disabled={!canManageUsers} onChange={(name) => setNewUnit((current) => ({ ...current, name }))} />
+              <SelectField label="Art" value={newUnit.type} disabled={!canManageUsers} options={[["division", "Bereich"], ["region", "Region"], ["team", "Team"]]} onChange={(type) => setNewUnit((current) => ({ ...current, type: type as OrganizationUnitType }))} />
+              <SelectField label="Übergeordnet" value={newUnit.parentId} disabled={!canManageUsers} options={management.organizationUnits.filter((unit) => unit.active).map((unit) => [unit.id, unit.name])} onChange={(parentId) => setNewUnit((current) => ({ ...current, parentId }))} />
+              <SelectField label="Leitung" value={newUnit.managerUserId} disabled={!canManageUsers} options={[["", "Noch nicht zugeordnet"], ...management.users.filter((user) => user.active).map((user) => [user.id, user.name] as [string, string])]} onChange={(managerUserId) => setNewUnit((current) => ({ ...current, managerUserId }))} />
+              <button type="button" className="primary" disabled={!canManageUsers || !newUnit.name.trim()} onClick={addOrganizationUnit}>Einheit anlegen</button>
+            </aside>
+          </div>
+
+          <section className="escalation-settings">
+            <header>
+              <div><span className="eyebrow">Automatische Statusregeln</span><h4>Aktualität und Eskalationen</h4></div>
+              <p>Diese Schwellen bestimmen die Führungskräfte-Ampel, ohne Mitarbeiter manuell bewerten zu müssen.</p>
+            </header>
+            <div className="management-form-grid four">
+              <Field label="Objekt beachten ab Tagen" type="number" min={1} value={management.escalationRules.staleWarningDays} disabled={!canManageUsers} onChange={(value) => setState((current) => current.management ? { ...current, management: { ...current.management, escalationRules: { ...current.management.escalationRules, staleWarningDays: readNumber(value) } } } : current)} />
+              <Field label="Objekt kritisch ab Tagen" type="number" min={1} value={management.escalationRules.staleCriticalDays} disabled={!canManageUsers} onChange={(value) => setState((current) => current.management ? { ...current, management: { ...current.management, escalationRules: { ...current.management.escalationRules, staleCriticalDays: readNumber(value) } } } : current)} />
+              <Field label="Inaktivität beachten ab Tagen" type="number" min={1} value={management.escalationRules.inactivityWarningDays} disabled={!canManageUsers} onChange={(value) => setState((current) => current.management ? { ...current, management: { ...current.management, escalationRules: { ...current.management.escalationRules, inactivityWarningDays: readNumber(value) } } } : current)} />
+              <Field label="Inaktivität kritisch ab Tagen" type="number" min={1} value={management.escalationRules.inactivityCriticalDays} disabled={!canManageUsers} onChange={(value) => setState((current) => current.management ? { ...current, management: { ...current.management, escalationRules: { ...current.management.escalationRules, inactivityCriticalDays: readNumber(value) } } } : current)} />
+              <Field label="Erneuerung vorwarnen (Tage)" type="number" min={0} value={management.escalationRules.renewalWarningDays} disabled={!canManageUsers} onChange={(value) => setState((current) => current.management ? { ...current, management: { ...current.management, escalationRules: { ...current.management.escalationRules, renewalWarningDays: readNumber(value) } } } : current)} />
+              <Toggle label="Portalfehler sofort kritisch" checked={management.escalationRules.portalErrorsCritical} disabled={!canManageUsers} onChange={(portalErrorsCritical) => setState((current) => current.management ? { ...current, management: { ...current.management, escalationRules: { ...current.management.escalationRules, portalErrorsCritical } } } : current)} />
+            </div>
+          </section>
+        </div>
+      ) : null}
+
       {section === "company" ? (
         <div className="management-panel">
           <header>
@@ -2305,8 +2609,8 @@ export default function ManagementCenter({
           <header>
             <div>
               <span className="eyebrow">Berechtigungen</span>
-              <h3>Benutzerverwaltung</h3>
-              <p>Jede Person meldet sich mit der hier hinterlegten E-Mail an. Bearbeiter verwalten Objekte und Uploads; Benutzer und Firmendaten bleiben der Administration vorbehalten.</p>
+              <h3>Mitarbeiter, Funktionen und Sichtbereiche</h3>
+              <p>Systemrecht und Organisationsfunktion werden getrennt. Dadurch kann eine Vertriebsleitung ihr Team sehen, während eine Handelsvertretung ausschließlich den eigenen Bereich erhält.</p>
             </div>
           </header>
           <div className="user-list">
@@ -2318,12 +2622,72 @@ export default function ManagementCenter({
                   <input value={user.email} disabled={!canManageUsers} type="email" aria-label="Benutzer-E-Mail" placeholder="E-Mail" onChange={(event) => updateUser(user.id, { email: event.target.value })} />
                   <small>Letzte Aktivität: {formatDate(user.lastActiveAt, true)}</small>
                 </div>
-                <select value={user.role} disabled={!canManageUsers} onChange={(event) => updateUser(user.id, { role: event.target.value as ManagementRole })}>
-                  <option value="admin">Administration</option>
-                  <option value="editor">Bearbeitung</option>
-                  <option value="viewer">Nur lesen</option>
-                </select>
+                <div className="user-access-fields">
+                  <label>
+                    <span>Systemrecht</span>
+                    <select value={user.role} disabled={!canManageUsers} onChange={(event) => updateUser(user.id, { role: event.target.value as ManagementRole })}>
+                      <option value="admin">Administration</option>
+                      <option value="editor">Bearbeitung</option>
+                      <option value="viewer">Nur lesen</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Funktion</span>
+                    <select value={user.businessRole} disabled={!canManageUsers} onChange={(event) => updateUser(user.id, { businessRole: event.target.value as BusinessRole })}>
+                      {Object.entries(BUSINESS_ROLE_LABELS).map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Sichtbereich</span>
+                    <select value={user.visibilityScope} disabled={!canManageUsers} onChange={(event) => updateUser(user.id, { visibilityScope: event.target.value as VisibilityScope })}>
+                      {Object.entries(VISIBILITY_SCOPE_LABELS).map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Organisationseinheit</span>
+                    <select value={user.organizationUnitIds[0] ?? ""} disabled={!canManageUsers} onChange={(event) => updateUser(user.id, { organizationUnitIds: [event.target.value] })}>
+                      {management.organizationUnits.filter((unit) => unit.active).map((unit) => (
+                        <option key={unit.id} value={unit.id}>{unit.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Vorgesetzter</span>
+                    <select value={user.managerUserId ?? ""} disabled={!canManageUsers} onChange={(event) => updateUser(user.id, { managerUserId: event.target.value || undefined })}>
+                      <option value="">Keine Zuordnung</option>
+                      {management.users.filter((candidate) => candidate.active && candidate.id !== user.id).map((candidate) => (
+                        <option key={candidate.id} value={candidate.id}>{candidate.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
                 <Toggle label={user.active ? "Aktiv" : "Inaktiv"} checked={user.active} disabled={!canManageUsers || user.id === management.currentUserId} onChange={(active) => updateUser(user.id, { active })} />
+                {user.visibilityScope === "custom" ? (
+                  <div className="custom-visibility">
+                    <span>Individuell sichtbare Mitarbeiter</span>
+                    <div>
+                      {management.users.filter((candidate) => candidate.active && candidate.id !== user.id).map((candidate) => (
+                        <label key={candidate.id}>
+                          <input
+                            type="checkbox"
+                            checked={user.customVisibleUserIds.includes(candidate.id)}
+                            disabled={!canManageUsers}
+                            onChange={(event) => updateUser(user.id, {
+                              customVisibleUserIds: event.target.checked
+                                ? [...new Set([...user.customVisibleUserIds, candidate.id])]
+                                : user.customVisibleUserIds.filter((id) => id !== candidate.id),
+                            })}
+                          />
+                          {candidate.name}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
               </article>
             ))}
           </div>
@@ -2331,7 +2695,11 @@ export default function ManagementCenter({
             <h4>Benutzer anlegen</h4>
             <Field label="Name" value={newUser.name} disabled={!canManageUsers} onChange={(name) => setNewUser((current) => ({ ...current, name }))} />
             <Field label="E-Mail" type="email" value={newUser.email} disabled={!canManageUsers} onChange={(email) => setNewUser((current) => ({ ...current, email }))} />
-            <SelectField label="Rolle" value={newUser.role} disabled={!canManageUsers} options={[["admin", "Administration"], ["editor", "Bearbeitung"], ["viewer", "Nur lesen"]]} onChange={(role) => setNewUser((current) => ({ ...current, role: role as ManagementRole }))} />
+            <SelectField label="Systemrecht" value={newUser.role} disabled={!canManageUsers} options={[["admin", "Administration"], ["editor", "Bearbeitung"], ["viewer", "Nur lesen"]]} onChange={(role) => setNewUser((current) => ({ ...current, role: role as ManagementRole }))} />
+            <SelectField label="Funktion" value={newUser.businessRole} disabled={!canManageUsers} options={Object.entries(BUSINESS_ROLE_LABELS)} onChange={(businessRole) => setNewUser((current) => ({ ...current, businessRole: businessRole as BusinessRole }))} />
+            <SelectField label="Sichtbereich" value={newUser.visibilityScope} disabled={!canManageUsers} options={Object.entries(VISIBILITY_SCOPE_LABELS)} onChange={(visibilityScope) => setNewUser((current) => ({ ...current, visibilityScope: visibilityScope as VisibilityScope }))} />
+            <SelectField label="Organisationseinheit" value={newUser.organizationUnitId} disabled={!canManageUsers} options={management.organizationUnits.filter((unit) => unit.active).map((unit) => [unit.id, unit.name])} onChange={(organizationUnitId) => setNewUser((current) => ({ ...current, organizationUnitId }))} />
+            <SelectField label="Vorgesetzter" value={newUser.managerUserId} disabled={!canManageUsers} options={[["", "Keine Zuordnung"], ...management.users.filter((user) => user.active).map((user) => [user.id, user.name] as [string, string])]} onChange={(managerUserId) => setNewUser((current) => ({ ...current, managerUserId }))} />
             <button type="button" className="primary" disabled={!canManageUsers || !newUser.name.trim() || !newUser.email.trim()} onClick={addUser}>Benutzer freischalten</button>
           </div>
         </div>

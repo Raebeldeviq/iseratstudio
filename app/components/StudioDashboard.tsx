@@ -4,10 +4,17 @@ import { useMemo } from "react";
 import type { ManagementRole, StudioState } from "../types";
 import type { RenewalScheduleEntry } from "../lib/renewal-schedule";
 import { deriveListingLifecycle } from "../lib/management";
+import {
+  leadershipAccess,
+  visibleUserIds,
+} from "../lib/organization";
+import TeamOverview from "./TeamOverview";
 
 type StudioDashboardProps = {
   state: StudioState;
   role: ManagementRole;
+  canUseLibrary: boolean;
+  canUseWork: boolean;
   renewalEntries: RenewalScheduleEntry[];
   openJobCount: number;
   onCreateObject: () => void;
@@ -16,6 +23,7 @@ type StudioDashboardProps = {
   onOpenRenewals: () => void;
   onOpenJobs: () => void;
   onOpenLibrary: () => void;
+  onOpenMember: (userId: string) => void;
 };
 
 const LIFECYCLE_LABELS = {
@@ -43,6 +51,8 @@ function formatDate(value: string | undefined): string {
 export default function StudioDashboard({
   state,
   role,
+  canUseLibrary,
+  canUseWork,
   renewalEntries,
   openJobCount,
   onCreateObject,
@@ -51,11 +61,22 @@ export default function StudioDashboard({
   onOpenRenewals,
   onOpenJobs,
   onOpenLibrary,
+  onOpenMember,
 }: StudioDashboardProps) {
+  const currentUser = state.management?.users.find((user) => (
+    user.id === state.management?.currentUserId
+  ));
+  const allowedUserIds = useMemo(() => (
+    state.management && currentUser
+      ? visibleUserIds(state.management, currentUser.id)
+      : new Set<string>()
+  ), [currentUser, state.management]);
   const rows = useMemo(() => (
     state.projects.flatMap((project) => (
       project.listings.flatMap((listing) => (
         listing.management
+        && listing.management.assignedUserId
+        && allowedUserIds.has(listing.management.assignedUserId)
           ? [{
               project,
               listing,
@@ -65,7 +86,7 @@ export default function StudioDashboard({
           : []
       ))
     ))
-  ), [state.projects]);
+  ), [allowedUserIds, state.projects]);
 
   const activeRows = rows.filter((row) => !row.management.archivedAt);
   const drafts = activeRows.filter((row) => row.lifecycle === "draft");
@@ -77,6 +98,9 @@ export default function StudioDashboard({
   const dueRenewals = renewalEntries.filter((entry) => (
     entry.status === "today" || entry.status === "overdue" || entry.untracked
   ));
+  const openTaskCount = drafts.length + (
+    canUseWork ? errors.length + dueRenewals.length + openJobCount : 0
+  );
   const recent = [...activeRows]
     .sort((left, right) => (
       new Date(right.management.updatedAt).getTime()
@@ -109,10 +133,10 @@ export default function StudioDashboard({
         <button type="button" onClick={onOpenObjects}>
           <span>Entwürfe</span><b>{drafts.length}</b><small>weiter bearbeiten</small>
         </button>
-        <button type="button" className={errors.length ? "attention" : ""} onClick={onOpenJobs}>
+        <button type="button" disabled={!canUseWork} className={errors.length ? "attention" : ""} onClick={onOpenJobs}>
           <span>Fehler</span><b>{errors.length + openJobCount}</b><small>prüfen und beheben</small>
         </button>
-        <button type="button" className={dueRenewals.length ? "attention" : ""} onClick={onOpenRenewals}>
+        <button type="button" disabled={!canUseWork} className={dueRenewals.length ? "attention" : ""} onClick={onOpenRenewals}>
           <span>Fällige Erneuerungen</span><b>{dueRenewals.length}</b><small>heute oder überfällig</small>
         </button>
       </div>
@@ -121,7 +145,7 @@ export default function StudioDashboard({
         <section className="dashboard-card dashboard-tasks">
           <header>
             <div><span className="eyebrow">Priorisiert</span><h2>Offene Aufgaben</h2></div>
-            <span>{drafts.length + errors.length + dueRenewals.length + openJobCount} offen</span>
+            <span>{openTaskCount} offen</span>
           </header>
           <div className="dashboard-task-list">
             {canEdit ? (
@@ -138,21 +162,21 @@ export default function StudioDashboard({
                 <strong>Öffnen</strong>
               </button>
             ) : null}
-            {errors.length || openJobCount ? (
+            {canUseWork && (errors.length || openJobCount) ? (
               <button type="button" onClick={onOpenJobs}>
                 <i className="task-icon error">!</i>
                 <span><b>Übertragungsfehler prüfen</b><small>{errors.length} Portalfehler · {openJobCount} offene Aufträge</small></span>
                 <strong>Prüfen</strong>
               </button>
             ) : null}
-            {dueRenewals.length ? (
+            {canUseWork && dueRenewals.length ? (
               <button type="button" onClick={onOpenRenewals}>
                 <i className="task-icon due">7</i>
                 <span><b>Inserate erneuern</b><small>{dueRenewals.length} Adressen sind heute fällig oder überfällig</small></span>
                 <strong>Planen</strong>
               </button>
             ) : null}
-            {!drafts.length && !errors.length && !dueRenewals.length && !openJobCount ? (
+            {openTaskCount === 0 ? (
               <div className="dashboard-empty">
                 <b>Alles erledigt</b>
                 <span>Aktuell gibt es keine dringenden Aufgaben.</span>
@@ -181,6 +205,10 @@ export default function StudioDashboard({
           </div>
         </aside>
 
+        {leadershipAccess(currentUser) || (state.management?.users.length ?? 0) > 1 ? (
+          <TeamOverview state={state} onOpenMember={onOpenMember} />
+        ) : null}
+
         <section className="dashboard-card dashboard-recent">
           <header>
             <div><span className="eyebrow">Zuletzt bearbeitet</span><h2>Objekte</h2></div>
@@ -206,12 +234,14 @@ export default function StudioDashboard({
           </div>
         </section>
 
+        {canUseLibrary || canUseWork ? (
         <aside className="dashboard-card dashboard-shortcuts">
           <header><div><span className="eyebrow">Direktzugriff</span><h2>Werkzeuge</h2></div></header>
-          <button type="button" onClick={onOpenLibrary}><span>Vorlagen & Medien</span><strong>Haustypen verwalten</strong></button>
-          <button type="button" onClick={onOpenRenewals}><span>7-Tage-Zentrale</span><strong>Erneuerungen planen</strong></button>
-          <button type="button" onClick={onOpenJobs}><span>Auftragszentrale</span><strong>Läufe und Fehler prüfen</strong></button>
+          {canUseLibrary ? <button type="button" onClick={onOpenLibrary}><span>Vorlagen & Medien</span><strong>Haustypen verwalten</strong></button> : null}
+          {canUseWork ? <button type="button" onClick={onOpenRenewals}><span>7-Tage-Zentrale</span><strong>Erneuerungen planen</strong></button> : null}
+          {canUseWork ? <button type="button" onClick={onOpenJobs}><span>Auftragszentrale</span><strong>Läufe und Fehler prüfen</strong></button> : null}
         </aside>
+        ) : null}
       </div>
     </section>
   );
