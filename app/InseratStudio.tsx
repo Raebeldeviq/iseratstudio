@@ -70,6 +70,16 @@ import {
   buildPreflightReport,
   houseIsReadyForUpload,
 } from "./lib/preflight";
+import {
+  bindSessionToState,
+  CLOUD_STORAGE_LABEL,
+  CloudWorkspaceConflictError,
+  CloudWorkspaceError,
+  loadCloudWorkspace,
+  mergeCloudAssetReferences,
+  saveCloudWorkspace,
+  type CloudSession,
+} from "./lib/cloud-workspace";
 import { runBoundedProductionPipeline } from "./lib/production-pipeline";
 import { ADDRESS_OWNERS, normalizeProjectOwners, projectOwner } from "./lib/project-owners";
 import { buildRenewalSchedule } from "./lib/renewal-schedule";
@@ -665,7 +675,15 @@ function snapshotTime(value: string): number {
 export default function InseratStudio() {
   const [tab, setTab] = useState<Tab>("management");
   const [state, setState] = useState<StudioState>(initialState);
-  const managementReadOnly = currentManagementUser(state)?.role === "viewer";
+  const [cloudSession, setCloudSession] = useState<CloudSession | null>(null);
+  const [cloudAccessError, setCloudAccessError] = useState("");
+  const [cloudConflictRevision, setCloudConflictRevision] = useState<number | null>(null);
+  const cloudRevisionRef = useRef(0);
+  const cloudQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const latestStateRef = useRef(state);
+  latestStateRef.current = state;
+  const managementReadOnly =
+    (cloudSession?.role ?? currentManagementUser(state)?.role) === "viewer";
   const [ready, setReady] = useState(false);
   const [saveLabel, setSaveLabel] = useState("Lokaler Speicher wird vorbereitet …");
   const [activeHouseId, setActiveHouseId] = useState("");
@@ -802,19 +820,44 @@ export default function InseratStudio() {
   }, []);
 
   useEffect(() => {
-    Promise.allSettled([loadStudioSnapshot(), loadWindowsCatalogSnapshot()])
+    Promise.allSettled([
+      loadCloudWorkspace((message) => setSaveLabel(message)),
+      loadStudioSnapshot(),
+      loadWindowsCatalogSnapshot(),
+    ])
       .then((results) => {
+        const cloudResult = results[0];
+        const cloud = cloudResult.status === "fulfilled" ? cloudResult.value : null;
+        if (
+          cloudResult.status === "rejected"
+          && cloudResult.reason instanceof CloudWorkspaceError
+          && (cloudResult.reason.status === 401 || cloudResult.reason.status === 403)
+        ) {
+          setCloudAccessError(cloudResult.reason.message);
+        }
+        if (cloud) {
+          setCloudSession(cloud.session);
+          cloudRevisionRef.current = cloud.snapshot?.revision ?? 0;
+        }
         const candidates: Array<{
           state: StudioState;
           savedAt: string;
-          source: "browser" | "legacy" | "windows";
+          source: "browser" | "legacy" | "windows" | "cloud";
         }> = [];
-        for (const result of results) {
+        if (cloud?.snapshot) {
+          candidates.push({
+            state: cloud.snapshot.state,
+            savedAt: cloud.snapshot.savedAt,
+            source: "cloud",
+          });
+        }
+        for (const result of [results[1], results[2]]) {
           if (result.status === "fulfilled" && result.value) candidates.push(result.value);
         }
+        const cloudCandidate = candidates.find((candidate) => candidate.source === "cloud");
         candidates.sort((left, right) => snapshotTime(right.savedAt) - snapshotTime(left.savedAt));
-        const selected = candidates[0];
-        const houseCatalog = candidates
+        const selected = cloudCandidate ?? candidates[0];
+        const houseCatalog = cloudCandidate ? undefined : candidates
           .filter((candidate) => Boolean(candidate.state.houseCatalogVersion))
           .sort((left, right) => (
             snapshotTime(right.state.houseCatalogUpdatedAt ?? right.savedAt)
@@ -844,11 +887,14 @@ export default function InseratStudio() {
           normalized.provider.providerNumber,
           collectedStateExternalIds(normalized),
         );
-        const loaded = normalizeStudioManagementState({
+        const normalizedManagement = normalizeStudioManagementState({
           ...normalized,
           projects: migratedExternalIds.projects,
           houses: normalized.houses.map(applyConfirmedHouseModelDetails),
         });
+        const loaded = cloud?.session
+          ? bindSessionToState(normalizedManagement, cloud.session)
+          : normalizedManagement;
         const next = loaded.projects.length
           ? loaded
           : { ...loaded, projects: [newProject("fabian")] };
@@ -874,12 +920,16 @@ export default function InseratStudio() {
         setSaveLabel(
           migratedExternalIds.changedCount
             ? `${migratedExternalIds.changedCount} Entwurfs-Objekt-ID${migratedExternalIds.changedCount === 1 ? "" : "s"} auf ${FIXED_HV_PROVIDER_NUMBER}-… umgestellt`
-            : selected?.source === "windows"
-              ? "Aus lokaler Gerätesicherung geladen"
-              : "Doppelt lokal gespeichert",
+            : selected?.source === "cloud"
+              ? `Cloud-Stand geladen · Version ${cloudRevisionRef.current}`
+              : cloud?.session
+                ? "Lokaler Bestand wird sicher in die Cloud übernommen"
+                : selected?.source === "windows"
+                  ? "Aus lokaler Gerätesicherung geladen"
+                  : "Doppelt lokal gespeichert",
         );
       })
-      .catch(() => setSaveLabel("Lokaler Speicher nicht verfügbar"))
+      .catch(() => setSaveLabel("Arbeitsbereich konnte nicht geladen werden"))
       .finally(() => setReady(true));
 
     const checkHelper = () => {
@@ -993,11 +1043,81 @@ export default function InseratStudio() {
         saves.push(queueWindowsCatalogSnapshot(state, savedAt));
       }
       Promise.all(saves)
-        .then(() => setSaveLabel(helperOnline ? "Browser + Gerätesicherung aktuell" : "Lokal im Browser gespeichert"))
+        .then(() => {
+          if (!cloudSession) {
+            setSaveLabel(helperOnline ? "Browser + Gerätesicherung aktuell" : "Lokal im Browser gespeichert");
+          }
+        })
         .catch(() => setSaveLabel("Speichern fehlgeschlagen"));
+
+      if (cloudSession && cloudSession.role !== "viewer" && cloudConflictRevision === null) {
+        cloudQueueRef.current = cloudQueueRef.current
+          .catch(() => undefined)
+          .then(async () => {
+            if (latestStateRef.current !== state || cloudConflictRevision !== null) return;
+            setSaveLabel("Änderungen werden zentral gespeichert …");
+            const snapshot = await saveCloudWorkspace(state, cloudRevisionRef.current, {
+              onProgress: setSaveLabel,
+            });
+            cloudRevisionRef.current = snapshot.revision;
+            if (latestStateRef.current === state) {
+              const merged = mergeCloudAssetReferences(state, snapshot.state);
+              if (merged !== state) setState(merged);
+            }
+            setSaveLabel(`Cloud aktuell · Version ${snapshot.revision}`);
+          })
+          .catch((error) => {
+            if (error instanceof CloudWorkspaceConflictError) {
+              setCloudConflictRevision(error.latestRevision);
+              setSaveLabel("Speicherkonflikt erkannt");
+              return;
+            }
+            const message = error instanceof CloudWorkspaceError
+              ? error.message
+              : "Cloud-Speicherung fehlgeschlagen";
+            setSaveLabel(message);
+          });
+      }
     }, 450);
     return () => window.clearTimeout(timer);
-  }, [helperOnline, isPrimaryTab, ready, state]);
+  }, [cloudConflictRevision, cloudSession, helperOnline, isPrimaryTab, ready, state]);
+
+  const loadCurrentCloudVersion = async () => {
+    try {
+      setSaveLabel("Neueste Cloud-Version wird geladen …");
+      const cloud = await loadCloudWorkspace(setSaveLabel);
+      if (!cloud.snapshot) return;
+      const normalized = normalizeStudioManagementState(cloud.snapshot.state);
+      const next = bindSessionToState(normalized, cloud.session);
+      cloudRevisionRef.current = cloud.snapshot.revision;
+      setCloudSession(cloud.session);
+      setCloudConflictRevision(null);
+      setState(next);
+      selectActiveHouse(next.houses.find((house) => !house.archived)?.id ?? "");
+      setActiveProjectId(next.projects[0]?.id ?? "");
+      setSaveLabel(`Cloud-Stand geladen · Version ${cloud.snapshot.revision}`);
+    } catch (error) {
+      setSaveLabel(error instanceof Error ? error.message : "Cloud-Version konnte nicht geladen werden");
+    }
+  };
+
+  const overwriteCloudVersion = async () => {
+    try {
+      setSaveLabel("Eigene Version wird zentral gesichert …");
+      const snapshot = await saveCloudWorkspace(
+        state,
+        cloudConflictRevision ?? cloudRevisionRef.current,
+        { force: true, onProgress: setSaveLabel },
+      );
+      cloudRevisionRef.current = snapshot.revision;
+      setCloudConflictRevision(null);
+      const merged = mergeCloudAssetReferences(state, snapshot.state);
+      if (merged !== state) setState(merged);
+      setSaveLabel(`Cloud aktuell · Version ${snapshot.revision}`);
+    } catch (error) {
+      setSaveLabel(error instanceof Error ? error.message : "Cloud-Version konnte nicht gespeichert werden");
+    }
+  };
 
   useEffect(() => {
     if (tab !== "renewal") return;
@@ -4645,6 +4765,20 @@ export default function InseratStudio() {
     event.target.value = "";
   };
 
+  if (cloudAccessError) {
+    return (
+      <main className="loading-screen access-denied-screen">
+        <AppVersionBadge />
+        <div className="loading-mark">IS</div>
+        <h1>Zugriff noch nicht freigeschaltet</h1>
+        <p>{cloudAccessError}</p>
+        <a className="primary" href="/signout-with-chatgpt?return_to=%2F">
+          Mit einem anderen Konto anmelden
+        </a>
+      </main>
+    );
+  }
+
   if (isPrimaryTab === false) {
     return (
       <main className="loading-screen duplicate-tab-screen">
@@ -4677,8 +4811,26 @@ export default function InseratStudio() {
             <span>AI-gestützte Objektverwaltung</span>
           </div>
         </div>
-        <div className="storage-pill" title={STORAGE_ID}>
-          <i /> {saveLabel}
+        <div className="topbar-account">
+          <div
+            className="storage-pill"
+            title={cloudSession ? CLOUD_STORAGE_LABEL : `${STORAGE_ID} · lokale Rückfallebene`}
+          >
+            <i /> {saveLabel}
+          </div>
+          {cloudSession ? (
+            <div className="session-pill">
+              <span>{cloudSession.name}</span>
+              <small>
+                {cloudSession.role === "admin"
+                  ? "Administration"
+                  : cloudSession.role === "editor"
+                    ? "Bearbeitung"
+                    : "Nur lesen"}
+              </small>
+              <a href="/signout-with-chatgpt?return_to=%2F">Abmelden</a>
+            </div>
+          ) : null}
         </div>
       </header>
 
@@ -4743,6 +4895,23 @@ export default function InseratStudio() {
         </div>
       ) : null}
 
+      {cloudConflictRevision !== null ? (
+        <div className="notice cloud-conflict" role="alert">
+          <span>
+            Auf einem anderen Gerät wurde inzwischen eine neuere Version gespeichert.
+            Deine lokale Fassung bleibt erhalten, bis du dich entscheidest.
+          </span>
+          <div className="button-row">
+            <button className="secondary" type="button" onClick={() => void loadCurrentCloudVersion()}>
+              Neueste Cloud-Version laden
+            </button>
+            <button className="danger" type="button" onClick={() => void overwriteCloudVersion()}>
+              Meine Fassung übernehmen
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {tab === "management" ? (
         <ManagementCenter
           state={state}
@@ -4752,6 +4921,7 @@ export default function InseratStudio() {
           onTransferListing={transferManagementListing}
           onDeleteListings={deleteManagementListings}
           notify={setNotice}
+          authenticatedUser={cloudSession}
         />
       ) : null}
 

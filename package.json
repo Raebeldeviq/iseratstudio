@@ -1,6 +1,6 @@
 {
   "name": "inserate-studio",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "private": true,
   "packageManager": "pnpm@11.9.0",
   "engines": {
@@ -13,11 +13,13 @@
     "upload-server": "node local-upload-server.mjs",
     "media:prepare": "node scripts/prepare-bundled-house-assets.mjs",
     "catalog:install": "node scripts/install-bundled-house-catalog.mjs --replace-active",
+    "db:generate": "drizzle-kit generate",
     "test": "vinext build && node --test tests/*.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
   },
   "dependencies": {
     "basic-ftp": "^6.0.1",
+    "drizzle-orm": "0.45.2",
     "jspdf": "3.0.4",
     "jszip": "^3.10.1",
     "next": "16.2.6",
@@ -27,12 +29,14 @@
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",
+    "@cloudflare/workers-types": "4.20260515.1",
     "@tailwindcss/postcss": "4.2.1",
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.2",
     "@vitejs/plugin-rsc": "0.5.26",
+    "drizzle-kit": "0.31.10",
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.6",
     "react-server-dom-webpack": "19.2.6",

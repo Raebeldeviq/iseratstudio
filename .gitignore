@@ -44,6 +44,4 @@ next-env.d.ts
 /work/
 /tmp/
 /.openai/
-/db/
-/drizzle/
 /examples/

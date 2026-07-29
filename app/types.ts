@@ -22,6 +22,8 @@ export type HouseImage = {
   name: string;
   mimeType: string;
   dataUrl: string;
+  storageKey?: string;
+  assetFingerprint?: string;
   caption: string;
   isFloorplan: boolean;
   role?: ImageRole;
@@ -166,6 +168,8 @@ export type ListingMediaItem = {
   sourceImageId?: string;
   mimeType?: string;
   dataUrl?: string;
+  storageKey?: string;
+  assetFingerprint?: string;
   url?: string;
   rotation?: 0 | 90 | 180 | 270;
 };
@@ -406,6 +410,8 @@ export type ManagementFileItem = {
   mimeType: string;
   size: number;
   dataUrl: string;
+  storageKey?: string;
+  assetFingerprint?: string;
   createdAt: string;
   createdByUserId: string;
 };

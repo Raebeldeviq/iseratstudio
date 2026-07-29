@@ -85,6 +85,11 @@ type ListingRow = {
 type ManagementCenterProps = {
   state: StudioState;
   setState: Dispatch<SetStateAction<StudioState>>;
+  authenticatedUser: {
+    name: string;
+    email: string;
+    role: ManagementRole;
+  } | null;
   uploadAvailable: boolean;
   busy: boolean;
   onTransferListing: (listingId: string) => Promise<void>;
@@ -341,6 +346,7 @@ function listingRows(state: StudioState): ListingRow[] {
 export default function ManagementCenter({
   state,
   setState,
+  authenticatedUser,
   uploadAvailable,
   busy,
   onTransferListing,
@@ -1157,7 +1163,10 @@ export default function ManagementCenter({
   };
 
   const addUser = () => {
-    if (!canManageUsers || !newUser.name.trim()) return;
+    if (!canManageUsers || !newUser.name.trim() || !newUser.email.trim()) {
+      notify("Für eine echte Anmeldung werden Name und E-Mail benötigt.");
+      return;
+    }
     const user = createManagementUser(newUser.name.trim(), newUser.email.trim(), newUser.role);
     const personalFolder: ManagementFileFolder = {
       id: `folder-personal-${user.id}`,
@@ -1214,31 +1223,6 @@ export default function ManagementCenter({
     });
   };
 
-  const switchUser = (userId: string) => {
-    const user = management.users.find((item) => item.id === userId && item.active);
-    if (!user) return;
-    const at = new Date().toISOString();
-    setState((current) => {
-      if (!current.management) return current;
-      const next = {
-        ...current,
-        management: {
-          ...current.management,
-          currentUserId: user.id,
-          users: current.management.users.map((item) => (
-            item.id === user.id ? { ...item, lastActiveAt: at } : item
-          )),
-        },
-      };
-      return appendAuditLog(next, {
-        action: "Benutzer gewechselt",
-        targetType: "user",
-        targetId: user.id,
-        description: `${user.name} arbeitet jetzt mit der Rolle ${ROLE_LABELS[user.role]}`,
-      }, at);
-    });
-  };
-
   const auditEntries = management.auditLog.filter((entry) => {
     const normalized = auditQuery.trim().toLocaleLowerCase("de-DE");
     if (!normalized) return true;
@@ -1259,14 +1243,17 @@ export default function ManagementCenter({
           <h2>Objekte, Portale und Organisation</h2>
           <p>{rows.length} Objekte · {rows.filter((row) => row.management.lifecycle === "online").length} online · {rows.filter((row) => row.management.archivedAt).length} archiviert</p>
         </div>
-        <label className="management-user-switch">
-          <span>Aktiver Benutzer</span>
-          <select value={management.currentUserId} onChange={(event) => switchUser(event.target.value)}>
-            {management.users.filter((user) => user.active).map((user) => (
-              <option key={user.id} value={user.id}>{user.name} · {ROLE_LABELS[user.role]}</option>
-            ))}
-          </select>
-        </label>
+        <div className="management-user-switch">
+          <span>Persönlich angemeldet</span>
+          <div className="authenticated-user">
+            <strong>{authenticatedUser?.name ?? currentUser?.name ?? "Lokaler Benutzer"}</strong>
+            <small>
+              {authenticatedUser?.email || currentUser?.email || "Lokale Rückfallebene"}
+              {" · "}
+              {ROLE_LABELS[authenticatedUser?.role ?? currentUser?.role ?? "viewer"]}
+            </small>
+          </div>
+        </div>
       </header>
 
       <nav className="management-nav" aria-label="Immobilienverwaltung">
@@ -2202,7 +2189,7 @@ export default function ManagementCenter({
             <div>
               <span className="eyebrow">Berechtigungen</span>
               <h3>Benutzerverwaltung</h3>
-              <p>Bearbeiter dürfen Objekte und Uploads verwalten; Löschaufträge, Benutzer und Firmendaten bleiben der Administration vorbehalten.</p>
+              <p>Jede Person meldet sich mit der hier hinterlegten E-Mail an. Bearbeiter verwalten Objekte und Uploads; Benutzer und Firmendaten bleiben der Administration vorbehalten.</p>
             </div>
           </header>
           <div className="user-list">
@@ -2228,7 +2215,7 @@ export default function ManagementCenter({
             <Field label="Name" value={newUser.name} disabled={!canManageUsers} onChange={(name) => setNewUser((current) => ({ ...current, name }))} />
             <Field label="E-Mail" type="email" value={newUser.email} disabled={!canManageUsers} onChange={(email) => setNewUser((current) => ({ ...current, email }))} />
             <SelectField label="Rolle" value={newUser.role} disabled={!canManageUsers} options={[["admin", "Administration"], ["editor", "Bearbeitung"], ["viewer", "Nur lesen"]]} onChange={(role) => setNewUser((current) => ({ ...current, role: role as ManagementRole }))} />
-            <button type="button" className="primary" disabled={!canManageUsers || !newUser.name.trim()} onClick={addUser}>Benutzer anlegen</button>
+            <button type="button" className="primary" disabled={!canManageUsers || !newUser.name.trim() || !newUser.email.trim()} onClick={addUser}>Benutzer freischalten</button>
           </div>
         </div>
       ) : null}
