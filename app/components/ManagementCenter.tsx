@@ -95,6 +95,9 @@ type ManagementCenterProps = {
   onTransferListing: (listingId: string) => Promise<void>;
   onDeleteListings: (listingIds: string[]) => Promise<void>;
   notify: (message: string) => void;
+  mode?: "objects" | "administration";
+  createRequestId?: number;
+  requestedListingId?: string;
 };
 
 const LIFECYCLE_LABELS: Record<ListingLifecycleStatus, string> = {
@@ -131,16 +134,24 @@ const MEDIA_KIND_LABELS: Record<ListingMediaKind, string> = {
   tour: "3D-Tour",
 };
 
-const EDITOR_TABS: Array<[EditorTab, string]> = [
-  ["object", "Objektdaten"],
-  ["address", "Adresse"],
-  ["base", "Basis"],
-  ["features", "Ausstattung"],
-  ["energy", "Energie"],
-  ["texts", "Beschreibungen"],
-  ["appointments", "Termine"],
-  ["export", "Export"],
+const WORKFLOW_STEPS: Array<{
+  tab: EditorTab;
+  label: string;
+  description: string;
+}> = [
+  { tab: "object", label: "Grunddaten", description: "Art und Status" },
+  { tab: "address", label: "Adresse", description: "Lage und Sichtbarkeit" },
+  { tab: "base", label: "Haus & Preis", description: "Flächen und Konditionen" },
+  { tab: "features", label: "Medien & Details", description: "Bilder und Ausstattung" },
+  { tab: "texts", label: "KI-Texte", description: "Exposé-Inhalte" },
+  { tab: "export", label: "Prüfen & Veröffentlichen", description: "Portale und Übergabe" },
 ];
+
+function workflowIndex(tab: EditorTab): number {
+  if (tab === "energy") return 3;
+  if (tab === "appointments") return 5;
+  return WORKFLOW_STEPS.findIndex((step) => step.tab === tab);
+}
 
 function uid(prefix: string): string {
   const random = globalThis.crypto?.randomUUID?.()
@@ -352,11 +363,20 @@ export default function ManagementCenter({
   onTransferListing,
   onDeleteListings,
   notify,
+  mode = "objects",
+  createRequestId = 0,
+  requestedListingId = "",
 }: ManagementCenterProps) {
   const management = state.management;
-  const [section, setSection] = useState<ManagementSection>("objects");
-  const [showCreateWizard, setShowCreateWizard] = useState(false);
-  const [activeListingId, setActiveListingId] = useState("");
+  const [section, setSection] = useState<ManagementSection>(
+    mode === "administration" ? "company" : "objects",
+  );
+  const [showCreateWizard, setShowCreateWizard] = useState(
+    mode === "objects" && createRequestId > 0,
+  );
+  const [activeListingId, setActiveListingId] = useState(
+    mode === "objects" ? requestedListingId : "",
+  );
   const [editorTab, setEditorTab] = useState<EditorTab>("object");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [query, setQuery] = useState("");
@@ -414,6 +434,12 @@ export default function ManagementCenter({
   const canManageCompany = currentUser
     ? managementPermission(currentUser.role, "manage-company")
     : false;
+  const effectiveRole = authenticatedUser?.role ?? currentUser?.role ?? "viewer";
+  const availableSections: Array<[ManagementSection, string]> = mode === "administration"
+    ? effectiveRole === "admin"
+      ? [["company", "Firmendaten"], ["users", "Benutzer & Rollen"], ["audit", "Aktivitäten"]]
+      : []
+    : [["objects", "Objektzentrale"], ["files", "Vorlagen & Dateien"], ["portals", "Portale"], ["reports", "Importberichte"]];
   const visibleFolders = useMemo(() => {
     if (!management || !currentUser) return [];
     return management.fileFolders.filter((folder) => (
@@ -487,6 +513,31 @@ export default function ManagementCenter({
   const activeListing = activeEntry?.listing;
   const activeProject = activeEntry?.project;
   const activeDetails = activeListing?.management?.details;
+  const currentWorkflowIndex = Math.max(0, workflowIndex(editorTab));
+  const workflowCompletion = activeListing?.management && activeDetails
+    ? [
+        Boolean(activeListing.texts.title.trim() && activeDetails.objectCategory),
+        Boolean(activeDetails.zip.trim() && activeDetails.city.trim()),
+        activeDetails.objectCategory === "land"
+          ? activeDetails.plotArea > 0
+          : activeDetails.livingArea > 0 && activeDetails.rooms > 0,
+        activeListing.management.media.some((media) => media.released),
+        Boolean(
+          activeListing.texts.title.trim()
+          && activeListing.texts.description.trim()
+          && activeListing.texts.location.trim()
+        ),
+        Boolean(
+          activeListing.management.released
+          && activeListing.management.portals.some((portal) => portal.enabled)
+        ),
+      ]
+    : [false, false, false, false, false, false];
+  const completedWorkflowSteps = workflowCompletion.filter(Boolean).length;
+  const nextWorkflowStep = WORKFLOW_STEPS[Math.min(
+    WORKFLOW_STEPS.length - 1,
+    currentWorkflowIndex + 1,
+  )];
 
   const record = (
     current: StudioState,
@@ -1239,9 +1290,13 @@ export default function ManagementCenter({
     <section className="management-shell">
       <header className="management-header">
         <div>
-          <span className="eyebrow">Immobilienverwaltung</span>
-          <h2>Objekte, Portale und Organisation</h2>
-          <p>{rows.length} Objekte · {rows.filter((row) => row.management.lifecycle === "online").length} online · {rows.filter((row) => row.management.archivedAt).length} archiviert</p>
+          <span className="eyebrow">{mode === "administration" ? "Administration" : "Objektbestand"}</span>
+          <h2>{mode === "administration" ? "Organisation und Zugriffsrechte" : "Alle Objektakten zentral verwalten"}</h2>
+          <p>
+            {mode === "administration"
+              ? "Firmendaten, Benutzerrollen und Aktivitäten nachvollziehbar an einem Ort."
+              : `${rows.length} Objekte · ${rows.filter((row) => row.management.lifecycle === "online").length} online · ${rows.filter((row) => row.management.archivedAt).length} archiviert`}
+          </p>
         </div>
         <div className="management-user-switch">
           <span>Persönlich angemeldet</span>
@@ -1257,15 +1312,7 @@ export default function ManagementCenter({
       </header>
 
       <nav className="management-nav" aria-label="Immobilienverwaltung">
-        {([
-          ["objects", "Objektzentrale"],
-          ["files", "Dateiverwaltung"],
-          ["portals", "Portale"],
-          ["reports", "Importberichte"],
-          ["company", "Firmendaten"],
-          ["users", "Benutzer"],
-          ["audit", "Aktivitäten"],
-        ] as Array<[ManagementSection, string]>).map(([id, label]) => (
+        {availableSections.map(([id, label]) => (
           <button
             key={id}
             type="button"
@@ -1276,6 +1323,10 @@ export default function ManagementCenter({
           </button>
         ))}
       </nav>
+
+      {mode === "administration" && effectiveRole !== "admin" ? (
+        <div className="management-empty">Dieser Bereich ist ausschließlich für Administratoren sichtbar.</div>
+      ) : null}
 
       {section === "objects" ? (
         <div className="management-object-workspace">
@@ -1410,29 +1461,74 @@ export default function ManagementCenter({
                   <p>{activeListing.externalId} · {activeProject.name}</p>
                 </div>
                 <div className="management-editor-actions">
-                  <button type="button" onClick={generateExpose} disabled={exposeBusy}>{exposeBusy ? "PDF wird erstellt …" : "Exposé-PDF"}</button>
-                  <button type="button" onClick={downloadOpenImmoPackage} disabled={openImmoBusy}>
-                    {openImmoBusy ? "Paket wird erstellt …" : "OpenImmo-Paket"}
-                  </button>
-                  <button type="button" className="primary" onClick={transferActive} disabled={!canTransfer || busy || !uploadAvailable}>
-                    {uploadAvailable ? "OpenImmo übertragen" : "Upload-Helfer offline"}
-                  </button>
+                  {currentWorkflowIndex === WORKFLOW_STEPS.length - 1 ? (
+                    <>
+                      <button type="button" onClick={generateExpose} disabled={exposeBusy}>{exposeBusy ? "PDF wird erstellt …" : "Exposé-PDF"}</button>
+                      <button type="button" onClick={downloadOpenImmoPackage} disabled={openImmoBusy}>
+                        {openImmoBusy ? "Paket wird erstellt …" : "OpenImmo-Paket"}
+                      </button>
+                      <button type="button" className="primary" onClick={transferActive} disabled={!canTransfer || busy || !uploadAvailable}>
+                        {uploadAvailable ? "Jetzt veröffentlichen" : "Upload-Helfer offline"}
+                      </button>
+                    </>
+                  ) : (
+                    <button type="button" className="primary" onClick={() => setEditorTab(nextWorkflowStep.tab)}>
+                      Weiter: {nextWorkflowStep.label}
+                    </button>
+                  )}
                   <button type="button" aria-label="Editor schließen" onClick={() => setActiveListingId("")}>×</button>
                 </div>
               </header>
 
-              <nav className="management-editor-tabs" aria-label="Objektbereiche">
-                {EDITOR_TABS.map(([id, label]) => (
+              <section className="object-workflow-overview" aria-label="Vollständigkeit der Objektakte">
+                <div>
+                  <span>Nächste Aktion</span>
+                  <b>
+                    {completedWorkflowSteps === WORKFLOW_STEPS.length
+                      ? "Objekt prüfen und veröffentlichen"
+                      : `${WORKFLOW_STEPS[workflowCompletion.findIndex((complete) => !complete)]?.label ?? "Objekt prüfen"} vervollständigen`}
+                  </b>
+                </div>
+                <div className="object-workflow-progress">
+                  <span><b>{completedWorkflowSteps}</b> von {WORKFLOW_STEPS.length} Bereichen vollständig</span>
+                  <i><span style={{ width: `${(completedWorkflowSteps / WORKFLOW_STEPS.length) * 100}%` }} /></i>
+                </div>
+                <dl>
+                  <div><dt>Medien</dt><dd>{activeListing.management.media.length}</dd></div>
+                  <div><dt>Termine</dt><dd>{activeListing.management.appointments.length}</dd></div>
+                  <div><dt>Portale</dt><dd>{activeListing.management.portals.filter((portal) => portal.enabled).length}</dd></div>
+                </dl>
+              </section>
+
+              <nav className="management-editor-tabs workflow-tabs" aria-label="Geführter Objektprozess">
+                {WORKFLOW_STEPS.map((step, index) => (
                   <button
-                    key={id}
+                    key={step.tab}
                     type="button"
-                    className={editorTab === id ? "active" : ""}
-                    onClick={() => setEditorTab(id)}
+                    className={`${currentWorkflowIndex === index ? "active" : ""}${workflowCompletion[index] ? " complete" : ""}`}
+                    aria-current={currentWorkflowIndex === index ? "step" : undefined}
+                    onClick={() => setEditorTab(step.tab)}
                   >
-                    {label}
+                    <span>{workflowCompletion[index] ? "✓" : index + 1}</span>
+                    <b>{step.label}</b>
+                    <small>{step.description}</small>
                   </button>
                 ))}
               </nav>
+
+              {currentWorkflowIndex === 3 ? (
+                <nav className="management-editor-subnav" aria-label="Medien und Details">
+                  <button type="button" className={editorTab === "features" ? "active" : ""} onClick={() => setEditorTab("features")}>Ausstattung & Medien</button>
+                  <button type="button" className={editorTab === "energy" ? "active" : ""} onClick={() => setEditorTab("energy")}>Energie & Provision</button>
+                </nav>
+              ) : null}
+
+              {currentWorkflowIndex === 5 ? (
+                <nav className="management-editor-subnav" aria-label="Prüfen und veröffentlichen">
+                  <button type="button" className={editorTab === "export" ? "active" : ""} onClick={() => setEditorTab("export")}>Portale & Export</button>
+                  <button type="button" className={editorTab === "appointments" ? "active" : ""} onClick={() => setEditorTab("appointments")}>Termine & Aktivitäten</button>
+                </nav>
+              ) : null}
 
               <div className="management-editor-body">
                 {editorTab === "object" ? (
@@ -1850,6 +1946,7 @@ export default function ManagementCenter({
                   </div>
                 ) : null}
 
+                {currentWorkflowIndex === 3 ? (
                 <section className="management-media-section">
                   <header>
                     <div>
@@ -1933,7 +2030,27 @@ export default function ManagementCenter({
                       })}
                   </div>
                 </section>
+                ) : null}
               </div>
+              <footer className="management-editor-footer">
+                <button
+                  type="button"
+                  disabled={currentWorkflowIndex === 0}
+                  onClick={() => setEditorTab(WORKFLOW_STEPS[currentWorkflowIndex - 1]?.tab ?? "object")}
+                >
+                  Zurück
+                </button>
+                <span>Schritt {currentWorkflowIndex + 1} von {WORKFLOW_STEPS.length}</span>
+                {currentWorkflowIndex < WORKFLOW_STEPS.length - 1 ? (
+                  <button type="button" className="primary" onClick={() => setEditorTab(nextWorkflowStep.tab)}>
+                    Weiter: {nextWorkflowStep.label}
+                  </button>
+                ) : (
+                  <button type="button" className="primary" onClick={transferActive} disabled={!canTransfer || busy || !uploadAvailable}>
+                    {uploadAvailable ? "Jetzt veröffentlichen" : "Upload-Helfer offline"}
+                  </button>
+                )}
+              </footer>
             </article>
           ) : null}
         </div>

@@ -9,6 +9,7 @@ import { PreflightPanel } from "./components/PreflightPanel";
 import { SevenDayWorkCenter } from "./components/SevenDayWorkCenter";
 import { UploadJobCenter } from "./components/UploadJobCenter";
 import ManagementCenter from "./components/ManagementCenter";
+import StudioDashboard from "./components/StudioDashboard";
 import {
   housePriceCatalogEntries,
   resolveHousePrice,
@@ -111,9 +112,12 @@ import type {
   TotalSyncProjectTask,
   TotalSyncRun,
   TotalSyncScope,
+  ManagementRole,
 } from "./types";
 
-type Tab = "management" | "houses" | "project" | "preview" | "renewal" | "jobs" | "settings";
+type Tab = "overview" | "management" | "houses" | "project" | "preview" | "renewal" | "jobs" | "settings";
+type MainSection = "overview" | "objects" | "library" | "work" | "administration";
+type AdminView = "organization" | "connections";
 type MediaLibraryKind = "house" | "floorplan" | "interior" | "location" | "marketing";
 
 type MediaLibraryItem = {
@@ -135,6 +139,42 @@ type MediaLibraryItem = {
   referenceCount?: number;
   imageUrl: string;
 };
+
+function mainSectionForTab(tab: Tab): MainSection {
+  if (tab === "overview") return "overview";
+  if (tab === "management" || tab === "project" || tab === "preview") return "objects";
+  if (tab === "houses") return "library";
+  if (tab === "renewal" || tab === "jobs") return "work";
+  return "administration";
+}
+
+function saveStatus(
+  label: string,
+  conflictRevision: number | null,
+): { tone: "saving" | "saved" | "conflict" | "offline" | "error"; label: string } {
+  const normalized = label.toLocaleLowerCase("de-DE");
+  if (conflictRevision !== null || normalized.includes("konflikt")) {
+    return { tone: "conflict", label: "Speicherkonflikt" };
+  }
+  if (
+    normalized.includes("wird")
+    || normalized.includes("werden")
+    || normalized.includes("vorbereitet")
+  ) {
+    return { tone: "saving", label: "Wird gespeichert …" };
+  }
+  if (
+    normalized.includes("fehlgeschlagen")
+    || normalized.includes("konnte nicht")
+    || normalized.includes("fehler")
+  ) {
+    return { tone: "error", label: "Speichern nicht möglich" };
+  }
+  if (normalized.includes("lokal") || normalized.includes("browser")) {
+    return { tone: "offline", label: "Nur lokal gespeichert" };
+  }
+  return { tone: "saved", label: "Alles gespeichert" };
+}
 
 type MediaLibraryGroup = { name: string; count: number };
 type MediaLibraryDuplicateGroup = {
@@ -673,7 +713,10 @@ function snapshotTime(value: string): number {
 }
 
 export default function InseratStudio() {
-  const [tab, setTab] = useState<Tab>("management");
+  const [tab, setTab] = useState<Tab>("overview");
+  const [adminView, setAdminView] = useState<AdminView>("organization");
+  const [managementCreateRequest, setManagementCreateRequest] = useState(0);
+  const [requestedListingId, setRequestedListingId] = useState("");
   const [state, setState] = useState<StudioState>(initialState);
   const [cloudSession, setCloudSession] = useState<CloudSession | null>(null);
   const [cloudAccessError, setCloudAccessError] = useState("");
@@ -682,8 +725,10 @@ export default function InseratStudio() {
   const cloudQueueRef = useRef<Promise<void>>(Promise.resolve());
   const latestStateRef = useRef(state);
   latestStateRef.current = state;
-  const managementReadOnly =
-    (cloudSession?.role ?? currentManagementUser(state)?.role) === "viewer";
+  const currentRole: ManagementRole =
+    cloudSession?.role ?? currentManagementUser(state)?.role ?? "viewer";
+  const managementReadOnly = currentRole === "viewer";
+  const canAdminister = currentRole === "admin";
   const [ready, setReady] = useState(false);
   const [saveLabel, setSaveLabel] = useState("Lokaler Speicher wird vorbereitet …");
   const [activeHouseId, setActiveHouseId] = useState("");
@@ -752,15 +797,43 @@ export default function InseratStudio() {
   const addressEditorRef = useRef<HTMLDivElement>(null);
 
   const selectWorkspaceTab = (nextTab: Tab) => {
-    if (managementReadOnly && nextTab !== "management") {
-      setNotice("Der aktuell gewählte Benutzer hat ausschließlich Leserechte.");
+    if (managementReadOnly && !["overview", "management"].includes(nextTab)) {
+      setNotice("In der Nur-Lese-Rolle sind Übersicht und Objektbestand verfügbar.");
+      return;
+    }
+    if (!canAdminister && nextTab === "settings") {
+      setNotice("Die Administration ist ausschließlich für Administratoren sichtbar.");
       return;
     }
     if (nextTab === "renewal") setRenewalNow(new Date());
     if (nextTab === "management") {
       setState((current) => normalizeStudioManagementState(current));
     }
+    setManagementCreateRequest(0);
+    setRequestedListingId("");
     setTab(nextTab);
+  };
+
+  const openObjectCenter = () => {
+    setRequestedListingId("");
+    selectWorkspaceTab("management");
+  };
+
+  const openObjectCreation = () => {
+    if (managementReadOnly) {
+      setNotice("In der Nur-Lese-Rolle können keine Objekte angelegt werden.");
+      return;
+    }
+    setState((current) => normalizeStudioManagementState(current));
+    setRequestedListingId("");
+    setManagementCreateRequest((request) => request + 1);
+    setTab("management");
+  };
+
+  const openManagementListing = (listingId: string) => {
+    setState((current) => normalizeStudioManagementState(current));
+    setRequestedListingId(listingId);
+    setTab("management");
   };
 
   const selectActiveHouse = (houseId: string) => {
@@ -1205,6 +1278,11 @@ export default function InseratStudio() {
     renewalNow,
     renewalScope,
   );
+  const activeMainSection = mainSectionForTab(tab);
+  const visibleSaveStatus = saveStatus(saveLabel, cloudConflictRevision);
+  const openJobCount = state.totalSyncRun?.tasks.reduce((count, task) => (
+    count + (task.listingJobs ?? []).filter((job) => job.status !== "uploaded").length
+  ), 0) ?? 0;
   const renewalIncompleteProjectCount = renewalScopedProjects.length - renewalReadyProjects.length;
   const renewalEffectivePromotionCount = resumableTotalSync
     && activeRunIsSevenDay
@@ -4813,10 +4891,14 @@ export default function InseratStudio() {
         </div>
         <div className="topbar-account">
           <div
-            className="storage-pill"
-            title={cloudSession ? CLOUD_STORAGE_LABEL : `${STORAGE_ID} · lokale Rückfallebene`}
+            className={`storage-pill ${visibleSaveStatus.tone}`}
+            title={`${saveLabel} · ${cloudSession ? CLOUD_STORAGE_LABEL : `${STORAGE_ID} · lokale Rückfallebene`}`}
           >
-            <i /> {saveLabel}
+            <i />
+            <span>
+              <b>{visibleSaveStatus.label}</b>
+              <small>{saveLabel}</small>
+            </span>
           </div>
           {cloudSession ? (
             <div className="session-pill">
@@ -4834,59 +4916,87 @@ export default function InseratStudio() {
         </div>
       </header>
 
-      <section className="hero-panel" aria-labelledby="studio-hero-title">
-        <div className="hero-copy">
-          <span className="eyebrow">Vom Grundstück zum fertigen Entwurf</span>
-          <h1 id="studio-hero-title">
-            Vier Inserate.
-            <span>Eine Adresse.</span>
-          </h1>
-          <p>
-            <strong>Volle Kontrolle:</strong> Adresse erfassen, vier Haustypen wählen,
-            Objekte vollständig verwalten und als OpenImmo-Paket bereitstellen.
-          </p>
-        </div>
-        <dl className="workflow-summary" aria-label="Aktueller Projektstatus">
-          <div>
-            <dt>Haustypen</dt>
-            <dd>{activeHouses.length}<small> / {MAX_HOUSE_TEMPLATES}</small></dd>
-          </div>
-          <div>
-            <dt>Ausgewählt</dt>
-            <dd>{activeSelectedHouseIds.length}<small> / 4</small></dd>
-          </div>
-          <div>
-            <dt>Entwürfe</dt>
-            <dd>{activeProject.listings.length}</dd>
-          </div>
-        </dl>
-      </section>
-
-      <nav className="step-nav" aria-label="Arbeitsbereiche">
+      <nav className="main-navigation" aria-label="Hauptnavigation">
         {([
-          ["management", "01", "Objekte", "Immobilienverwaltung"],
-          ["houses", "02", "Haustypen", "Haustypen und Bilder"],
-          ["project", "03", "Adressen", "Adresse und Auswahl"],
-          ["preview", "04", "Texte", "Texte und Vorschau"],
-          ["renewal", "05", "7-Tage", "7-Tage-Zentrale"],
-          ["jobs", "06", "Aufträge", "Aufträge und Fehler"],
-          ["settings", "07", "Upload", "Export und Upload"],
-        ] as Array<[Tab, string, string, string]>).map(([id, number, label, accessibleLabel]) => (
+          ["overview", "Übersicht", "Aufgaben und Status"],
+          ["management", "Objekte", "Objektbestand und Anlage"],
+          ["houses", "Vorlagen & Medien", "Haustypen und Medienbibliothek"],
+          ["renewal", "Aufträge", "Erneuerungen, Läufe und Fehler"],
+          ["settings", "Administration", "Organisation und Schnittstellen"],
+        ] as Array<[Tab, string, string]>)
+          .filter(([id]) => {
+            if (id === "settings") return canAdminister;
+            if (managementReadOnly) return id === "overview" || id === "management";
+            return true;
+          })
+          .map(([id, label, description]) => (
           <button
             type="button"
             key={id}
-            className={tab === id ? "active" : ""}
-            disabled={managementReadOnly && id !== "management"}
-            aria-current={tab === id ? "page" : undefined}
-            aria-label={`${number}. ${accessibleLabel}`}
-            title={accessibleLabel}
+            className={mainSectionForTab(id) === activeMainSection ? "active" : ""}
+            aria-current={mainSectionForTab(id) === activeMainSection ? "page" : undefined}
+            title={description}
             onClick={() => selectWorkspaceTab(id)}
           >
-            <span className="step-number" aria-hidden="true">{number}</span>
-            <span className="step-label">{label}</span>
+            <span>{label}</span>
+            <small>{description}</small>
           </button>
         ))}
       </nav>
+
+      {activeMainSection === "objects" && !managementReadOnly ? (
+        <nav className="context-navigation" aria-label="Objektwerkzeuge">
+          {([
+            ["management", "Objektbestand"],
+            ["project", "Grundstück + 4 Inserate"],
+            ["preview", "Textentwürfe"],
+          ] as Array<[Tab, string]>).map(([id, label]) => (
+            <button type="button" key={id} className={tab === id ? "active" : ""} onClick={() => selectWorkspaceTab(id)}>{label}</button>
+          ))}
+        </nav>
+      ) : null}
+
+      {activeMainSection === "work" ? (
+        <nav className="context-navigation" aria-label="Auftragswerkzeuge">
+          <button type="button" className={tab === "renewal" ? "active" : ""} onClick={() => selectWorkspaceTab("renewal")}>7-Tage-Zentrale</button>
+          <button type="button" className={tab === "jobs" ? "active" : ""} onClick={() => selectWorkspaceTab("jobs")}>Läufe & Fehler</button>
+        </nav>
+      ) : null}
+
+      {activeMainSection === "administration" ? (
+        <nav className="context-navigation" aria-label="Administration">
+          <button type="button" className={adminView === "organization" ? "active" : ""} onClick={() => setAdminView("organization")}>Organisation & Benutzer</button>
+          <button type="button" className={adminView === "connections" ? "active" : ""} onClick={() => setAdminView("connections")}>Schnittstellen & Sicherung</button>
+        </nav>
+      ) : null}
+
+      {activeMainSection !== "overview" ? (
+        <section className="section-context-header">
+          <div>
+            <span className="eyebrow">
+              {activeMainSection === "objects"
+                ? "Objektarbeit"
+                : activeMainSection === "library"
+                  ? "Inhaltsbibliothek"
+                  : activeMainSection === "work"
+                    ? "Automatisierung"
+                    : "Systemverwaltung"}
+            </span>
+            <h1>
+              {activeMainSection === "objects"
+                ? "Objekte sinnvoll vom Entwurf bis zum Portal führen"
+                : activeMainSection === "library"
+                  ? "Vorlagen und Medien zentral vorbereiten"
+                  : activeMainSection === "work"
+                    ? "Aufträge, Erneuerungen und Fehler im Blick behalten"
+                    : "Inserate Studio sicher verwalten"}
+            </h1>
+          </div>
+          {activeMainSection === "objects" && !managementReadOnly ? (
+            <button type="button" className="primary" onClick={openObjectCreation}>+ Neues Objekt</button>
+          ) : null}
+        </section>
+      ) : null}
 
       {notice ? (
         <div className="notice" role="status">
@@ -4912,8 +5022,24 @@ export default function InseratStudio() {
         </div>
       ) : null}
 
+      {tab === "overview" ? (
+        <StudioDashboard
+          state={state}
+          role={currentRole}
+          renewalEntries={renewalEntries}
+          openJobCount={openJobCount}
+          onCreateObject={openObjectCreation}
+          onOpenObjects={openObjectCenter}
+          onOpenListing={openManagementListing}
+          onOpenRenewals={() => selectWorkspaceTab("renewal")}
+          onOpenJobs={() => selectWorkspaceTab("jobs")}
+          onOpenLibrary={() => selectWorkspaceTab("houses")}
+        />
+      ) : null}
+
       {tab === "management" ? (
         <ManagementCenter
+          key={`objects-${managementCreateRequest}-${requestedListingId}`}
           state={state}
           setState={setState}
           uploadAvailable={helperOnline && Boolean(ftpUser && ftpPassword)}
@@ -4922,6 +5048,9 @@ export default function InseratStudio() {
           onDeleteListings={deleteManagementListings}
           notify={setNotice}
           authenticatedUser={cloudSession}
+          mode="objects"
+          createRequestId={managementCreateRequest}
+          requestedListingId={requestedListingId}
         />
       ) : null}
 
@@ -5885,7 +6014,22 @@ export default function InseratStudio() {
         />
       ) : null}
 
-      {tab === "settings" ? (
+      {tab === "settings" && adminView === "organization" ? (
+        <ManagementCenter
+          key="administration"
+          state={state}
+          setState={setState}
+          uploadAvailable={helperOnline && Boolean(ftpUser && ftpPassword)}
+          busy={uploading || totalSyncBusy}
+          onTransferListing={transferManagementListing}
+          onDeleteListings={deleteManagementListings}
+          notify={setNotice}
+          authenticatedUser={cloudSession}
+          mode="administration"
+        />
+      ) : null}
+
+      {tab === "settings" && adminView === "connections" ? (
         <>
           <section className="workspace two-column settings-layout">
           <div className="content-card">

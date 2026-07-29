@@ -51,10 +51,12 @@ const CATEGORY_OPTIONS: Array<{
 ];
 
 const STEPS = [
-  ["Objektart", "Rubrik und Grundlage"],
+  ["Grunddaten", "Objektart und Grundlage"],
   ["Adresse", "Lage und Sichtbarkeit"],
-  ["Kennzahlen", "Preis, Flächen und Nutzung"],
-  ["Kontakt & Export", "Eigentümer und Portale"],
+  ["Haus & Preis", "Flächen und Konditionen"],
+  ["Medien", "Bilder und Unterlagen"],
+  ["KI-Texte", "Kontakt und Inhalte"],
+  ["Prüfen", "Freigabe und Portale"],
 ] as const;
 
 function numberValue(value: string): number {
@@ -164,6 +166,7 @@ export default function ObjectCreationWizard({
   const category = CATEGORY_OPTIONS.find((item) => (
     item.id === draft.objectCategory
   )) ?? CATEGORY_OPTIONS[0];
+  const selectedTemplate = activeHouses.find((house) => house.id === draft.templateId);
 
   const patch = (value: Partial<DirectObjectDraft>) => {
     setDraft((current) => ({ ...current, ...value }));
@@ -449,8 +452,35 @@ export default function ObjectCreationWizard({
           {step === 3 ? (
             <>
               <div className="object-wizard-section-heading">
-                <div><span className="eyebrow">Interne Informationen</span><h3>Eigentümer und Portalfreigabe</h3></div>
-                <p>Kontaktdaten bleiben intern. Portale erhalten das Objekt erst bei einer späteren Übertragung.</p>
+                <div><span className="eyebrow">Medienbereich</span><h3>Bilder und Unterlagen vorbereiten</h3></div>
+                <p>Vorlagenbilder werden direkt übernommen. Weitere Bilder, Grundrisse, PDFs, Videos und 3D-Touren ergänzt du danach in der Objektakte.</p>
+              </div>
+              <div className="object-wizard-media-summary">
+                <div className="object-wizard-media-icon">▧</div>
+                <div>
+                  <span>Gewählte Grundlage</span>
+                  <h4>{selectedTemplate?.name ?? "Freies Objekt ohne Medienvorlage"}</h4>
+                  <p>
+                    {selectedTemplate
+                      ? `${selectedTemplate.images.length} Bilder werden in die neue Objektakte übernommen.`
+                      : "Die Medienakte wird leer angelegt und kann anschließend befüllt werden."}
+                  </p>
+                </div>
+                <b>{selectedTemplate?.images.length ?? 0} Medien</b>
+              </div>
+              <div className="object-wizard-checklist">
+                <div><i>1</i><span><b>Titelbild festlegen</b><small>Reihenfolge und Freigabe direkt in der Objektakte ändern</small></span></div>
+                <div><i>2</i><span><b>Grundrisse & Dokumente</b><small>Dateien getrennt kennzeichnen und für Exposés freigeben</small></span></div>
+                <div><i>3</i><span><b>Links & Touren</b><small>Video- und 3D-Links objektbezogen hinterlegen</small></span></div>
+              </div>
+            </>
+          ) : null}
+
+          {step === 4 ? (
+            <>
+              <div className="object-wizard-section-heading">
+                <div><span className="eyebrow">KI-Texte & Kontakt</span><h3>Inhalte vorbereiten</h3></div>
+                <p>Die KI-Texte werden nach der Anlage in der Objektakte erzeugt und geprüft. Hier ordnest du den internen Kontakt zu.</p>
               </div>
               <div className="management-form-grid four">
                 <label className="management-field">
@@ -478,6 +508,21 @@ export default function ObjectCreationWizard({
               </label>
               <div className="management-checkbox-grid">
                 <Toggle label="Kontakt ist Eigentümer" checked={draft.ownerIsPropertyOwner} onChange={(ownerIsPropertyOwner) => patch({ ownerIsPropertyOwner })} />
+              </div>
+              <div className="object-wizard-ai-note">
+                <span>AI</span>
+                <div><b>Nächster Schritt nach der Anlage</b><p>Überschrift, Objektbeschreibung, Ausstattung, Lage und sonstige Angaben werden in einem eigenen Prüfschritt bearbeitet.</p></div>
+              </div>
+            </>
+          ) : null}
+
+          {step === 5 ? (
+            <>
+              <div className="object-wizard-section-heading">
+                <div><span className="eyebrow">Abschlussprüfung</span><h3>Freigabe und Portale</h3></div>
+                <p>Die Objektakte wird jetzt angelegt. Eine Übertragung erfolgt erst, wenn du sie später ausdrücklich veröffentlichst.</p>
+              </div>
+              <div className="management-checkbox-grid">
                 <Toggle label="Objekt nach Anlage freigeben" checked={draft.released} onChange={(released) => patch({ released })} />
               </div>
               <div className="object-wizard-portals">
@@ -501,6 +546,7 @@ export default function ObjectCreationWizard({
               <div className="object-wizard-review">
                 <div><span>Objektart</span><b>{category.title}</b></div>
                 <div><span>Ort</span><b>{draft.zip} {draft.city}</b></div>
+                <div><span>Medien</span><b>{selectedTemplate?.images.length ?? 0} vorbereitet</b></div>
                 <div><span>Freigabe</span><b>{draft.released ? "Freigegeben" : "Entwurf"}</b></div>
                 <div><span>Portale</span><b>{draft.portalIds.length} vorgemerkt</b></div>
               </div>

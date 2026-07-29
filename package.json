@@ -1,6 +1,6 @@
 {
   "name": "inserate-studio",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "private": true,
   "packageManager": "pnpm@11.9.0",
   "engines": {
@@ -15,7 +15,7 @@
     "catalog:install": "node scripts/install-bundled-house-catalog.mjs --replace-active",
     "db:generate": "drizzle-kit generate",
     "test": "vinext build && node --test tests/*.test.mjs",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern tmp"
   },
   "dependencies": {
     "basic-ftp": "^6.0.1",
