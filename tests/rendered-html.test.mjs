@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { APP_VERSION } from "../app/lib/app-version.mjs";
+
 async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
@@ -12,11 +14,12 @@ async function render() {
   );
 }
 
-test("renders the isolated Fabian&Pascal studio shell", async () => {
+test("renders the isolated Inserate Studio shell", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   const html = await response.text();
-  assert.match(html, /<title>Fabian(?:&|&amp;)Pascal Inseratestudio<\/title>/i);
-  assert.match(html, /Fabian(?:&|&amp;)Pascal Inseratestudio wird vorbereitet/i);
+  assert.match(html, /<title>Inserate Studio<\/title>/i);
+  assert.match(html, /Inserate Studio wird vorbereitet/i);
+  assert.ok(html.includes(`Geöffnete Inserate-Studio-Version ${APP_VERSION}`));
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/i);
 });

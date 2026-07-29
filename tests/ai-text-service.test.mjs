@@ -7,11 +7,20 @@ import {
   createOpenAiRequest,
   extractImageCaptions,
   extractListingTexts,
+  generateAiListing,
   looksLikeOpenAiApiKey,
+  normalizeOpenAiUsage,
+  validateEditorialQuality,
+  validateHeadlineDiversity,
   validateListingTexts,
   validateLocationPrivacy,
   validateNovelty,
 } from "../ai-text-service.mjs";
+import {
+  headlineSimilarity,
+  headlinesAreTooSimilar,
+  removePrivateAddressFromHeadline,
+} from "../app/lib/headline-diversity.js";
 
 const longText = (sentence, minimum) => {
   let value = sentence;
@@ -20,11 +29,33 @@ const longText = (sentence, minimum) => {
 };
 
 const validTexts = {
-  title: "Ein Zuhause mit Weitblick: durchdacht bauen in Schulzendorf",
+  title: "Ein Zuhause mit Weitblick in Schulzendorf",
   description: longText("Der projektierte Entwurf verbindet klare Architektur mit flexibel nutzbaren Räumen und einer sorgfältig abgestimmten Planung für den Familienalltag.", 1250),
   equipment: longText("Die geplante Ausstattung kombiniert eine moderne Wärmepumpe, komfortable Flächen und individuell zu vereinbarende Materialien gemäß Bau- und Leistungsbeschreibung.", 1550),
   location: longText("Das Grundstück liegt in Schulzendorf und bietet einen stimmigen Rahmen für das geplante Zuhause; alle weiteren Details werden anhand bestätigter Standortdaten beurteilt.", 550),
   other: longText("Das Haus ist projektiert; maßgeblich sind die konkrete Planung, die Grundstücksprüfung und die individuell vereinbarte Bau- und Leistungsbeschreibung.", 600),
+};
+
+const repeatParagraph = (opening, minimum) => {
+  const sentence = "Die Planung verbindet angenehme Proportionen mit alltagstauglichen Wegen und flexibel nutzbaren Bereichen.";
+  let value = opening;
+  while (value.length < minimum) value += ` ${sentence}`;
+  return value;
+};
+
+const validGeneratedTexts = {
+  title: "Die Couch bekommt ein Zimmer",
+  description: [
+    repeatParagraph("Morgens beginnt der Tag entspannt und mit Platz für alle.", 330),
+    repeatParagraph("Im Mittelpunkt stehen gemeinsame Stunden und kurze Wege.", 330),
+    repeatParagraph("Ruhige Bereiche schaffen Raum für Arbeit und Erholung.", 330),
+    repeatParagraph("Persönliche Wünsche fließen in die weitere Abstimmung ein.", 330),
+  ].join("\n\n"),
+  location: [
+    repeatParagraph("Schulzendorf bietet den passenden Rahmen für den neuen Lebensmittelpunkt.", 190),
+    repeatParagraph("Der Standort wird anhand der bestätigten Grundstücksdaten sorgfältig eingeordnet.", 190),
+    repeatParagraph("Alle Einzelheiten zur Umgebung werden im persönlichen Gespräch nachvollziehbar abgestimmt.", 190),
+  ].join("\n\n"),
 };
 
 test("removes the exact house number before building the AI source data", () => {
@@ -41,13 +72,61 @@ test("removes the exact house number before building the AI source data", () => 
 });
 
 test("uses the Responses API quality settings and a strict text schema", () => {
-  const request = createOpenAiRequest({ model: "gpt-5.6-sol", project: {}, house: {} });
+  const request = createOpenAiRequest({
+    model: "gpt-5.6-sol",
+    project: {},
+    house: {},
+    titlesToAvoid: ["Couch sucht endlich mehr Platz"],
+    headlineCycleId: "cycle-1",
+  });
   assert.equal(request.model, "gpt-5.6-sol");
   assert.equal(request.store, false);
   assert.equal(request.reasoning.effort, "medium");
   assert.equal(request.text.verbosity, "high");
   assert.equal(request.text.format.type, "json_schema");
-  assert.deepEqual(request.text.format.schema.required, ["title", "description", "equipment", "location", "other"]);
+  assert.deepEqual(request.text.format.schema.required, ["title", "description", "location"]);
+  assert.equal("equipment" in request.text.format.schema.properties, false);
+  assert.equal("other" in request.text.format.schema.properties, false);
+  assert.match(request.text.format.schema.properties.title.description, /3 bis 8 Wörtern/);
+  assert.match(request.input[0].content[0].text, /niemals die gelieferte Haus- oder Modellbezeichnung/);
+  assert.match(request.input[0].content[0].text, /modern und leicht humorvoll/);
+  assert.match(request.input[0].content[0].text, /mindestens vier/);
+  assert.match(request.input[1].content[0].text, /Couch sucht endlich mehr Platz/);
+  assert.match(request.text.format.schema.properties.description.description, /interessantem Einstieg/);
+});
+
+test("assigns different headline and body directions within one generation batch", () => {
+  const first = buildSourceData({
+    project: {},
+    house: {},
+    headlineCycleId: "shared-cycle",
+    listingPosition: 1,
+  });
+  const second = buildSourceData({
+    project: {},
+    house: {},
+    headlineCycleId: "shared-cycle",
+    listingPosition: 2,
+  });
+  assert.notEqual(
+    first.writingDirection.headlineDirection,
+    second.writingDirection.headlineDirection,
+  );
+  assert.notEqual(
+    first.writingDirection.bodyProfileId,
+    second.writingDirection.bodyProfileId,
+  );
+  const nextVersion = buildSourceData({
+    project: {},
+    house: {},
+    headlineCycleId: "shared-cycle",
+    listingPosition: 1,
+    previousWritingProfile: first.writingDirection.bodyProfileId,
+  });
+  assert.notEqual(
+    first.writingDirection.bodyProfileId,
+    nextVersion.writingDirection.bodyProfileId,
+  );
 });
 
 test("uses GPT-5.6 Luna as the economical default", () => {
@@ -85,11 +164,213 @@ test("accepts complete texts and rejects short or Markdown-formatted output", ()
   assert.ok(errors.some((value) => value.includes("Markdown")));
 });
 
+test("requires engaging openings and readable paragraph structure", () => {
+  const engagingTexts = {
+    ...validTexts,
+    description: [
+      "Morgens Ruhe, nachmittags Leben und abends genug Platz für alle.",
+      "Der geplante Grundriss verbindet gemeinschaftliche Bereiche mit Rückzugsorten.",
+      "Die Räume lassen sich im Rahmen der Planung auf den Alltag abstimmen.",
+      "Im persönlichen Gespräch werden Haus, Grundstück und Wünsche zusammengeführt.",
+    ].join("\n\n"),
+    equipment: ["Komfort im Alltag", "Technik mit Nutzen", "Individuelle Auswahl", "Klare Planung", "Verlässliche Abstimmung"].join("\n\n"),
+    location: ["Schulzendorf bildet den Rahmen.", "Bestätigte Fakten werden alltagsnah eingeordnet.", "Die Planung berücksichtigt das Grundstück."].join("\n\n"),
+    other: ["Das Haus ist projektiert.", "Kosten werden individuell geprüft.", "Maßgeblich sind die Vereinbarungen."].join("\n\n"),
+  };
+  assert.deepEqual(validateEditorialQuality(engagingTexts), []);
+
+  const flatTexts = {
+    ...engagingTexts,
+    description: "Dieses projektierte Haus bietet einen klassischen Einstieg.\n\nZweiter Absatz.\n\nDritter Absatz.\n\nVierter Absatz.",
+    equipment: "Nur ein langer Ausstattungsblock.",
+  };
+  const errors = validateEditorialQuality(flatTexts);
+  assert.ok(errors.some((value) => value.includes("zu formelhaft")));
+  assert.ok(errors.some((value) => value.includes("Ausstattung")));
+});
+
+test("requires short headlines without the configured house designation", () => {
+  assert.deepEqual(
+    validateListingTexts({ ...validTexts, title: "Mehr Raum für euer Familienleben" }, { name: "Sunshine 125" }),
+    [],
+  );
+  const designationErrors = validateListingTexts(
+    { ...validTexts, title: "Sunshine 125 für die ganze Familie" },
+    { name: "Sunshine 125" },
+  );
+  assert.ok(designationErrors.some((value) => value.includes("Hausbezeichnung")));
+  const punctuationErrors = validateListingTexts(
+    { ...validTexts, title: "Familienglück: Raum für neue Pläne" },
+  );
+  assert.ok(punctuationErrors.some((value) => value.includes("Doppelpunkt")));
+  const forbiddenWordErrors = validateListingTexts(
+    { ...validTexts, title: "Klare Sache für Familienmenschen" },
+  );
+  assert.ok(forbiddenWordErrors.some((value) => value.includes("ausgeschlossene Wort")));
+  const forbiddenWordFormErrors = validateListingTexts(
+    { ...validTexts, title: "Klarheit trifft auf Lieblingsplätze" },
+  );
+  assert.ok(forbiddenWordFormErrors.some((value) => value.includes("ausgeschlossene Wort")));
+});
+
+test("rejects repeated, similar and overused headlines", () => {
+  assert.deepEqual(
+    validateHeadlineDiversity(
+      "Die Couch bekommt ein eigenes Zimmer",
+      ["Küche gut, Familienchaos besser"],
+    ),
+    [],
+  );
+  assert.ok(validateHeadlineDiversity(
+    "Die Couch bekommt endlich ein Zimmer",
+    ["Die Couch bekommt ein eigenes Zimmer"],
+  ).some((value) => value.includes("bereits verwendeten")));
+  assert.ok(validateHeadlineDiversity(
+    "Mehr Raum für neue Lieblingsmomente",
+    [],
+  ).some((value) => value.includes("Standardformulierung")));
+  assert.equal(
+    headlinesAreTooSimilar(
+      "Die Couch bekommt endlich ein Zimmer",
+      "Die Couch bekommt ein eigenes Zimmer",
+    ),
+    true,
+  );
+  assert.ok(headlineSimilarity("Küche gut, Familienchaos besser", "Endlich Feierabend mit Garten") < 0.6);
+  assert.equal(
+    removePrivateAddressFromHeadline(
+      "Familienglück in der Bergstraße 27a",
+      { street: "Bergstraße", houseNumber: "27a", zip: "15732" },
+    ),
+    "Familienglück in der",
+  );
+});
+
 test("extracts structured text from a Responses API output block", () => {
   const response = {
     output: [{ content: [{ type: "output_text", text: JSON.stringify(validTexts) }] }],
   };
   assert.deepEqual(extractListingTexts(response), validTexts);
+});
+
+test("normalizes and aggregates Responses API token usage across quality attempts", async () => {
+  assert.deepEqual(normalizeOpenAiUsage({
+    input_tokens: 12.9,
+    output_tokens: "34",
+  }), {
+    inputTokens: 12,
+    outputTokens: 34,
+    requestCount: 1,
+  });
+
+  const originalFetch = globalThis.fetch;
+  const responses = [
+    {
+      output_text: JSON.stringify({ ...validGeneratedTexts, title: "Zu kurz" }),
+      usage: { input_tokens: 100, output_tokens: 200 },
+    },
+    {
+      output_text: JSON.stringify(validGeneratedTexts),
+      usage: { input_tokens: 300, output_tokens: 400 },
+    },
+  ];
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => responses.shift(),
+  });
+
+  try {
+    const result = await generateAiListing({
+      apiKey: "sk-proj-123456789012345678901234567890",
+      model: "gpt-5.6-luna",
+      project: {},
+      house: {},
+    });
+    assert.equal(result.attempts, 2);
+    assert.deepEqual(result.usage, {
+      inputTokens: 400,
+      outputTokens: 600,
+      requestCount: 2,
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("carries accumulated token usage and model on final generation errors", async () => {
+  const originalFetch = globalThis.fetch;
+  const responses = [
+    {
+      output_text: JSON.stringify({ ...validGeneratedTexts, title: "Zu kurz" }),
+      usage: { input_tokens: 50, output_tokens: 60 },
+    },
+    {
+      output_text: JSON.stringify({ ...validGeneratedTexts, title: "Noch kurz" }),
+      usage: { input_tokens: 70, output_tokens: 80 },
+    },
+  ];
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => responses.shift(),
+  });
+
+  try {
+    await assert.rejects(
+      generateAiListing({
+        apiKey: "sk-proj-123456789012345678901234567890",
+        model: "gpt-5.6-terra",
+        project: {},
+        house: {},
+      }),
+      (error) => {
+        assert.equal(error.model, "gpt-5.6-terra");
+        assert.deepEqual(error.usage, {
+          inputTokens: 120,
+          outputTokens: 140,
+          requestCount: 2,
+        });
+        return true;
+      },
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("preserves usage from an unsuccessful Responses API response", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 429,
+    json: async () => ({
+      error: { message: "Rate limit" },
+      usage: { input_tokens: 25, output_tokens: 5 },
+    }),
+  });
+
+  try {
+    await assert.rejects(
+      generateAiListing({
+        apiKey: "sk-proj-123456789012345678901234567890",
+        project: {},
+        house: {},
+      }),
+      (error) => {
+        assert.equal(error.httpStatus, 429);
+        assert.equal(error.model, "gpt-5.6-luna");
+        assert.deepEqual(error.usage, {
+          inputTokens: 25,
+          outputTokens: 5,
+          requestCount: 1,
+        });
+        return true;
+      },
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("rejects a new version that repeats the previous listing", () => {

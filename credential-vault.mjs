@@ -1,18 +1,20 @@
 import { spawn } from "node:child_process";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { APPLICATION_DATA_DIRECTORY } from "./platform-paths.mjs";
 
-const applicationData = process.env.LOCALAPPDATA
-  || join(homedir(), "AppData", "Local");
+const KEYCHAIN_SERVICE = "de.fabian-pascal.inseratstudio.credentials";
+const KEYCHAIN_ACCOUNT = userInfo().username;
+const KEYCHAIN_HELPER_PATH = fileURLToPath(new URL("./macos-keychain.swift", import.meta.url));
 
 export const CREDENTIAL_VAULT_PATH = join(
-  applicationData,
-  "Fabian-Pascal Inseratestudio",
-  "credentials.dpapi",
+  APPLICATION_DATA_DIRECTORY,
+  process.platform === "darwin" ? "credentials.keychain" : "credentials.dpapi",
 );
 const LEGACY_CREDENTIAL_VAULT_PATH = join(
-  applicationData,
+  process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local"),
   "LivingHaus Inseratstudio",
   "credentials.dpapi",
 );
@@ -43,26 +45,33 @@ $plainBytes = [Security.Cryptography.ProtectedData]::Unprotect(
 [Console]::Out.Write([Text.Encoding]::UTF8.GetString($plainBytes))
 `;
 
-function runPowerShell(script, input) {
+function runProcess(executable, args, input = "") {
   return new Promise((resolve, reject) => {
-    const process = spawn(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
-      { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] },
-    );
+    const child = spawn(executable, args, {
+      windowsHide: true,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
     let output = "";
     let errorOutput = "";
-    process.stdout.setEncoding("utf8");
-    process.stderr.setEncoding("utf8");
-    process.stdout.on("data", (chunk) => { output += chunk; });
-    process.stderr.on("data", (chunk) => { errorOutput += chunk; });
-    process.on("error", reject);
-    process.on("close", (code) => {
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => { output += chunk; });
+    child.stderr.on("data", (chunk) => { errorOutput += chunk; });
+    child.on("error", reject);
+    child.on("close", (code) => {
       if (code === 0) resolve(output.trim());
-      else reject(new Error(errorOutput.trim() || "Der Windows-Zugangstresor konnte nicht geöffnet werden."));
+      else reject(new Error(errorOutput.trim() || "Der lokale Zugangstresor konnte nicht geöffnet werden."));
     });
-    process.stdin.end(input, "utf8");
+    child.stdin.end(input, "utf8");
   });
+}
+
+function runPowerShell(script, input) {
+  return runProcess(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
+    input,
+  );
 }
 
 function clean(value, maximum = 500) {
@@ -86,10 +95,54 @@ export function looksLikeOpenAiApiKey(value) {
   return /^sk-[a-zA-Z0-9_-]{20,}$/.test(clean(value, 400));
 }
 
+function keychainService(vaultPath) {
+  return vaultPath === CREDENTIAL_VAULT_PATH
+    ? KEYCHAIN_SERVICE
+    : `${KEYCHAIN_SERVICE}.${Buffer.from(vaultPath).toString("base64url").slice(0, 80)}`;
+}
+
+async function saveMacKeychain(credentials, vaultPath) {
+  await runProcess("/usr/bin/swift", [
+    KEYCHAIN_HELPER_PATH,
+    "save",
+    keychainService(vaultPath),
+    KEYCHAIN_ACCOUNT,
+    "device-only",
+  ], JSON.stringify(credentials));
+}
+
+async function loadMacKeychain(vaultPath) {
+  const value = await runProcess("/usr/bin/swift", [
+    KEYCHAIN_HELPER_PATH,
+    "load",
+    keychainService(vaultPath),
+    KEYCHAIN_ACCOUNT,
+    "device-only",
+  ]);
+  return value || null;
+}
+
+async function clearMacKeychain(vaultPath) {
+  await runProcess("/usr/bin/swift", [
+    KEYCHAIN_HELPER_PATH,
+    "delete",
+    keychainService(vaultPath),
+    KEYCHAIN_ACCOUNT,
+    "device-only",
+  ]);
+}
+
 export async function saveCredentialVault(credentials, vaultPath = CREDENTIAL_VAULT_PATH) {
   const normalized = normalizeCredentials(credentials);
   if (normalized.openAiKey && !looksLikeOpenAiApiKey(normalized.openAiKey)) {
     throw new Error("Der OpenAI API-Schlüssel muss mit sk- beginnen und vollständig eingefügt werden.");
+  }
+  if (process.platform === "darwin") {
+    await saveMacKeychain(normalized, vaultPath);
+    return normalized;
+  }
+  if (process.platform !== "win32") {
+    throw new Error("Der Zugangstresor wird derzeit auf macOS und Windows unterstützt.");
   }
   const protectedText = await runPowerShell(PROTECT_SCRIPT, JSON.stringify(normalized));
   await mkdir(dirname(vaultPath), { recursive: true });
@@ -98,6 +151,18 @@ export async function saveCredentialVault(credentials, vaultPath = CREDENTIAL_VA
 }
 
 export async function loadCredentialVault(vaultPath = CREDENTIAL_VAULT_PATH) {
+  if (process.platform === "darwin") {
+    const plainText = await loadMacKeychain(vaultPath);
+    if (!plainText) return { stored: false, credentials: normalizeCredentials() };
+    return {
+      stored: true,
+      credentials: normalizeCredentials(JSON.parse(plainText)),
+    };
+  }
+  if (process.platform !== "win32") {
+    return { stored: false, credentials: normalizeCredentials() };
+  }
+
   let protectedText;
   try {
     protectedText = await readFile(vaultPath, "utf8");
@@ -126,8 +191,12 @@ export async function loadCredentialVault(vaultPath = CREDENTIAL_VAULT_PATH) {
 }
 
 export async function clearCredentialVault(vaultPath = CREDENTIAL_VAULT_PATH) {
+  if (process.platform === "darwin") {
+    await clearMacKeychain(vaultPath);
+    return;
+  }
   await rm(vaultPath, { force: true });
-  if (vaultPath === CREDENTIAL_VAULT_PATH) {
+  if (vaultPath === CREDENTIAL_VAULT_PATH && process.platform === "win32") {
     await rm(LEGACY_CREDENTIAL_VAULT_PATH, { force: true });
   }
 }

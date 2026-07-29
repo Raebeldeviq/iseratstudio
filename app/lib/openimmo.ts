@@ -1,8 +1,17 @@
 import JSZip from "jszip";
+import { orderHouseImages } from "../../image-sequence.mjs";
+import {
+  fillMissingProjectingDefaults,
+  FIXED_PROVISION_TEXT,
+  IMMOPROFESSIONAL_DEFAULTS,
+} from "../../listing-copy.mjs";
+import { APP_VERSION } from "./app-version.mjs";
 import type {
   GeneratedListing,
   HouseImage,
   HouseTemplate,
+  ListingDetails,
+  ListingMediaItem,
   ProjectInput,
   ProviderSettings,
 } from "../types";
@@ -12,7 +21,49 @@ type PackageInput = {
   listings: GeneratedListing[];
   houses: HouseTemplate[];
   provider: ProviderSettings;
+  promotionImages?: HouseImage[];
+  portalPublicationEnabled?: boolean;
+  // Legacy fields keep older local backups importable.
+  promotionImage?: HouseImage | null;
+  promotionImageEnabled?: boolean;
 };
+
+const MAX_EXPORTED_IMAGES = 14;
+const OPENIMMO_CONDITIONS = new Set([
+  "ERSTBEZUG",
+  "TEIL_VOLLRENOVIERUNGSBED",
+  "NEUWERTIG",
+  "TEIL_VOLLSANIERT",
+  "TEIL_VOLLRENOVIERT",
+  "TEIL_SANIERT",
+  "VOLL_SANIERT",
+  "SANIERUNGSBEDUERFTIG",
+  "BAUFAELLIG",
+  "NACH_VEREINBARUNG",
+  "MODERNISIERT",
+  "GEPFLEGT",
+  "ROHBAU",
+  "ENTKERNT",
+  "ABRISSOBJEKT",
+  "PROJEKTIERT",
+]);
+const OPENIMMO_EQUIPMENT_QUALITIES = new Set(["STANDARD", "GEHOBEN", "LUXUS"]);
+const OPENIMMO_ENERGY_CERTIFICATE_TYPES = new Set(["BEDARF", "VERBRAUCH"]);
+const OPENIMMO_BUILDING_LAWS = new Set([
+  "34_NACHBARSCHAFT",
+  "35_AUSSENGEBIET",
+  "B_PLAN",
+  "KEIN BAULAND",
+  "BAUERWARTUNGSLAND",
+  "LAENDERSPEZIFISCH",
+  "BAULAND_OHNE_B_PLAN",
+]);
+const OPENIMMO_DEVELOPMENT_STATES = new Set([
+  "UNERSCHLOSSEN",
+  "TEILERSCHLOSSEN",
+  "VOLLERSCHLOSSEN",
+  "ORTSUEBLICHERSCHLOSSEN",
+]);
 
 function xml(value: string | number | undefined | null): string {
   return String(value ?? "")
@@ -48,6 +99,69 @@ function houseType(value: string): string {
   return "EINFAMILIENHAUS";
 }
 
+function apartmentType(value: string): string {
+  const normalized = value.toLocaleLowerCase("de-DE");
+  if (normalized.includes("dach")) return "DACHGESCHOSS";
+  if (normalized.includes("maisonette")) return "MAISONETTE";
+  if (normalized.includes("loft") || normalized.includes("atelier")) return "LOFT-STUDIO-ATELIER";
+  if (normalized.includes("penthouse")) return "PENTHOUSE";
+  if (normalized.includes("terrassen")) return "TERRASSEN";
+  if (normalized.includes("erdgeschoss")) return "ERDGESCHOSS";
+  if (normalized.includes("souterrain")) return "SOUTERRAIN";
+  if (normalized.includes("ferien")) return "FERIENWOHNUNG";
+  if (normalized.includes("galerie")) return "GALERIE";
+  if (normalized.includes("apartment")) return "APARTMENT";
+  return "ETAGE";
+}
+
+function landType(value: string): string {
+  const normalized = value.trim().toUpperCase();
+  if (normalized === "LAND_FORSTWIRTSCHAFT") return "LAND_FORSTWIRSCHAFT";
+  const allowed = new Set([
+    "WOHNEN",
+    "GEWERBE",
+    "INDUSTRIE",
+    "LAND_FORSTWIRSCHAFT",
+    "FREIZEIT",
+    "GEMISCHT",
+    "GEWERBEPARK",
+    "SONDERNUTZUNG",
+    "SEELIEGENSCHAFT",
+  ]);
+  return allowed.has(normalized) ? normalized : "WOHNEN";
+}
+
+function categoryXml(
+  details: ListingDetails | undefined,
+  house: HouseTemplate,
+): string {
+  const category = details?.objectCategory ?? "house-purchase";
+  const marketing = details?.marketingType ?? "purchase";
+  const rawLandUse = (details?.landUse ?? "WOHNEN").trim().toUpperCase();
+  const landUse = landType(rawLandUse);
+  const residential = category !== "land" || landUse === "WOHNEN";
+  const commercial = category === "land" && ["GEWERBE", "INDUSTRIE", "GEWERBEPARK"].includes(landUse);
+  const investment = category === "land" && rawLandUse === "ANLAGE";
+  const objectType = category === "apartment-purchase"
+    ? `<wohnung wohnungtyp="${apartmentType(details?.apartmentType ?? "")}" />`
+    : category === "land"
+      ? `<grundstueck grundst_typ="${landUse}" />`
+      : `<haus haustyp="${houseType(details?.houseType ?? house.houseType)}" />`;
+  return `
+          <nutzungsart WOHNEN="${residential}" GEWERBE="${commercial}" ANLAGE="${investment}" WAZ="false" />
+          <vermarktungsart KAUF="${marketing === "purchase"}" MIETE_PACHT="${marketing === "rent-lease"}" ERBPACHT="${marketing === "leasehold"}" LEASING="false" />
+          <objektart>${objectType}</objektart>`;
+}
+
+function openImmoValue(
+  value: string | undefined,
+  allowed: Set<string>,
+  fallback: string,
+): string {
+  const normalized = value?.trim().toUpperCase() ?? "";
+  return allowed.has(normalized) ? normalized : fallback;
+}
+
 function extension(image: HouseImage): string {
   const fromName = image.name.split(".").pop()?.toLowerCase();
   if (fromName && /^[a-z0-9]{2,5}$/.test(fromName)) return fromName;
@@ -81,115 +195,371 @@ function imageXml(
     .join("");
 }
 
+function mediaFilename(
+  listing: GeneratedListing,
+  media: ListingMediaItem,
+  index: number,
+): string {
+  const nameExtension = media.name.split(".").pop()?.toLowerCase();
+  const fileExtension = nameExtension && /^[a-z0-9]{2,5}$/.test(nameExtension)
+    ? nameExtension
+    : media.mimeType?.includes("pdf")
+      ? "pdf"
+      : "bin";
+  return `${slug(listing.externalId)}-anlage-${String(index + 1).padStart(2, "0")}-${slug(media.caption || media.name) || "dokument"}.${fileExtension}`;
+}
+
+function additionalMediaXml(listing: GeneratedListing): string {
+  return (listing.management?.media ?? [])
+    .filter((media) => (
+      media.released
+      && ["document", "video", "link", "tour"].includes(media.kind)
+      && Boolean(media.dataUrl || media.url)
+    ))
+    .map((media, index) => {
+      const path = media.dataUrl ? mediaFilename(listing, media, index) : media.url!;
+      const group = media.kind === "document"
+        ? "DOKUMENTE"
+        : media.kind === "video"
+          ? media.dataUrl ? "FILM" : "FILMLINK"
+          : media.kind === "tour"
+            ? "PANORAMA"
+            : "LINKS";
+      const format = media.kind === "document"
+        ? media.name.split(".").pop()?.toLowerCase() || "pdf"
+        : "url";
+      return `
+          <anhang location="${media.dataUrl ? "EXTERN" : "REMOTE"}" gruppe="${group}">
+            <anhangtitel>${cdata(media.caption || media.name)}</anhangtitel>
+            <format>${xml(format)}</format>
+            <daten><pfad>${xml(path)}</pfad></daten>
+          </anhang>`;
+    })
+    .join("");
+}
+
+function managedListingImages(
+  input: PackageInput,
+  listing: GeneratedListing,
+): HouseImage[] {
+  const media = listing.management?.media;
+  if (!media?.length) return [];
+  const sourceImages = [
+    ...input.houses.flatMap((house) => house.images),
+    ...(input.promotionImages ?? []),
+    ...(input.promotionImage ? [input.promotionImage] : []),
+  ];
+  return media
+    .filter((item) => (
+      item.released
+      && (item.kind === "image" || item.kind === "floorplan")
+    ))
+    .sort((left, right) => left.order - right.order)
+    .map((item) => {
+      const source = item.sourceImageId
+        ? sourceImages.find((image) => image.id === item.sourceImageId)
+        : undefined;
+      return {
+        id: item.id,
+        sourceId: item.sourceImageId,
+        name: item.name,
+        mimeType: item.mimeType || source?.mimeType || "image/jpeg",
+        dataUrl: item.dataUrl || source?.dataUrl || "",
+        caption: item.caption,
+        isFloorplan: item.kind === "floorplan",
+      };
+    })
+    .filter((image) => Boolean(image.dataUrl))
+    .slice(0, MAX_EXPORTED_IMAGES);
+}
+
+function listingImages(
+  input: PackageInput,
+  house: HouseTemplate,
+  listing: GeneratedListing,
+): HouseImage[] {
+  if (listing.management?.media?.length) {
+    return managedListingImages(input, listing);
+  }
+  const usesImageRoles = house.images.some((image) => (
+    image.role && !["promotion", "other"].includes(image.role)
+  ));
+  const images = usesImageRoles
+    ? orderHouseImages(house.images) as HouseImage[]
+    : house.images;
+  const assignedPromotionImage = listing.promotionImageId
+    ? input.promotionImages?.find((image) => image.id === listing.promotionImageId)
+    : undefined;
+  const promotionImage = assignedPromotionImage
+    ?? (input.promotionImageEnabled ? input.promotionImage : undefined);
+  if (!promotionImage) return images;
+  return [
+    { ...promotionImage, role: "promotion" as const },
+    ...images.filter((image) => image.id !== promotionImage.id),
+  ].slice(0, MAX_EXPORTED_IMAGES);
+}
+
 function listingXml(
   project: ProjectInput,
   listing: GeneratedListing,
   house: HouseTemplate,
+  images: HouseImage[],
   provider: ProviderSettings,
   timestamp: string,
+  portalPublicationEnabled: boolean,
 ): string {
-  const currency = new Intl.NumberFormat("de-DE", {
-    useGrouping: false,
-    maximumFractionDigits: 2,
-  });
+  const currency = {
+    format(value: number): string {
+      const normalized = Number.isFinite(value) ? value : 0;
+      return normalized.toFixed(2).replace(/\.?0+$/, "");
+    },
+  };
+  const projecting = fillMissingProjectingDefaults(listing.projectingSettings);
+  const details = listing.management?.details;
+  const addressStreet = details?.street ?? project.street;
+  const addressHouseNumber = details?.houseNumber ?? project.houseNumber;
+  const addressZip = details?.zip ?? project.zip;
+  const addressCity = details?.city ?? project.city;
+  const addressDistrict = details?.district ?? project.district;
+  const purchasePrice = details?.purchasePrice ?? listing.price;
+  const livingArea = details?.livingArea ?? house.livingArea;
+  const usableArea = details?.usableArea ?? house.livingArea;
+  const plotArea = details?.plotArea ?? project.plotArea;
+  const rooms = details?.rooms ?? house.rooms;
+  const bedrooms = details?.bedrooms ?? house.bedrooms;
+  const bathrooms = details?.bathrooms ?? house.bathrooms;
+  const floors = details?.floors ?? house.floors;
+  const constructionYear = details?.constructionYear ?? house.constructionYear;
+  const energyDemand = details?.endEnergyDemand ?? house.energyDemand;
+  const standDate = timestamp.slice(0, 10);
+  const condition = openImmoValue(
+    details?.condition || details?.constructionPhase || projecting.constructionPhase,
+    OPENIMMO_CONDITIONS,
+    "ERSTBEZUG",
+  );
+  const equipmentQuality = openImmoValue(
+    details?.equipmentQuality ?? projecting.equipmentQuality,
+    OPENIMMO_EQUIPMENT_QUALITIES,
+    "STANDARD",
+  );
+  const energyCertificateType = openImmoValue(
+    details?.energyCertificateType,
+    OPENIMMO_ENERGY_CERTIFICATE_TYPES,
+    "BEDARF",
+  );
+  const category = details?.objectCategory ?? "house-purchase";
+  const isLand = category === "land";
+  const marketingType = details?.marketingType ?? "purchase";
+  const priceXml = marketingType === "rent-lease"
+    ? `<pacht>${currency.format(details?.annualLeasePrice ?? purchasePrice)}</pacht>`
+    : marketingType === "leasehold"
+      ? `<erbpacht>${currency.format(details?.annualLeasePrice ?? purchasePrice)}</erbpacht>`
+      : `<kaufpreis>${currency.format(purchasePrice)}</kaufpreis>`;
+  const totalParkingSpaces = (details?.parkingSpaces ?? [])
+    .reduce((sum, item) => sum + Math.max(0, item.count || 0), 0);
+  const buildingLaw = details?.buildingLaw?.trim().toUpperCase() ?? "";
+  const developmentStatus = details?.developmentStatus?.trim().toUpperCase() ?? "";
 
   return `
       <immobilie>
         <objektkategorie>
-          <nutzungsart WOHNEN="true" GEWERBE="false" ANLAGE="false" WAZ="false" />
-          <vermarktungsart KAUF="true" MIETE_PACHT="false" ERBPACHT="false" LEASING="false" />
-          <objektart><haus haustyp="${houseType(house.houseType)}" /></objektart>
+          ${categoryXml(details, house)}
         </objektkategorie>
         <geo>
-          <plz>${xml(project.zip)}</plz>
-          <ort>${xml(project.city)}</ort>
-          <strasse>${xml(project.street)}</strasse>
-          <hausnummer>${xml(project.houseNumber)}</hausnummer>
+          <plz>${xml(addressZip)}</plz>
+          <ort>${xml(addressCity)}</ort>
+          ${details?.latitude && details?.longitude ? `<geokoordinaten breitengrad="${xml(details.latitude)}" laengengrad="${xml(details.longitude)}" />` : ""}
+          <strasse>${xml(addressStreet)}</strasse>
+          <hausnummer>${xml(addressHouseNumber)}</hausnummer>
           <land iso_land="DEU" />
+          ${details?.floorNumber ? `<etage>${xml(details.floorNumber)}</etage>` : ""}
+          <anzahl_etagen>${currency.format(floors)}</anzahl_etagen>
           <lage_gebiet gebiete="WOHN" />
-          ${project.district ? `<regionaler_zusatz>${xml(project.district)}</regionaler_zusatz>` : ""}
+          ${addressDistrict ? `<regionaler_zusatz>${xml(addressDistrict)}</regionaler_zusatz>` : ""}
         </geo>
         <kontaktperson>
-          <email_zentrale>${xml(provider.email)}</email_zentrale>
-          <email_direkt>${xml(provider.email)}</email_direkt>
-          <tel_zentrale>${xml(provider.phone)}</tel_zentrale>
-          <tel_durchw>${xml(provider.phone)}</tel_durchw>
-          <name>${xml(provider.lastName)}</name>
-          <vorname>${xml(provider.firstName)}</vorname>
-          <firma>${xml(provider.company)}</firma>
+          <email_zentrale>${xml(details?.contactEmail ?? provider.email)}</email_zentrale>
+          <email_direkt>${xml(details?.contactEmail ?? provider.email)}</email_direkt>
+          <tel_zentrale>${xml(details?.contactPhone ?? provider.phone)}</tel_zentrale>
+          <tel_durchw>${xml(details?.contactPhone ?? provider.phone)}</tel_durchw>
+          <name>${xml(details?.contactLastName ?? provider.lastName)}</name>
+          <vorname>${xml(details?.contactFirstName ?? provider.firstName)}</vorname>
+          <firma>${xml(details?.contactCompany ?? provider.company)}</firma>
           <personennummer>${xml(provider.providerNumber)}</personennummer>
         </kontaktperson>
         <preise>
-          <kaufpreis>${currency.format(listing.price)}</kaufpreis>
-          <waehrung iso_waehrung="EUR" />
+          ${priceXml}
+          ${details?.houseMoney ? `<hausgeld>${currency.format(details.houseMoney)}</hausgeld>` : ""}
+          <provisionspflichtig>${details?.commissionRequired ?? projecting.commissionRequired}</provisionspflichtig>
+          <courtage_hinweis>${cdata(listing.texts.commission || details?.commissionText || FIXED_PROVISION_TEXT)}</courtage_hinweis>
+          <waehrung iso_waehrung="${xml(details?.currency ?? "EUR")}" />
         </preise>
         <flaechen>
-          <wohnflaeche>${currency.format(house.livingArea)}</wohnflaeche>
-          <nutzflaeche>${currency.format(house.livingArea)}</nutzflaeche>
-          <grundstuecksflaeche>${currency.format(project.plotArea)}</grundstuecksflaeche>
-          <anzahl_zimmer>${currency.format(house.rooms)}</anzahl_zimmer>
-          <anzahl_schlafzimmer>${currency.format(house.bedrooms)}</anzahl_schlafzimmer>
-          <anzahl_badezimmer>${currency.format(house.bathrooms)}</anzahl_badezimmer>
-          <anzahl_etagen>${currency.format(house.floors)}</anzahl_etagen>
+          ${isLand ? "" : `<wohnflaeche>${currency.format(livingArea)}</wohnflaeche>`}
+          ${isLand ? "" : `<nutzflaeche>${currency.format(usableArea)}</nutzflaeche>`}
+          ${details?.siteOccupancyRatio ? `<grz>${currency.format(details.siteOccupancyRatio)}</grz>` : ""}
+          ${details?.floorAreaRatio ? `<gfz>${currency.format(details.floorAreaRatio)}</gfz>` : ""}
+          <grundstuecksflaeche>${currency.format(plotArea)}</grundstuecksflaeche>
+          ${isLand ? "" : `<anzahl_zimmer>${currency.format(rooms)}</anzahl_zimmer>`}
+          ${isLand ? "" : `<anzahl_schlafzimmer>${currency.format(bedrooms)}</anzahl_schlafzimmer>`}
+          ${isLand ? "" : `<anzahl_badezimmer>${currency.format(bathrooms)}</anzahl_badezimmer>`}
+          ${details?.balconies ? `<anzahl_balkone>${currency.format(details.balconies)}</anzahl_balkone>` : ""}
+          ${details?.terraces ? `<anzahl_terrassen>${currency.format(details.terraces)}</anzahl_terrassen>` : ""}
+          ${details?.loggias ? `<anzahl_logia>${currency.format(details.loggias)}</anzahl_logia>` : ""}
+          ${details?.divisibleFrom ? `<teilbar_ab>${currency.format(details.divisibleFrom)}</teilbar_ab>` : ""}
+          ${totalParkingSpaces ? `<anzahl_stellplaetze>${Math.round(totalParkingSpaces)}</anzahl_stellplaetze>` : ""}
+          ${details?.grannyFlat ? "<einliegerwohnung>true</einliegerwohnung>" : ""}
+          ${details?.cubature ? `<kubatur>${currency.format(details.cubature)}</kubatur>` : ""}
         </flaechen>
-        <ausstattung>
-          <heizungsart ZENTRAL="true" FUSSBODEN="true" />
-          <befeuerung WAERMEPUMPE="true" />
-          <gaestewc>true</gaestewc>
-        </ausstattung>
+        ${isLand ? "" : `<ausstattung>
+          <ausstatt_kategorie>${xml(equipmentQuality)}</ausstatt_kategorie>
+          <bad DUSCHE="${IMMOPROFESSIONAL_DEFAULTS.shower}" WANNE="${IMMOPROFESSIONAL_DEFAULTS.bathtub}" FENSTER="${IMMOPROFESSIONAL_DEFAULTS.bathroomWindow}" />
+          <kueche EBK="${IMMOPROFESSIONAL_DEFAULTS.fittedKitchen}" OFFEN="${IMMOPROFESSIONAL_DEFAULTS.openKitchen}" />
+          ${details?.fireplace ? "<kamin>true</kamin>" : ""}
+          <heizungsart FUSSBODEN="${projecting.underfloorHeating}" />
+          <befeuerung ELEKTRO="${IMMOPROFESSIONAL_DEFAULTS.electricFuel}" LUFTWP="${projecting.airSourceHeatPump}" />
+          ${details?.airConditioning ? "<klimatisiert>true</klimatisiert>" : ""}
+          ${details?.elevator ? '<fahrstuhl PERSONEN="true" />' : ""}
+          <gartennutzung>${details?.garden ?? IMMOPROFESSIONAL_DEFAULTS.gardenUse}</gartennutzung>
+          ${details?.barrierFree ? "<barrierefrei>true</barrierefrei>" : ""}
+          ${details?.sauna ? "<sauna>true</sauna>" : ""}
+          ${details?.pool ? "<swimmingpool>true</swimmingpool>" : ""}
+          ${details?.conservatory ? "<wintergarten>true</wintergarten>" : ""}
+          ${details?.alarmSystem ? '<sicherheitstechnik ALARMANLAGE="true" />' : ""}
+          ${details?.basement ? '<unterkellert keller="JA" />' : ""}
+          <energietyp KFW40="${projecting.kfw40}" KFW55="${projecting.kfw55}" />
+          <dachboden>${details?.attic ?? IMMOPROFESSIONAL_DEFAULTS.attic}</dachboden>
+          <gaestewc>${details?.guestWc ?? IMMOPROFESSIONAL_DEFAULTS.guestWc}</gaestewc>
+          ${details?.seniorFriendly ? "<seniorengerecht>true</seniorengerecht>" : ""}
+        </ausstattung>`}
         <zustand_angaben>
-          <baujahr>${xml(house.constructionYear)}</baujahr>
-          <zustand zustand_art="PROJEKTIERT" />
-          <energiepass>
-            <epart>BEDARF</epart>
-            <endenergiebedarf>${currency.format(house.energyDemand)}</endenergiebedarf>
-            <wertklasse>${xml(house.energyClass)}</wertklasse>
-            <baujahr>${xml(house.constructionYear)}</baujahr>
-          </energiepass>
+          ${isLand ? "" : `<baujahr>${xml(constructionYear)}</baujahr>`}
+          ${isLand ? "" : `<zustand zustand_art="${xml(condition)}" />`}
+          ${isLand && OPENIMMO_BUILDING_LAWS.has(buildingLaw) ? `<bebaubar_nach bebaubar_attr="${xml(buildingLaw)}" />` : ""}
+          ${isLand && OPENIMMO_DEVELOPMENT_STATES.has(developmentStatus) ? `<erschliessung erschl_attr="${xml(developmentStatus)}" />` : ""}
+          ${isLand ? "" : `<energiepass>
+            <epart>${xml(energyCertificateType)}</epart>
+            ${details?.energyCertificateValidUntil ? `<gueltig_bis>${xml(details.energyCertificateValidUntil)}</gueltig_bis>` : ""}
+            <mitwarmwasser>${details?.warmWaterIncluded ?? true}</mitwarmwasser>
+            <endenergiebedarf>${currency.format(energyDemand)}</endenergiebedarf>
+            <wertklasse>${xml(details?.energyClass || projecting.energyCertificateClass)}</wertklasse>
+            <baujahr>${xml(details?.certificateYear || constructionYear)}</baujahr>
+          </energiepass>`}
         </zustand_angaben>
         <freitexte>
           <objekttitel>${cdata(listing.texts.title)}</objekttitel>
           <lage>${cdata(listing.texts.location)}</lage>
           <ausstatt_beschr>${cdata(listing.texts.equipment)}</ausstatt_beschr>
           <objektbeschreibung>${cdata(listing.texts.description)}</objektbeschreibung>
-          <sonstige_angaben>${cdata(listing.texts.other)}</sonstige_angaben>
+          <sonstige_angaben>${cdata([
+            listing.texts.other,
+            listing.texts.disclaimer,
+            listing.texts.terms,
+            listing.texts.recommendation,
+          ].filter(Boolean).join("\n\n"))}</sonstige_angaben>
+          <user_defined_simplefield feldname="Energieklasse">${cdata(projecting.energyClass)}</user_defined_simplefield>
         </freitexte>
-        <anhaenge>${imageXml(listing, house.images)}</anhaenge>
+        <anhaenge>${imageXml(listing, images)}${additionalMediaXml(listing)}</anhaenge>
         <verwaltung_objekt>
-          <objektadresse_freigeben>false</objektadresse_freigeben>
+          <objektadresse_freigeben>${details?.addressPublished ?? false}</objektadresse_freigeben>
+          ${details?.availableFrom ? `<verfuegbar_ab>${xml(details.availableFrom)}</verfuegbar_ab>` : ""}
+          ${details?.rented ? "<vermietet>true</vermietet>" : ""}
+          ${details?.monument ? "<denkmalgeschuetzt>true</denkmalgeschuetzt>" : ""}
+          ${details?.internalNotes ? `<user_defined_simplefield feldname="Interne Hinweise">${cdata(details.internalNotes)}</user_defined_simplefield>` : ""}
+          ${(listing.management?.media ?? [])
+            .filter((media) => media.released && media.url)
+            .map((media) => `<user_defined_simplefield feldname="${xml(`Medium ${media.kind}`)}">${cdata(media.url!)}</user_defined_simplefield>`)
+            .join("")}
         </verwaltung_objekt>
         <verwaltung_techn>
-          <aktion aktionart="CHANGE" timestamp="${xml(timestamp)}" />
+          <objektnr_extern>${xml(listing.externalId)}</objektnr_extern>
+          <aktion aktionart="CHANGE" />
           <openimmo_obid>${xml(listing.externalId)}</openimmo_obid>
           <kennung_ursprung>${xml(listing.externalId)}</kennung_ursprung>
-          <stand_vom>${xml(timestamp)}</stand_vom>
-          <weitergabe_generell>false</weitergabe_generell>
+          <stand_vom>${xml(standDate)}</stand_vom>
+          <weitergabe_generell>${portalPublicationEnabled}</weitergabe_generell>
+          ${details?.groupId ? `<gruppen_kennung>${xml(details.groupId)}</gruppen_kennung>` : ""}
           <sprache>de</sprache>
         </verwaltung_techn>
       </immobilie>`;
 }
 
-export function buildOpenImmoXml({
-  project,
-  listings,
-  houses,
-  provider,
-}: PackageInput): string {
+export function buildOpenImmoDeleteXml(input: {
+  externalIds: string[];
+  provider: ProviderSettings;
+  timestamp?: string;
+}): string {
+  const timestamp = input.timestamp ?? new Date().toISOString();
+  const standDate = timestamp.slice(0, 10);
+  const contactEmail = input.provider.email;
+  const contactName = input.provider.lastName || input.provider.company || "Ansprechpartner";
+  const objects = [...new Set(input.externalIds.map((value) => value.trim()).filter(Boolean))]
+    .map((externalId) => `
+      <immobilie>
+        <objektkategorie>
+          <nutzungsart WOHNEN="true" GEWERBE="false" ANLAGE="false" WAZ="false" />
+          <vermarktungsart KAUF="true" MIETE_PACHT="false" ERBPACHT="false" LEASING="false" />
+          <objektart><haus haustyp="EINFAMILIENHAUS" /></objektart>
+        </objektkategorie>
+        <geo>
+          <plz></plz>
+          <land iso_land="DEU" />
+        </geo>
+        <kontaktperson>
+          <email_zentrale>${xml(contactEmail)}</email_zentrale>
+          <name>${xml(contactName)}</name>
+          ${input.provider.firstName ? `<vorname>${xml(input.provider.firstName)}</vorname>` : ""}
+          ${input.provider.company ? `<firma>${xml(input.provider.company)}</firma>` : ""}
+          <personennummer>${xml(input.provider.providerNumber)}</personennummer>
+        </kontaktperson>
+        <verwaltung_techn>
+          <objektnr_extern>${xml(externalId)}</objektnr_extern>
+          <aktion aktionart="DELETE" />
+          <openimmo_obid>${xml(externalId)}</openimmo_obid>
+          <kennung_ursprung>${xml(externalId)}</kennung_ursprung>
+          <stand_vom>${xml(standDate)}</stand_vom>
+          <sprache>de</sprache>
+        </verwaltung_techn>
+      </immobilie>`)
+    .join("");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<openimmo xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <uebertragung art="OFFLINE" umfang="TEIL" modus="DELETE" version="1.2.7" sendersoftware="Inserate Studio" senderversion="${xml(APP_VERSION)}" techn_email="${xml(input.provider.email)}" regi_id="${xml(input.provider.providerNumber)}" timestamp="${xml(timestamp)}" />
+  <anbieter>
+    <anbieternr>${xml(input.provider.providerNumber)}</anbieternr>
+    <firma>${xml(input.provider.company)}</firma>
+    <openimmo_anid>${xml(`O${input.provider.providerNumber}`)}</openimmo_anid>${objects}
+  </anbieter>
+</openimmo>`;
+}
+
+export function buildOpenImmoXml(input: PackageInput): string {
+  const { project, listings, houses, provider } = input;
+  const portalPublicationEnabled = input.portalPublicationEnabled === true;
   const timestamp = new Date().toISOString();
   const objects = listings
     .map((listing) => {
       const house = houses.find((item) => item.id === listing.templateId);
       if (!house) throw new Error(`Haustyp ${listing.templateName} fehlt.`);
-      return listingXml(project, listing, house, provider, timestamp);
+      return listingXml(
+        project,
+        listing,
+        house,
+        listingImages(input, house, listing),
+        provider,
+        timestamp,
+        portalPublicationEnabled,
+      );
     })
     .join("");
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <openimmo xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
-  <uebertragung art="OFFLINE" umfang="VOLL" version="1.2.7" sendersoftware="Fabian&amp;Pascal Inseratestudio" senderversion="0.3.13" techn_email="${xml(provider.email)}" regi_id="${xml(provider.providerNumber)}" timestamp="${xml(timestamp)}" />
+  <uebertragung art="OFFLINE" umfang="TEIL" modus="CHANGE" version="1.2.7" sendersoftware="Inserate Studio" senderversion="${xml(APP_VERSION)}" techn_email="${xml(provider.email)}" regi_id="${xml(provider.providerNumber)}" timestamp="${xml(timestamp)}" />
   <anbieter>
     <anbieternr>${xml(provider.providerNumber)}</anbieternr>
-    <firma>${xml(provider.company)}</firma>${objects}
+    <firma>${xml(provider.company)}</firma>
+    <openimmo_anid>${xml(`O${provider.providerNumber}`)}</openimmo_anid>${objects}
   </anbieter>
 </openimmo>`;
 }
@@ -215,21 +585,44 @@ export async function buildImportPackage(input: PackageInput): Promise<{
   const listingSuffix = input.listings.length === 1
     ? slug(`${input.listings[0].templateName}-${input.listings[0].externalId}`)
     : `${input.listings.length}-inserate`;
-  const packageBaseName = `${packageSlug || "fabian-pascal-import"}-${listingSuffix}`;
+  const packageBaseName = `${packageSlug || "inserate-studio-import"}-${listingSuffix}`;
   const xmlFilename = `${packageBaseName}.xml`;
   zip.file(xmlFilename, xmlText);
 
   input.listings.forEach((listing) => {
     const house = input.houses.find((item) => item.id === listing.templateId);
-    house?.images.forEach((image, index) => {
+    if (!house) return;
+    listingImages(input, house, listing).forEach((image, index) => {
       zip.file(imageFilename(listing, image, index), imageBytes(image.dataUrl));
     });
+    (listing.management?.media ?? [])
+      .filter((media) => media.released && media.kind === "document" && media.dataUrl)
+      .forEach((media, index) => {
+        zip.file(mediaFilename(listing, media, index), imageBytes(media.dataUrl!));
+      });
   });
 
   const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
   return {
     blob,
     filename: `${packageBaseName}-${new Date().toISOString().slice(0, 10)}.zip`,
+    xmlText,
+  };
+}
+
+export async function buildDeletePackage(input: {
+  externalIds: string[];
+  provider: ProviderSettings;
+}): Promise<{ blob: Blob; filename: string; xmlText: string }> {
+  if (!input.externalIds.length) throw new Error("Keine Objekt-ID für den Löschauftrag ausgewählt.");
+  const zip = new JSZip();
+  const xmlText = buildOpenImmoDeleteXml(input);
+  const stamp = new Date().toISOString().slice(0, 10);
+  const filenameBase = `loeschauftrag-${slug(input.externalIds.join("-")) || "objekte"}-${stamp}`;
+  zip.file(`${filenameBase}.xml`, xmlText);
+  return {
+    blob: await zip.generateAsync({ type: "blob", compression: "DEFLATE" }),
+    filename: `${filenameBase}.zip`,
     xmlText,
   };
 }

@@ -1,0 +1,2854 @@
+"use client";
+
+import Image from "next/image";
+import {
+  useMemo,
+  useState,
+} from "react";
+import type {
+  ChangeEvent,
+  Dispatch,
+  SetStateAction,
+} from "react";
+import JSZip from "jszip";
+import type {
+  AuditLogEntry,
+  BusinessRole,
+  CompanySettings,
+  GeneratedListing,
+  ImportReportRecord,
+  ListingAppointment,
+  ListingDetails,
+  ListingLifecycleStatus,
+  ListingManagement,
+  ListingMediaItem,
+  ListingMediaKind,
+  ListingPortalStatus,
+  ManagementFileFolder,
+  ManagementFileScope,
+  ManagementRole,
+  ManagementUser,
+  OrganizationUnit,
+  OrganizationUnitType,
+  PortalConfiguration,
+  ProjectInput,
+  StudioState,
+  VisibilityScope,
+} from "../types";
+import {
+  appendAuditLog,
+  createListingMediaItem,
+  createManagementUser,
+  currentManagementUser,
+  deriveListingLifecycle,
+  findListing,
+  managementPermission,
+  mapListing,
+  resolveListingMediaDataUrl,
+} from "../lib/management";
+import {
+  BUSINESS_ROLE_LABELS,
+  canReassignObjects,
+  VISIBILITY_SCOPE_LABELS,
+  visibleUserIds,
+} from "../lib/organization";
+import {
+  portalDesiredStatus,
+  portalSyncHealth,
+  schedulePortalDesiredState,
+  schedulePortalUpdate,
+} from "../lib/portal-operations";
+import {
+  applyImportReport,
+  parseImportReport,
+} from "../lib/import-reports";
+import {
+  buildExposePdf,
+  type ExposePdfOptions,
+} from "../lib/expose-pdf";
+import { buildImportPackage } from "../lib/openimmo";
+import { allocateProviderExternalIds } from "../lib/external-ids";
+import ObjectCreationWizard from "./ObjectCreationWizard";
+
+type ManagementSection = "objects" | "files" | "portals" | "reports" | "organization" | "company" | "users" | "audit";
+type EditorTab =
+  | "object"
+  | "address"
+  | "base"
+  | "features"
+  | "energy"
+  | "texts"
+  | "appointments"
+  | "export";
+type ArchiveFilter = "active" | "archived" | "all";
+type ReleaseFilter = "all" | "released" | "not-released";
+type SortKey =
+  | "updated-desc"
+  | "updated-asc"
+  | "created-desc"
+  | "external-id"
+  | "city"
+  | "price"
+  | "living-area"
+  | "rooms";
+
+type ListingRow = {
+  project: ProjectInput;
+  listing: GeneratedListing;
+  management: ListingManagement;
+};
+
+type ManagementCenterProps = {
+  state: StudioState;
+  setState: Dispatch<SetStateAction<StudioState>>;
+  authenticatedUser: {
+    name: string;
+    email: string;
+    role: ManagementRole;
+  } | null;
+  uploadAvailable: boolean;
+  busy: boolean;
+  onTransferListing: (listingId: string) => Promise<void>;
+  onDeleteListings: (listingIds: string[]) => Promise<void>;
+  notify: (message: string) => void;
+  mode?: "objects" | "administration";
+  createRequestId?: number;
+  requestedListingId?: string;
+  requestedAssigneeId?: string;
+};
+
+const LIFECYCLE_LABELS: Record<ListingLifecycleStatus, string> = {
+  draft: "Entwurf",
+  ready: "Freigegeben",
+  transferred: "Übertragen",
+  online: "Online",
+  error: "Fehler",
+  archived: "Archiviert",
+};
+
+const PORTAL_STATUS_LABELS: Record<ListingPortalStatus, string> = {
+  "not-transferred": "Nicht übertragen",
+  queued: "Vorgemerkt",
+  transferred: "Übertragen",
+  online: "Online",
+  error: "Fehler",
+  "delete-requested": "Löschung gesendet",
+  deleted: "Gelöscht",
+};
+
+const ROLE_LABELS: Record<ManagementRole, string> = {
+  admin: "Administration",
+  editor: "Bearbeitung",
+  viewer: "Nur lesen",
+};
+
+const MEDIA_KIND_LABELS: Record<ListingMediaKind, string> = {
+  image: "Bild",
+  floorplan: "Grundriss",
+  document: "Dokument",
+  video: "Video",
+  link: "Link",
+  tour: "3D-Tour",
+};
+
+const WORKFLOW_STEPS: Array<{
+  tab: EditorTab;
+  label: string;
+  description: string;
+}> = [
+  { tab: "object", label: "Grunddaten", description: "Art und Status" },
+  { tab: "address", label: "Adresse", description: "Lage und Sichtbarkeit" },
+  { tab: "base", label: "Haus & Preis", description: "Flächen und Konditionen" },
+  { tab: "features", label: "Medien & Details", description: "Bilder und Ausstattung" },
+  { tab: "texts", label: "KI-Texte", description: "Exposé-Inhalte" },
+  { tab: "export", label: "Prüfen & Veröffentlichen", description: "Portale und Übergabe" },
+];
+
+function workflowIndex(tab: EditorTab): number {
+  if (tab === "energy") return 3;
+  if (tab === "appointments") return 5;
+  return WORKFLOW_STEPS.findIndex((step) => step.tab === tab);
+}
+
+function uid(prefix: string): string {
+  const random = globalThis.crypto?.randomUUID?.()
+    ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `${prefix}-${random}`;
+}
+
+function formatDate(value: string | undefined, withTime = false): string {
+  if (!value) return "–";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("de-DE", {
+    dateStyle: "medium",
+    ...(withTime ? { timeStyle: "short" as const } : {}),
+  }).format(date);
+}
+
+function listingArea(details: ListingDetails): number {
+  return details.objectCategory === "land"
+    ? details.plotArea
+    : details.livingArea;
+}
+
+function listingAreaLabel(details: ListingDetails): string {
+  const area = `${listingArea(details)} m²`;
+  return details.objectCategory === "land"
+    ? `${area} Grundstück`
+    : `${area} · ${details.rooms} Zi.`;
+}
+
+function euro(value: number): string {
+  return new Intl.NumberFormat("de-DE", {
+    style: "currency",
+    currency: "EUR",
+    maximumFractionDigits: 0,
+  }).format(value || 0);
+}
+
+function fileSize(value: number): string {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
+  return `${(value / (1024 * 1024)).toLocaleString("de-DE", { maximumFractionDigits: 1 })} MB`;
+}
+
+function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 500);
+}
+
+function fileDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+function nextLifecycle(listing: GeneratedListing): ListingLifecycleStatus {
+  if (!listing.management) return listing.uploadedAt ? "transferred" : "draft";
+  return deriveListingLifecycle(listing.management, listing.uploadedAt);
+}
+
+function withUpdatedManagement(
+  listing: GeneratedListing,
+  patch: Partial<ListingManagement>,
+  at = new Date().toISOString(),
+): GeneratedListing {
+  if (!listing.management) return listing;
+  const management = {
+    ...listing.management,
+    ...patch,
+    updatedAt: at,
+  };
+  return {
+    ...listing,
+    management: {
+      ...management,
+      lifecycle: deriveListingLifecycle(management, listing.uploadedAt),
+    },
+  };
+}
+
+function Field(props: {
+  label: string;
+  value: string | number;
+  type?: "text" | "number" | "email" | "date" | "datetime-local" | "time" | "url";
+  disabled?: boolean;
+  min?: number;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="management-field">
+      <span>{props.label}</span>
+      <input
+        type={props.type ?? "text"}
+        value={props.value}
+        min={props.min}
+        disabled={props.disabled}
+        onChange={(event) => props.onChange(event.target.value)}
+      />
+    </label>
+  );
+}
+
+function TextArea(props: {
+  label: string;
+  value: string;
+  rows?: number;
+  disabled?: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="management-field management-field-wide">
+      <span>{props.label}</span>
+      <textarea
+        rows={props.rows ?? 5}
+        value={props.value}
+        disabled={props.disabled}
+        onChange={(event) => props.onChange(event.target.value)}
+      />
+    </label>
+  );
+}
+
+function SelectField(props: {
+  label: string;
+  value: string;
+  options: Array<[string, string]>;
+  disabled?: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="management-field">
+      <span>{props.label}</span>
+      <select
+        value={props.value}
+        disabled={props.disabled}
+        onChange={(event) => props.onChange(event.target.value)}
+      >
+        {props.options.map(([value, label]) => (
+          <option key={value} value={value}>{label}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function Toggle(props: {
+  label: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className="management-toggle">
+      <input
+        type="checkbox"
+        checked={props.checked}
+        disabled={props.disabled}
+        onChange={(event) => props.onChange(event.target.checked)}
+      />
+      <span>{props.label}</span>
+    </label>
+  );
+}
+
+function readNumber(value: string): number {
+  const parsed = Number(value.replace(",", "."));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+async function rotatedImageDataUrl(dataUrl: string): Promise<string> {
+  const image = document.createElement("img");
+  image.decoding = "async";
+  image.src = dataUrl;
+  await image.decode();
+  const canvas = document.createElement("canvas");
+  canvas.width = image.naturalHeight;
+  canvas.height = image.naturalWidth;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Bildbearbeitung ist in diesem Browser nicht verfügbar.");
+  context.translate(canvas.width / 2, canvas.height / 2);
+  context.rotate(Math.PI / 2);
+  context.drawImage(image, -image.naturalWidth / 2, -image.naturalHeight / 2);
+  return canvas.toDataURL("image/jpeg", 0.92);
+}
+
+function listingRows(state: StudioState): ListingRow[] {
+  return state.projects.flatMap((project) => (
+    project.listings.flatMap((listing) => (
+      listing.management
+        ? [{ project, listing, management: listing.management }]
+        : []
+    ))
+  ));
+}
+
+export default function ManagementCenter({
+  state,
+  setState,
+  authenticatedUser,
+  uploadAvailable,
+  busy,
+  onTransferListing,
+  onDeleteListings,
+  notify,
+  mode = "objects",
+  createRequestId = 0,
+  requestedListingId = "",
+  requestedAssigneeId = "",
+}: ManagementCenterProps) {
+  const management = state.management;
+  const [section, setSection] = useState<ManagementSection>(
+    mode === "administration" ? "organization" : "objects",
+  );
+  const [showCreateWizard, setShowCreateWizard] = useState(
+    mode === "objects" && createRequestId > 0,
+  );
+  const [activeListingId, setActiveListingId] = useState(
+    mode === "objects" ? requestedListingId : "",
+  );
+  const [editorTab, setEditorTab] = useState<EditorTab>("object");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [query, setQuery] = useState("");
+  const [archiveFilter, setArchiveFilter] = useState<ArchiveFilter>("active");
+  const [releaseFilter, setReleaseFilter] = useState<ReleaseFilter>("all");
+  const [assigneeFilter, setAssigneeFilter] = useState(requestedAssigneeId);
+  const [sortKey, setSortKey] = useState<SortKey>("updated-desc");
+  const [mediaLinkKind, setMediaLinkKind] = useState<ListingMediaKind>("video");
+  const [mediaLinkUrl, setMediaLinkUrl] = useState("");
+  const [mediaLinkCaption, setMediaLinkCaption] = useState("");
+  const [appointmentDraft, setAppointmentDraft] = useState({
+    title: "Besichtigung",
+    startsAt: "",
+    endsAt: "",
+    location: "",
+    contactName: "",
+    contactEmail: "",
+    notes: "",
+  });
+  const [reportBusy, setReportBusy] = useState(false);
+  const [exposeBusy, setExposeBusy] = useState(false);
+  const [openImmoBusy, setOpenImmoBusy] = useState(false);
+  const [exposeOptions, setExposeOptions] = useState<ExposePdfOptions>({
+    includeContact: true,
+    includeAddress: false,
+    includeImages: true,
+    includeLogo: true,
+    includePageNumbers: true,
+    includeColors: true,
+    firstPageOnly: false,
+  });
+  const [newUser, setNewUser] = useState({
+    name: "",
+    email: "",
+    role: "editor" as ManagementRole,
+    businessRole: "sales-representative" as BusinessRole,
+    visibilityScope: "self" as VisibilityScope,
+    organizationUnitId: "unit-company",
+    managerUserId: "",
+  });
+  const [newUnit, setNewUnit] = useState({
+    name: "",
+    type: "team" as OrganizationUnitType,
+    parentId: "unit-company",
+    managerUserId: "",
+  });
+  const [auditQuery, setAuditQuery] = useState("");
+  const [activeFolderId, setActiveFolderId] = useState("");
+  const [newFolderName, setNewFolderName] = useState("");
+  const [newFolderScope, setNewFolderScope] = useState<ManagementFileScope>("personal");
+
+  const rows = useMemo(() => listingRows(state), [state]);
+  const activePortalStates = rows.flatMap((row) => (
+    row.management.archivedAt ? [] : row.management.portals
+  ));
+  const synchronizedPortalCount = activePortalStates.filter((portal) => (
+    portalSyncHealth(portal) === "synchronized"
+  )).length;
+  const pendingPortalCount = activePortalStates.filter((portal) => (
+    portalSyncHealth(portal) === "pending"
+  )).length;
+  const failedPortalCount = activePortalStates.filter((portal) => (
+    portalSyncHealth(portal) === "error"
+  )).length;
+  const currentUser = currentManagementUser(state);
+  const canEdit = currentUser
+    ? managementPermission(currentUser.role, "edit-listings")
+    : false;
+  const canTransfer = currentUser
+    ? managementPermission(currentUser.role, "transfer")
+    : false;
+  const canDeleteRemote = currentUser
+    ? managementPermission(currentUser.role, "delete-remote")
+    : false;
+  const canManageUsers = currentUser
+    ? managementPermission(currentUser.role, "manage-users")
+    : false;
+  const canManageCompany = currentUser
+    ? managementPermission(currentUser.role, "manage-company")
+    : false;
+  const canAssign = canReassignObjects(currentUser);
+  const allowedUserIds = management && currentUser
+    ? visibleUserIds(management, currentUser.id)
+    : new Set<string>();
+  const assignableUsers = management?.users.filter((user) => (
+    user.active && allowedUserIds.has(user.id)
+  )) ?? [];
+  const effectiveRole = authenticatedUser?.role ?? currentUser?.role ?? "viewer";
+  const canUseLibrary = effectiveRole === "admin"
+    || currentUser?.businessRole === "backoffice";
+  const canUseOperations = effectiveRole === "admin"
+    || currentUser?.businessRole === "executive"
+    || currentUser?.businessRole === "sales-director"
+    || currentUser?.businessRole === "team-lead"
+    || currentUser?.businessRole === "backoffice";
+  const availableSections: Array<[ManagementSection, string]> = mode === "administration"
+    ? effectiveRole === "admin"
+      ? [["organization", "Organisation"], ["users", "Mitarbeiter & Rollen"], ["company", "Firmendaten"], ["audit", "Aktivitäten"]]
+      : []
+    : [
+        ["objects", "Objektzentrale"],
+        ...(canUseLibrary ? [["files", "Vorlagen & Dateien"] as [ManagementSection, string]] : []),
+        ...(canUseOperations
+          ? [
+              ["portals", "Portale"] as [ManagementSection, string],
+              ["reports", "Importberichte"] as [ManagementSection, string],
+            ]
+          : []),
+      ];
+  const visibleFolders = management && currentUser
+    ? management.fileFolders.filter((folder) => (
+      currentUser.role === "admin"
+      || folder.scope === "public"
+      || folder.scope === "templates"
+      || folder.ownerUserId === currentUser.id
+      || folder.accessUserIds.includes(currentUser.id)
+    ))
+    : [];
+  const activeFolder = visibleFolders.find((folder) => (
+    folder.id === activeFolderId
+  )) ?? visibleFolders[0];
+
+  const visibleRows = useMemo(() => {
+    const normalizedQuery = query.trim().toLocaleLowerCase("de-DE");
+    const filtered = rows.filter(({ project, listing, management: listingManagement }) => {
+      const archived = Boolean(listingManagement.archivedAt);
+      if (archiveFilter === "active" && archived) return false;
+      if (archiveFilter === "archived" && !archived) return false;
+      if (releaseFilter === "released" && !listingManagement.released) return false;
+      if (releaseFilter === "not-released" && listingManagement.released) return false;
+      if (assigneeFilter && listingManagement.assignedUserId !== assigneeFilter) return false;
+      if (!normalizedQuery) return true;
+      return [
+        listing.externalId,
+        listing.texts.title,
+        listing.templateName,
+        project.name,
+        listingManagement.details.city,
+        listingManagement.details.zip,
+        listingManagement.details.orderNumber,
+      ].some((value) => String(value).toLocaleLowerCase("de-DE").includes(normalizedQuery));
+    });
+    return filtered.sort((left, right) => {
+      if (sortKey === "updated-asc") {
+        return left.management.updatedAt.localeCompare(right.management.updatedAt);
+      }
+      if (sortKey === "created-desc") {
+        return right.management.createdAt.localeCompare(left.management.createdAt);
+      }
+      if (sortKey === "external-id") {
+        return left.listing.externalId.localeCompare(right.listing.externalId, "de", { numeric: true });
+      }
+      if (sortKey === "city") {
+        return left.management.details.city.localeCompare(right.management.details.city, "de");
+      }
+      if (sortKey === "price") {
+        return right.management.details.purchasePrice - left.management.details.purchasePrice;
+      }
+      if (sortKey === "living-area") {
+        return listingArea(right.management.details) - listingArea(left.management.details);
+      }
+      if (sortKey === "rooms") {
+        return right.management.details.rooms - left.management.details.rooms;
+      }
+      return right.management.updatedAt.localeCompare(left.management.updatedAt);
+    });
+  }, [archiveFilter, assigneeFilter, query, releaseFilter, rows, sortKey]);
+
+  if (!management) {
+    return (
+      <section className="management-shell">
+        <div className="management-empty">Die Immobilienverwaltung wird vorbereitet …</div>
+      </section>
+    );
+  }
+
+  const activeEntry = activeListingId
+    ? findListing(state, activeListingId)
+    : undefined;
+  const activeListing = activeEntry?.listing;
+  const activeProject = activeEntry?.project;
+  const activeDetails = activeListing?.management?.details;
+  const currentWorkflowIndex = Math.max(0, workflowIndex(editorTab));
+  const workflowCompletion = activeListing?.management && activeDetails
+    ? [
+        Boolean(activeListing.texts.title.trim() && activeDetails.objectCategory),
+        Boolean(activeDetails.zip.trim() && activeDetails.city.trim()),
+        activeDetails.objectCategory === "land"
+          ? activeDetails.plotArea > 0
+          : activeDetails.livingArea > 0 && activeDetails.rooms > 0,
+        activeListing.management.media.some((media) => media.released),
+        Boolean(
+          activeListing.texts.title.trim()
+          && activeListing.texts.description.trim()
+          && activeListing.texts.location.trim()
+        ),
+        Boolean(
+          activeListing.management.released
+          && activeListing.management.portals.some((portal) => portal.enabled)
+        ),
+      ]
+    : [false, false, false, false, false, false];
+  const completedWorkflowSteps = workflowCompletion.filter(Boolean).length;
+  const nextWorkflowStep = WORKFLOW_STEPS[Math.min(
+    WORKFLOW_STEPS.length - 1,
+    currentWorkflowIndex + 1,
+  )];
+
+  const record = (
+    current: StudioState,
+    action: string,
+    targetType: AuditLogEntry["targetType"],
+    targetId: string,
+    description: string,
+  ): StudioState => appendAuditLog(current, {
+    action,
+    targetType,
+    targetId,
+    description,
+  });
+
+  const updateListing = (
+    listingId: string,
+    update: (listing: GeneratedListing, project: ProjectInput) => GeneratedListing,
+  ) => {
+    if (!canEdit) return;
+    setState((current) => mapListing(current, listingId, update));
+  };
+
+  const updateActiveManagement = (patch: Partial<ListingManagement>) => {
+    if (!activeListing) return;
+    updateListing(activeListing.id, (listing) => {
+      const updated = withUpdatedManagement(listing, patch);
+      if (
+        !updated.management
+        || patch.portals
+        || !updated.management.released
+        || !updated.management.details.transferOnSave
+      ) return updated;
+      const at = new Date().toISOString();
+      return {
+        ...updated,
+        management: {
+          ...updated.management,
+          portals: updated.management.portals.map((portal) => (
+            schedulePortalUpdate(portal, at)
+          )),
+        },
+      };
+    });
+  };
+
+  const updateDetails = (patch: Partial<ListingDetails>) => {
+    if (!activeListing?.management) return;
+    updateActiveManagement({
+      details: { ...activeListing.management.details, ...patch },
+    });
+  };
+
+  const updateTexts = (patch: Partial<GeneratedListing["texts"]>) => {
+    if (!activeListing) return;
+    updateListing(activeListing.id, (listing) => {
+      const at = new Date().toISOString();
+      return {
+        ...listing,
+        texts: { ...listing.texts, ...patch },
+        management: listing.management
+          ? {
+              ...listing.management,
+              updatedAt: at,
+              portals: listing.management.released
+                && listing.management.details.transferOnSave
+                ? listing.management.portals.map((portal) => (
+                    schedulePortalUpdate(portal, at)
+                  ))
+                : listing.management.portals,
+            }
+          : listing.management,
+      };
+    });
+  };
+
+  const selectAllVisible = (checked: boolean) => {
+    setSelectedIds(checked ? visibleRows.map((row) => row.listing.id) : []);
+  };
+
+  const selectedIdSet = new Set(selectedIds);
+  const selectedRows = rows.filter((row) => selectedIdSet.has(row.listing.id));
+
+  const bulkLifecycle = (
+    action: "release" | "unrelease" | "archive" | "restore",
+  ) => {
+    if (!canEdit || !selectedIds.length) return;
+    const at = new Date().toISOString();
+    setState((current) => {
+      let next = current;
+      selectedIds.forEach((listingId) => {
+        next = mapListing(next, listingId, (listing) => {
+          if (!listing.management) return listing;
+          const patch: Partial<ListingManagement> = action === "archive"
+            ? { archivedAt: at, released: false }
+            : action === "restore"
+              ? { archivedAt: undefined }
+              : { released: action === "release" };
+          const updated = withUpdatedManagement(listing, patch, at);
+          if (
+            action !== "release"
+            || !updated.management
+            || !updated.management.details.transferOnSave
+          ) return updated;
+          return {
+            ...updated,
+            management: {
+              ...updated.management,
+              portals: updated.management.portals.map((portal) => (
+                schedulePortalUpdate(portal, at, 0)
+              )),
+            },
+          };
+        });
+      });
+      return record(
+        next,
+        action === "archive"
+          ? "Objekte archiviert"
+          : action === "restore"
+            ? "Objekte wiederhergestellt"
+            : action === "release"
+              ? "Objekte freigegeben"
+              : "Freigabe entfernt",
+        "listing",
+        selectedIds.join(","),
+        `${selectedIds.length} Objekt${selectedIds.length === 1 ? "" : "e"} bearbeitet`,
+      );
+    });
+    if (action === "archive" && archiveFilter === "active") setSelectedIds([]);
+  };
+
+  const copySelected = () => {
+    if (!canEdit || !selectedRows.length) return;
+    const at = new Date().toISOString();
+    setState((current) => {
+      const ids = allocateProviderExternalIds(
+        current.provider.providerNumber,
+        current.projects.flatMap((project) => project.listings.map((listing) => listing.externalId)),
+        selectedRows.length,
+      );
+      let index = 0;
+      const projects = current.projects.map((project) => {
+        const copies = project.listings
+          .filter((listing) => selectedIds.includes(listing.id))
+          .map((listing) => {
+            const copyId = uid("listing");
+            const managementCopy = listing.management
+              ? {
+                  ...listing.management,
+                  lifecycle: "draft" as const,
+                  released: false,
+                  createdAt: at,
+                  updatedAt: at,
+                  archivedAt: undefined,
+                  copiedFromId: listing.id,
+                  media: listing.management.media.map((media) => ({
+                    ...media,
+                    id: media.sourceImageId
+                      ? `source-${copyId}-${media.sourceImageId}`
+                      : uid("media"),
+                  })),
+                  appointments: [],
+                  portals: listing.management.portals.map((portal) => ({
+                    portalId: portal.portalId,
+                    enabled: portal.enabled,
+                    status: "not-transferred" as const,
+                  })),
+                }
+              : undefined;
+            const copy: GeneratedListing = {
+              ...listing,
+              id: copyId,
+              externalId: ids[index],
+              uploadedAt: undefined,
+              totalSyncRunId: undefined,
+              version: 1,
+              texts: {
+                ...listing.texts,
+                title: `${listing.texts.title} – Kopie`,
+              },
+              management: managementCopy,
+            };
+            index += 1;
+            return copy;
+          });
+        return copies.length
+          ? { ...project, listings: [...project.listings, ...copies] }
+          : project;
+      });
+      return record(
+        { ...current, projects },
+        "Objekte kopiert",
+        "listing",
+        selectedIds.join(","),
+        `${selectedRows.length} neue Entwürfe mit eigenen Objekt-IDs angelegt`,
+      );
+    });
+    notify(`${selectedRows.length} Objekt${selectedRows.length === 1 ? "" : "e"} wurden als neue Entwürfe kopiert.`);
+  };
+
+  const deleteLocalSelected = () => {
+    if (!canEdit || !selectedRows.length) return;
+    const onlyArchived = selectedRows.every((row) => Boolean(row.management.archivedAt));
+    if (!onlyArchived) {
+      notify("Lokales Löschen ist nur für archivierte Objekte möglich.");
+      return;
+    }
+    if (!window.confirm(
+      `${selectedRows.length} archivierte Objekt${selectedRows.length === 1 ? "" : "e"} dauerhaft lokal löschen?\n\nDie Übertragung auf Portalen wird dadurch nicht gelöscht.`,
+    )) return;
+    setState((current) => {
+      const projects = current.projects.map((project) => ({
+        ...project,
+        listings: project.listings.filter((listing) => !selectedIds.includes(listing.id)),
+      }));
+      return record(
+        { ...current, projects },
+        "Archivierte Objekte lokal gelöscht",
+        "listing",
+        selectedIds.join(","),
+        `${selectedRows.length} archivierte Objekte dauerhaft entfernt`,
+      );
+    });
+    setSelectedIds([]);
+    setActiveListingId("");
+  };
+
+  const addFiles = async (event: ChangeEvent<HTMLInputElement>) => {
+    if (!activeListing?.management || !canEdit) return;
+    const files = [...(event.target.files ?? [])];
+    event.target.value = "";
+    if (!files.length) return;
+    try {
+      const additions = await Promise.all(files.map(async (file, index) => (
+        createListingMediaItem(
+          file.type.startsWith("image/") ? "image" : "document",
+          {
+            name: file.name,
+            caption: file.name.replace(/\.[^.]+$/, ""),
+            mimeType: file.type,
+            dataUrl: await fileDataUrl(file),
+          },
+          activeListing.management!.media.length + index,
+        )
+      )));
+      updateActiveManagement({
+        media: [...activeListing.management.media, ...additions],
+      });
+      setState((current) => record(
+        current,
+        "Medien hinzugefügt",
+        "media",
+        activeListing.id,
+        `${additions.length} Datei${additions.length === 1 ? "" : "en"} ergänzt`,
+      ));
+    } catch {
+      notify("Mindestens eine Datei konnte nicht gelesen werden.");
+    }
+  };
+
+  const addLinkMedia = () => {
+    if (!activeListing?.management || !canEdit || !mediaLinkUrl.trim()) return;
+    const media = createListingMediaItem(
+      mediaLinkKind,
+      {
+        name: mediaLinkCaption.trim() || mediaLinkUrl.trim(),
+        caption: mediaLinkCaption.trim() || MEDIA_KIND_LABELS[mediaLinkKind],
+        url: mediaLinkUrl.trim(),
+      },
+      activeListing.management.media.length,
+    );
+    updateActiveManagement({ media: [...activeListing.management.media, media] });
+    setMediaLinkUrl("");
+    setMediaLinkCaption("");
+    setState((current) => record(
+      current,
+      "Verknüpfung hinzugefügt",
+      "media",
+      media.id,
+      `${MEDIA_KIND_LABELS[mediaLinkKind]} ergänzt`,
+    ));
+  };
+
+  const updateMedia = (mediaId: string, patch: Partial<ListingMediaItem>) => {
+    if (!activeListing?.management) return;
+    updateActiveManagement({
+      media: activeListing.management.media.map((media) => (
+        media.id === mediaId ? { ...media, ...patch } : media
+      )),
+    });
+  };
+
+  const removeMedia = (mediaId: string) => {
+    if (!activeListing?.management || !canEdit) return;
+    const media = activeListing.management.media.find((item) => item.id === mediaId);
+    if (!media || !window.confirm(`„${media.caption || media.name}“ aus diesem Objekt entfernen?`)) return;
+    updateActiveManagement({
+      media: activeListing.management.media
+        .filter((item) => item.id !== mediaId)
+        .map((item, index) => ({ ...item, order: index })),
+    });
+  };
+
+  const moveMedia = (mediaId: string, direction: -1 | 1) => {
+    if (!activeListing?.management || !canEdit) return;
+    const ordered = [...activeListing.management.media].sort((left, right) => left.order - right.order);
+    const index = ordered.findIndex((media) => media.id === mediaId);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= ordered.length) return;
+    [ordered[index], ordered[target]] = [ordered[target], ordered[index]];
+    updateActiveManagement({
+      media: ordered.map((media, mediaIndex) => ({ ...media, order: mediaIndex })),
+    });
+  };
+
+  const rotateMedia = async (media: ListingMediaItem) => {
+    if (!activeListing || !canEdit) return;
+    const dataUrl = resolveListingMediaDataUrl(state, activeListing, media);
+    if (!dataUrl) {
+      notify("Das Bild ist lokal nicht verfügbar.");
+      return;
+    }
+    try {
+      updateMedia(media.id, {
+        dataUrl: await rotatedImageDataUrl(dataUrl),
+        mimeType: "image/jpeg",
+        rotation: 0,
+      });
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Das Bild konnte nicht gedreht werden.");
+    }
+  };
+
+  const downloadMediaZip = async () => {
+    if (!activeListing?.management) return;
+    const zip = new JSZip();
+    let count = 0;
+    activeListing.management.media
+      .filter((media) => (
+        media.released && (media.kind === "image" || media.kind === "floorplan")
+      ))
+      .forEach((media, index) => {
+        const dataUrl = resolveListingMediaDataUrl(state, activeListing, media);
+        const base64 = dataUrl.split(",")[1];
+        if (!base64) return;
+        const extension = media.mimeType?.includes("png")
+          ? "png"
+          : media.mimeType?.includes("webp")
+            ? "webp"
+            : "jpg";
+        zip.file(
+          `${String(index + 1).padStart(2, "0")}-${media.caption.replace(/[^a-zA-Z0-9äöüÄÖÜß]+/g, "-")}.${extension}`,
+          base64,
+          { base64: true },
+        );
+        count += 1;
+      });
+    if (!count) {
+      notify("Für dieses Objekt sind keine freigegebenen Bilder vorhanden.");
+      return;
+    }
+    downloadBlob(
+      await zip.generateAsync({ type: "blob", compression: "DEFLATE" }),
+      `bilder-${activeListing.externalId}.zip`,
+    );
+  };
+
+  const generateExpose = async () => {
+    if (!activeListing || !activeProject || !management) return;
+    setExposeBusy(true);
+    try {
+      const images = (activeListing.management?.media ?? [])
+        .filter((media) => (
+          media.released && (media.kind === "image" || media.kind === "floorplan")
+        ))
+        .sort((left, right) => left.order - right.order)
+        .map((media) => ({
+          dataUrl: resolveListingMediaDataUrl(state, activeListing, media),
+          caption: media.caption,
+        }))
+        .filter((image) => Boolean(image.dataUrl));
+      const result = await buildExposePdf({
+        listing: activeListing,
+        project: activeProject,
+        company: management.company,
+        images,
+        options: exposeOptions,
+      });
+      downloadBlob(result.blob, result.filename);
+      setState((current) => record(
+        current,
+        "Exposé erstellt",
+        "listing",
+        activeListing.id,
+        result.filename,
+      ));
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Das Exposé konnte nicht erstellt werden.");
+    } finally {
+      setExposeBusy(false);
+    }
+  };
+
+  const downloadOpenImmoPackage = async () => {
+    if (!activeListing || !activeProject) return;
+    setOpenImmoBusy(true);
+    try {
+      const result = await buildImportPackage({
+        project: activeProject,
+        listings: [activeListing],
+        houses: state.houses,
+        provider: state.provider,
+        promotionImages: state.promotionImages,
+        portalPublicationEnabled: activeListing.management?.released === true,
+      });
+      downloadBlob(result.blob, result.filename);
+      setState((current) => record(
+        current,
+        "OpenImmo-Paket erstellt",
+        "listing",
+        activeListing.id,
+        result.filename,
+      ));
+      notify(`OpenImmo-Paket „${result.filename}“ wurde heruntergeladen.`);
+    } catch (error) {
+      notify(error instanceof Error
+        ? `OpenImmo-Paket konnte nicht erstellt werden: ${error.message}`
+        : "OpenImmo-Paket konnte nicht erstellt werden.");
+    } finally {
+      setOpenImmoBusy(false);
+    }
+  };
+
+  const addAppointment = () => {
+    if (!activeListing?.management || !canEdit) return;
+    if (!appointmentDraft.title.trim() || !appointmentDraft.startsAt) {
+      notify("Bitte mindestens Titel und Startzeit des Termins eintragen.");
+      return;
+    }
+    const start = new Date(appointmentDraft.startsAt);
+    const fallbackEnd = new Date(start.getTime() + 60 * 60 * 1000);
+    const appointment: ListingAppointment = {
+      id: uid("appointment"),
+      title: appointmentDraft.title.trim(),
+      startsAt: start.toISOString(),
+      endsAt: appointmentDraft.endsAt
+        ? new Date(appointmentDraft.endsAt).toISOString()
+        : fallbackEnd.toISOString(),
+      location: appointmentDraft.location.trim(),
+      contactName: appointmentDraft.contactName.trim(),
+      contactEmail: appointmentDraft.contactEmail.trim(),
+      notes: appointmentDraft.notes.trim(),
+      status: "planned",
+      createdAt: new Date().toISOString(),
+    };
+    updateActiveManagement({
+      appointments: [...activeListing.management.appointments, appointment],
+    });
+    setAppointmentDraft({
+      title: "Besichtigung",
+      startsAt: "",
+      endsAt: "",
+      location: "",
+      contactName: "",
+      contactEmail: "",
+      notes: "",
+    });
+    setState((current) => record(
+      current,
+      "Termin angelegt",
+      "appointment",
+      appointment.id,
+      `${appointment.title} am ${formatDate(appointment.startsAt, true)}`,
+    ));
+  };
+
+  const updateAppointment = (appointmentId: string, patch: Partial<ListingAppointment>) => {
+    if (!activeListing?.management || !canEdit) return;
+    updateActiveManagement({
+      appointments: activeListing.management.appointments.map((appointment) => (
+        appointment.id === appointmentId ? { ...appointment, ...patch } : appointment
+      )),
+    });
+  };
+
+  const removeAppointment = (appointmentId: string) => {
+    if (!activeListing?.management || !canEdit) return;
+    updateActiveManagement({
+      appointments: activeListing.management.appointments.filter((item) => item.id !== appointmentId),
+    });
+  };
+
+  const downloadAppointment = (appointment: ListingAppointment) => {
+    const stamp = (value: string) => new Date(value)
+      .toISOString()
+      .replace(/[-:]/g, "")
+      .replace(/\.\d{3}/, "");
+    const escape = (value: string) => value
+      .replaceAll("\\", "\\\\")
+      .replaceAll("\n", "\\n")
+      .replaceAll(",", "\\,")
+      .replaceAll(";", "\\;");
+    const ics = [
+      "BEGIN:VCALENDAR",
+      "VERSION:2.0",
+      "PRODID:-//Inserate Studio//DE",
+      "BEGIN:VEVENT",
+      `UID:${appointment.id}@inseratstudio.local`,
+      `DTSTAMP:${stamp(new Date().toISOString())}`,
+      `DTSTART:${stamp(appointment.startsAt)}`,
+      `DTEND:${stamp(appointment.endsAt)}`,
+      `SUMMARY:${escape(appointment.title)}`,
+      `LOCATION:${escape(appointment.location)}`,
+      `DESCRIPTION:${escape(appointment.notes)}`,
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\r\n");
+    downloadBlob(new Blob([ics], { type: "text/calendar;charset=utf-8" }), `${appointment.title}.ics`);
+  };
+
+  const transferActive = async () => {
+    if (!activeListing || !canTransfer || busy) return;
+    await onTransferListing(activeListing.id);
+  };
+
+  const deleteRemoteSelected = async () => {
+    if (!selectedIds.length || !canDeleteRemote || busy) return;
+    if (!window.confirm(
+      `${selectedIds.length} OpenImmo-Löschauftrag${selectedIds.length === 1 ? "" : "e"} wirklich an die konfigurierte Schnittstelle übertragen?\n\nDie Löschung wird erst durch einen späteren Importbericht bestätigt.`,
+    )) return;
+    await onDeleteListings(selectedIds);
+  };
+
+  const importReportFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setReportBusy(true);
+    try {
+      const content = await file.text();
+      const events = parseImportReport(content, management.portals);
+      if (!events.length) {
+        notify("Im Bericht wurden keine Objekt-IDs mit Statusinformationen gefunden.");
+        return;
+      }
+      const result = applyImportReport(state, file.name, events);
+      setState(result.state);
+      notify(`${result.matchedCount} von ${events.length} Berichtseinträgen wurden Objekten zugeordnet.`);
+    } catch {
+      notify("Der Importbericht konnte nicht gelesen werden.");
+    } finally {
+      setReportBusy(false);
+    }
+  };
+
+  const updatePortalConfig = (portalId: string, patch: Partial<PortalConfiguration>) => {
+    if (!canManageCompany) return;
+    setState((current) => current.management
+      ? {
+          ...current,
+          projects: patch.enabled === undefined
+            ? current.projects
+            : current.projects.map((project) => ({
+                ...project,
+                listings: project.listings.map((listing) => (
+                  listing.management
+                    ? {
+                        ...listing,
+                        management: {
+                          ...listing.management,
+                          portals: listing.management.portals.map((portal) => (
+                            portal.portalId === portalId
+                              ? { ...portal, enabled: patch.enabled! }
+                              : portal
+                          )),
+                          updatedAt: new Date().toISOString(),
+                        },
+                      }
+                    : listing
+                )),
+              })),
+          management: {
+            ...current.management,
+            portals: current.management.portals.map((portal) => (
+              portal.id === portalId ? { ...portal, ...patch } : portal
+            )),
+          },
+        }
+      : current);
+  };
+
+  const updateCompany = (patch: Partial<CompanySettings>) => {
+    if (!canManageCompany) return;
+    setState((current) => current.management
+      ? {
+          ...current,
+          management: {
+            ...current.management,
+            company: { ...current.management.company, ...patch },
+          },
+        }
+      : current);
+  };
+
+  const canWriteFolder = (folder: ManagementFileFolder | undefined): boolean => {
+    if (!folder || !currentUser || !canEdit) return false;
+    if (currentUser.role === "admin") return true;
+    if (folder.scope === "templates") return false;
+    return folder.scope === "public"
+      || folder.ownerUserId === currentUser.id
+      || folder.accessUserIds.includes(currentUser.id);
+  };
+
+  const addFileFolder = () => {
+    if (!currentUser || !newFolderName.trim() || !canEdit) return;
+    if (newFolderScope === "templates" && currentUser.role !== "admin") {
+      notify("Vorlagenordner können nur durch die Administration angelegt werden.");
+      return;
+    }
+    const at = new Date().toISOString();
+    const folder: ManagementFileFolder = {
+      id: uid("folder"),
+      name: newFolderName.trim(),
+      scope: newFolderScope,
+      ownerUserId: newFolderScope === "personal" ? currentUser.id : undefined,
+      parentId: activeFolder?.scope === newFolderScope ? activeFolder.id : undefined,
+      accessUserIds: newFolderScope === "personal"
+        ? [currentUser.id]
+        : management.users.filter((user) => user.active).map((user) => user.id),
+      createdAt: at,
+    };
+    setState((current) => {
+      if (!current.management) return current;
+      return record({
+        ...current,
+        management: {
+          ...current.management,
+          fileFolders: [...current.management.fileFolders, folder],
+        },
+      }, "Ordner angelegt", "folder", folder.id, folder.name);
+    });
+    setActiveFolderId(folder.id);
+    setNewFolderName("");
+  };
+
+  const addManagementFiles = async (event: ChangeEvent<HTMLInputElement>) => {
+    const files = [...(event.target.files ?? [])];
+    event.target.value = "";
+    if (!files.length || !activeFolder || !currentUser || !canWriteFolder(activeFolder)) return;
+    try {
+      const at = new Date().toISOString();
+      const additions = await Promise.all(files.map(async (file) => ({
+        id: uid("file"),
+        folderId: activeFolder.id,
+        name: file.name,
+        mimeType: file.type || "application/octet-stream",
+        size: file.size,
+        dataUrl: await fileDataUrl(file),
+        createdAt: at,
+        createdByUserId: currentUser.id,
+      })));
+      setState((current) => {
+        if (!current.management) return current;
+        return record({
+          ...current,
+          management: {
+            ...current.management,
+            files: [...current.management.files, ...additions],
+          },
+        }, "Dateien gespeichert", "file", activeFolder.id, `${additions.length} Datei${additions.length === 1 ? "" : "en"} in ${activeFolder.name}`);
+      });
+    } catch {
+      notify("Mindestens eine Datei konnte nicht in die Dateiverwaltung übernommen werden.");
+    }
+  };
+
+  const removeManagementFile = (fileId: string) => {
+    if (!activeFolder || !canWriteFolder(activeFolder)) return;
+    const file = management.files.find((item) => item.id === fileId);
+    if (!file || !window.confirm(`„${file.name}“ dauerhaft aus der Dateiverwaltung entfernen?`)) return;
+    setState((current) => current.management
+      ? {
+          ...current,
+          management: {
+            ...current.management,
+            files: current.management.files.filter((item) => item.id !== fileId),
+          },
+        }
+      : current);
+  };
+
+  const removeFileFolder = () => {
+    if (
+      !activeFolder
+      || ["folder-templates", "folder-public"].includes(activeFolder.id)
+      || activeFolder.id.startsWith("folder-personal-")
+      || !canWriteFolder(activeFolder)
+    ) return;
+    const childFolders = management.fileFolders.filter((folder) => (
+      folder.parentId === activeFolder.id
+    ));
+    const files = management.files.filter((file) => file.folderId === activeFolder.id);
+    if (childFolders.length || files.length) {
+      notify("Der Ordner kann erst gelöscht werden, wenn er leer ist.");
+      return;
+    }
+    if (!window.confirm(`Ordner „${activeFolder.name}“ löschen?`)) return;
+    setState((current) => current.management
+      ? {
+          ...current,
+          management: {
+            ...current.management,
+            fileFolders: current.management.fileFolders.filter((folder) => folder.id !== activeFolder.id),
+          },
+        }
+      : current);
+    setActiveFolderId(activeFolder.parentId ?? "");
+  };
+
+  const addUser = () => {
+    if (!canManageUsers || !newUser.name.trim() || !newUser.email.trim()) {
+      notify("Für eine echte Anmeldung werden Name und E-Mail benötigt.");
+      return;
+    }
+    const user = {
+      ...createManagementUser(newUser.name.trim(), newUser.email.trim(), newUser.role),
+      businessRole: newUser.businessRole,
+      visibilityScope: newUser.visibilityScope,
+      organizationUnitIds: [newUser.organizationUnitId || "unit-company"],
+      managerUserId: newUser.managerUserId || undefined,
+    };
+    const personalFolder: ManagementFileFolder = {
+      id: `folder-personal-${user.id}`,
+      name: user.name,
+      scope: "personal",
+      ownerUserId: user.id,
+      accessUserIds: [user.id],
+      createdAt: user.createdAt,
+    };
+    setState((current) => {
+      if (!current.management) return current;
+      return record(
+        {
+          ...current,
+          management: {
+            ...current.management,
+            users: [...current.management.users, user],
+            fileFolders: [...current.management.fileFolders, personalFolder],
+          },
+        },
+        "Benutzer angelegt",
+        "user",
+        user.id,
+        `${user.name} – ${ROLE_LABELS[user.role]}`,
+      );
+    });
+    setNewUser({
+      name: "",
+      email: "",
+      role: "editor",
+      businessRole: "sales-representative",
+      visibilityScope: "self",
+      organizationUnitId: "unit-company",
+      managerUserId: "",
+    });
+  };
+
+  const updateUser = (userId: string, patch: Partial<ManagementUser>) => {
+    if (!canManageUsers) return;
+    setState((current) => {
+      if (!current.management) return current;
+      const users = current.management.users.map((user) => (
+        user.id === userId ? { ...user, ...patch } : user
+      ));
+      const activeAdmins = users.filter((user) => user.active && user.role === "admin");
+      if (!activeAdmins.length) {
+        notify("Mindestens ein aktiver Administrator muss erhalten bleiben.");
+        return current;
+      }
+      return {
+        ...current,
+        management: {
+          ...current.management,
+          users,
+          currentUserId: users.some((user) => (
+            user.id === current.management?.currentUserId && user.active
+          ))
+            ? current.management.currentUserId
+            : activeAdmins[0].id,
+        },
+      };
+    });
+  };
+
+  const addOrganizationUnit = () => {
+    if (!canManageUsers || !newUnit.name.trim()) return;
+    const unit: OrganizationUnit = {
+      id: uid("unit"),
+      name: newUnit.name.trim(),
+      type: newUnit.type,
+      parentId: newUnit.type === "company" ? undefined : newUnit.parentId || "unit-company",
+      managerUserId: newUnit.managerUserId || undefined,
+      active: true,
+      createdAt: new Date().toISOString(),
+    };
+    setState((current) => {
+      if (!current.management) return current;
+      return record({
+        ...current,
+        management: {
+          ...current.management,
+          organizationUnits: [...current.management.organizationUnits, unit],
+        },
+      }, "Organisationseinheit angelegt", "organization", unit.id, unit.name);
+    });
+    setNewUnit({
+      name: "",
+      type: "team",
+      parentId: newUnit.parentId || "unit-company",
+      managerUserId: "",
+    });
+  };
+
+  const updateOrganizationUnit = (
+    unitId: string,
+    patch: Partial<OrganizationUnit>,
+  ) => {
+    if (!canManageUsers) return;
+    setState((current) => current.management
+      ? {
+          ...current,
+          management: {
+            ...current.management,
+            organizationUnits: current.management.organizationUnits.map((unit) => (
+              unit.id === unitId ? { ...unit, ...patch } : unit
+            )),
+          },
+        }
+      : current);
+  };
+
+  const removeOrganizationUnit = (unitId: string) => {
+    if (!canManageUsers || unitId === "unit-company") return;
+    const unit = management.organizationUnits.find((item) => item.id === unitId);
+    if (!unit) return;
+    const used = (
+      management.organizationUnits.some((item) => item.parentId === unitId)
+      || management.users.some((user) => user.organizationUnitIds.includes(unitId))
+      || rows.some((row) => row.management.organizationUnitId === unitId)
+    );
+    if (used) {
+      notify("Der Bereich ist noch Mitarbeitern, Unterbereichen oder Objekten zugeordnet.");
+      return;
+    }
+    if (!window.confirm(`Bereich „${unit.name}“ löschen?`)) return;
+    setState((current) => current.management
+      ? {
+          ...current,
+          management: {
+            ...current.management,
+            organizationUnits: current.management.organizationUnits.filter((item) => item.id !== unitId),
+          },
+        }
+      : current);
+  };
+
+  const auditEntries = management.auditLog.filter((entry) => {
+    const normalized = auditQuery.trim().toLocaleLowerCase("de-DE");
+    if (!normalized) return true;
+    const user = management.users.find((item) => item.id === entry.userId);
+    return [
+      entry.action,
+      entry.description,
+      entry.targetId,
+      user?.name,
+    ].some((value) => String(value ?? "").toLocaleLowerCase("de-DE").includes(normalized));
+  });
+
+  return (
+    <section className="management-shell">
+      <header className="management-header">
+        <div>
+          <span className="eyebrow">{mode === "administration" ? "Administration" : "Objektbestand"}</span>
+          <h2>{mode === "administration" ? "Organisation und Zugriffsrechte" : "Alle Objektakten zentral verwalten"}</h2>
+          <p>
+            {mode === "administration"
+              ? "Firmendaten, Benutzerrollen und Aktivitäten nachvollziehbar an einem Ort."
+              : `${rows.length} Objekte · ${rows.filter((row) => row.management.lifecycle === "online").length} online · ${rows.filter((row) => row.management.archivedAt).length} archiviert`}
+          </p>
+        </div>
+        <div className="management-user-switch">
+          <span>Persönlich angemeldet</span>
+          <div className="authenticated-user">
+            <strong>{authenticatedUser?.name ?? currentUser?.name ?? "Lokaler Benutzer"}</strong>
+            <small>
+              {authenticatedUser?.email || currentUser?.email || "Lokale Rückfallebene"}
+              {" · "}
+              {ROLE_LABELS[authenticatedUser?.role ?? currentUser?.role ?? "viewer"]}
+              {currentUser ? ` · ${BUSINESS_ROLE_LABELS[currentUser.businessRole]}` : ""}
+            </small>
+          </div>
+        </div>
+      </header>
+
+      <nav className="management-nav" aria-label="Immobilienverwaltung">
+        {availableSections.map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            className={section === id ? "active" : ""}
+            onClick={() => setSection(id)}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
+
+      {mode === "administration" && effectiveRole !== "admin" ? (
+        <div className="management-empty">Dieser Bereich ist ausschließlich für Administratoren sichtbar.</div>
+      ) : null}
+
+      {section === "objects" ? (
+        <div className="management-object-workspace">
+          <div className="management-create-row">
+            <div>
+              <b>Objekte</b>
+              <span>Haus, Wohnung oder Grundstück direkt als vollständige Objektakte anlegen.</span>
+            </div>
+            <button type="button" className="primary" disabled={!canEdit} onClick={() => setShowCreateWizard(true)}>
+              + Neues Objekt anlegen
+            </button>
+          </div>
+          <div className="management-toolbar">
+            <input
+              type="search"
+              value={query}
+              placeholder="Objekt-ID, Titel, Adresse oder Haustyp suchen"
+              aria-label="Objekte durchsuchen"
+              onChange={(event) => setQuery(event.target.value)}
+            />
+            <select value={assigneeFilter} aria-label="Mitarbeiter filtern" onChange={(event) => setAssigneeFilter(event.target.value)}>
+              <option value="">Alle sichtbaren Mitarbeiter</option>
+              {assignableUsers.map((user) => (
+                <option key={user.id} value={user.id}>{user.name} · {BUSINESS_ROLE_LABELS[user.businessRole]}</option>
+              ))}
+            </select>
+            <select value={archiveFilter} aria-label="Archivfilter" onChange={(event) => setArchiveFilter(event.target.value as ArchiveFilter)}>
+              <option value="active">Aktive Objekte</option>
+              <option value="archived">Archiv</option>
+              <option value="all">Alle Objekte</option>
+            </select>
+            <select value={releaseFilter} aria-label="Freigabefilter" onChange={(event) => setReleaseFilter(event.target.value as ReleaseFilter)}>
+              <option value="all">Alle Freigaben</option>
+              <option value="released">Freigegeben</option>
+              <option value="not-released">Nicht freigegeben</option>
+            </select>
+            <select value={sortKey} aria-label="Objekte sortieren" onChange={(event) => setSortKey(event.target.value as SortKey)}>
+              <option value="updated-desc">Zuletzt geändert</option>
+              <option value="updated-asc">Älteste Änderung</option>
+              <option value="created-desc">Neu eingestellt</option>
+              <option value="external-id">Objekt-ID</option>
+              <option value="city">Ort</option>
+              <option value="price">Preis</option>
+              <option value="living-area">Fläche</option>
+              <option value="rooms">Zimmer</option>
+            </select>
+          </div>
+
+          <div className="management-bulkbar">
+            <span>{selectedIds.length} ausgewählt</span>
+            <button type="button" disabled={!canEdit || !selectedIds.length} onClick={() => bulkLifecycle("release")}>Freigeben</button>
+            <button type="button" disabled={!canEdit || !selectedIds.length} onClick={() => bulkLifecycle("unrelease")}>Freigabe entfernen</button>
+            <button type="button" disabled={!canEdit || !selectedIds.length} onClick={copySelected}>Kopieren</button>
+            <button type="button" disabled={!canEdit || !selectedIds.length} onClick={() => bulkLifecycle("archive")}>Archivieren</button>
+            <button type="button" disabled={!canEdit || !selectedIds.length} onClick={() => bulkLifecycle("restore")}>Wiederherstellen</button>
+            <button type="button" className="danger" disabled={!canDeleteRemote || !selectedIds.length || busy || !uploadAvailable} onClick={deleteRemoteSelected}>Löschauftrag senden</button>
+            <button type="button" className="danger ghost" disabled={!canEdit || !selectedIds.length} onClick={deleteLocalSelected}>Lokal löschen</button>
+          </div>
+
+          <div className="management-table-wrap">
+            <table className="management-object-table">
+              <thead>
+                <tr>
+                  <th>
+                    <input
+                      type="checkbox"
+                      checked={visibleRows.length > 0 && visibleRows.every((row) => selectedIds.includes(row.listing.id))}
+                      aria-label="Alle sichtbaren Objekte auswählen"
+                      onChange={(event) => selectAllVisible(event.target.checked)}
+                    />
+                  </th>
+                  <th>Status</th>
+                  <th>Objekt</th>
+                  <th>Ort</th>
+                  <th>Kennzahlen</th>
+                  <th>Mitarbeiter</th>
+                  <th>Freigabe</th>
+                  <th>Geändert</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {visibleRows.map(({ project, listing, management: listingManagement }) => (
+                  <tr key={listing.id} className={activeListingId === listing.id ? "active" : ""}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.includes(listing.id)}
+                        aria-label={`${listing.externalId} auswählen`}
+                        onChange={(event) => setSelectedIds((selected) => (
+                          event.target.checked
+                            ? [...new Set([...selected, listing.id])]
+                            : selected.filter((id) => id !== listing.id)
+                        ))}
+                      />
+                    </td>
+                    <td><span className={`lifecycle-badge ${nextLifecycle(listing)}`}>{LIFECYCLE_LABELS[nextLifecycle(listing)]}</span></td>
+                    <td>
+                      <button
+                        type="button"
+                        className="management-object-link"
+                        onClick={() => {
+                          setActiveListingId(listing.id);
+                          setEditorTab("object");
+                        }}
+                      >
+                        <b>{listing.texts.title || listing.templateName}</b>
+                        <span>{listing.externalId} · {project.name}</span>
+                      </button>
+                    </td>
+                    <td>{listingManagement.details.zip} {listingManagement.details.city}<small>{listingManagement.details.district}</small></td>
+                    <td>{euro(listingManagement.details.purchasePrice)}<small>{listingAreaLabel(listingManagement.details)}</small></td>
+                    <td>
+                      {management.users.find((user) => user.id === listingManagement.assignedUserId)?.name ?? "Nicht zugeordnet"}
+                      <small>{management.organizationUnits.find((unit) => unit.id === listingManagement.organizationUnitId)?.name ?? "Kein Bereich"}</small>
+                    </td>
+                    <td>{listingManagement.released ? "Ja" : "Nein"}</td>
+                    <td>{formatDate(listingManagement.updatedAt, true)}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="compact-action"
+                        onClick={() => setActiveListingId(listing.id)}
+                      >
+                        Bearbeiten
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {!visibleRows.length ? (
+              <div className="management-empty">Keine Objekte entsprechen den gewählten Filtern.</div>
+            ) : null}
+          </div>
+
+          {activeListing && activeProject && activeListing.management && activeDetails ? (
+            <article className="management-editor">
+              <header className="management-editor-header">
+                <div>
+                  <span className={`lifecycle-badge ${nextLifecycle(activeListing)}`}>{LIFECYCLE_LABELS[nextLifecycle(activeListing)]}</span>
+                  <h3>{activeListing.texts.title || activeListing.templateName}</h3>
+                  <p>{activeListing.externalId} · {activeProject.name}</p>
+                </div>
+                <div className="management-editor-actions">
+                  <button
+                    type="button"
+                    disabled={!canEdit}
+                    title={`Zuletzt geprüft: ${formatDate(activeListing.management.lastReviewedAt, true)}`}
+                    onClick={() => updateActiveManagement({ lastReviewedAt: new Date().toISOString() })}
+                  >
+                    Als geprüft markieren
+                  </button>
+                  {currentWorkflowIndex === WORKFLOW_STEPS.length - 1 ? (
+                    <>
+                      <button type="button" onClick={generateExpose} disabled={exposeBusy}>{exposeBusy ? "PDF wird erstellt …" : "Exposé-PDF"}</button>
+                      <button type="button" onClick={downloadOpenImmoPackage} disabled={openImmoBusy}>
+                        {openImmoBusy ? "Paket wird erstellt …" : "OpenImmo-Paket"}
+                      </button>
+                      <button type="button" className="primary" onClick={transferActive} disabled={!canTransfer || busy || !uploadAvailable}>
+                        {uploadAvailable ? "Jetzt veröffentlichen" : "Upload-Helfer offline"}
+                      </button>
+                    </>
+                  ) : (
+                    <button type="button" className="primary" onClick={() => setEditorTab(nextWorkflowStep.tab)}>
+                      Weiter: {nextWorkflowStep.label}
+                    </button>
+                  )}
+                  <button type="button" aria-label="Editor schließen" onClick={() => setActiveListingId("")}>×</button>
+                </div>
+              </header>
+
+              <section className="object-workflow-overview" aria-label="Vollständigkeit der Objektakte">
+                <div>
+                  <span>Nächste Aktion</span>
+                  <b>
+                    {completedWorkflowSteps === WORKFLOW_STEPS.length
+                      ? "Objekt prüfen und veröffentlichen"
+                      : `${WORKFLOW_STEPS[workflowCompletion.findIndex((complete) => !complete)]?.label ?? "Objekt prüfen"} vervollständigen`}
+                  </b>
+                </div>
+                <div className="object-workflow-progress">
+                  <span><b>{completedWorkflowSteps}</b> von {WORKFLOW_STEPS.length} Bereichen vollständig</span>
+                  <i><span style={{ width: `${(completedWorkflowSteps / WORKFLOW_STEPS.length) * 100}%` }} /></i>
+                </div>
+                <dl>
+                  <div><dt>Medien</dt><dd>{activeListing.management.media.length}</dd></div>
+                  <div><dt>Termine</dt><dd>{activeListing.management.appointments.length}</dd></div>
+                  <div><dt>Portale</dt><dd>{activeListing.management.portals.filter((portal) => portal.enabled).length}</dd></div>
+                </dl>
+              </section>
+
+              <nav className="management-editor-tabs workflow-tabs" aria-label="Geführter Objektprozess">
+                {WORKFLOW_STEPS.map((step, index) => (
+                  <button
+                    key={step.tab}
+                    type="button"
+                    className={`${currentWorkflowIndex === index ? "active" : ""}${workflowCompletion[index] ? " complete" : ""}`}
+                    aria-current={currentWorkflowIndex === index ? "step" : undefined}
+                    onClick={() => setEditorTab(step.tab)}
+                  >
+                    <span>{workflowCompletion[index] ? "✓" : index + 1}</span>
+                    <b>{step.label}</b>
+                    <small>{step.description}</small>
+                  </button>
+                ))}
+              </nav>
+
+              {currentWorkflowIndex === 3 ? (
+                <nav className="management-editor-subnav" aria-label="Medien und Details">
+                  <button type="button" className={editorTab === "features" ? "active" : ""} onClick={() => setEditorTab("features")}>Ausstattung & Medien</button>
+                  <button type="button" className={editorTab === "energy" ? "active" : ""} onClick={() => setEditorTab("energy")}>Energie & Provision</button>
+                </nav>
+              ) : null}
+
+              {currentWorkflowIndex === 5 ? (
+                <nav className="management-editor-subnav" aria-label="Prüfen und veröffentlichen">
+                  <button type="button" className={editorTab === "export" ? "active" : ""} onClick={() => setEditorTab("export")}>Portale & Export</button>
+                  <button type="button" className={editorTab === "appointments" ? "active" : ""} onClick={() => setEditorTab("appointments")}>Termine & Aktivitäten</button>
+                </nav>
+              ) : null}
+
+              <div className="management-editor-body">
+                {editorTab === "object" ? (
+                  <>
+                    <div className="management-form-grid three">
+                      <Field label="Objekt-ID" value={activeListing.externalId} disabled onChange={() => undefined} />
+                      <SelectField
+                        label="Verantwortlicher Mitarbeiter"
+                        value={activeListing.management.assignedUserId ?? ""}
+                        disabled={!canAssign}
+                        options={[
+                          ["", "Nicht zugeordnet"],
+                          ...assignableUsers.map((user) => [
+                            user.id,
+                            `${user.name} · ${BUSINESS_ROLE_LABELS[user.businessRole]}`,
+                          ] as [string, string]),
+                        ]}
+                        onChange={(assignedUserId) => {
+                          const assigned = management.users.find((user) => user.id === assignedUserId);
+                          updateActiveManagement({
+                            assignedUserId,
+                            organizationUnitId: assigned?.organizationUnitIds[0]
+                              ?? activeListing.management?.organizationUnitId,
+                          });
+                        }}
+                      />
+                      <SelectField
+                        label="Organisationseinheit"
+                        value={activeListing.management.organizationUnitId ?? ""}
+                        disabled={!canAssign}
+                        options={management.organizationUnits
+                          .filter((unit) => unit.active)
+                          .map((unit) => [unit.id, unit.name])}
+                        onChange={(organizationUnitId) => updateActiveManagement({ organizationUnitId })}
+                      />
+                      <SelectField
+                        label="Hauptrubrik"
+                        value={activeDetails.objectCategory}
+                        disabled={!canEdit}
+                        options={[
+                          ["house-purchase", "Haus Kauf"],
+                          ["apartment-purchase", "Wohnung Kauf"],
+                          ["land", "Grundstück"],
+                        ]}
+                        onChange={(objectCategory) => updateDetails({ objectCategory: objectCategory as ListingDetails["objectCategory"] })}
+                      />
+                      <SelectField
+                        label="Objektstatus"
+                        value={activeDetails.objectStatus}
+                        disabled={!canEdit}
+                        options={[
+                          ["projected", "Projektierung"],
+                          ["in-construction", "Im Bau"],
+                          ["complete", "Fertiggestellt"],
+                        ]}
+                        onChange={(value) => updateDetails({ objectStatus: value as ListingDetails["objectStatus"] })}
+                      />
+                      <Field label="Gruppen-ID" value={activeDetails.groupId} disabled={!canEdit} onChange={(value) => updateDetails({ groupId: value })} />
+                      <Field label="Auftragsnummer" value={activeDetails.orderNumber} disabled={!canEdit} onChange={(value) => updateDetails({ orderNumber: value })} />
+                      <Field label="Status des Objektes" value={activeDetails.objectStatusText} disabled={!canEdit} onChange={(objectStatusText) => updateDetails({ objectStatusText })} />
+                      <SelectField label="Währung" value={activeDetails.currency} disabled={!canEdit} options={[["EUR", "EUR"], ["CHF", "CHF"], ["USD", "USD"]]} onChange={(value) => updateDetails({ currency: value as ListingDetails["currency"] })} />
+                      <Field label="Verfügbar ab" type="date" value={activeDetails.availableFrom} disabled={!canEdit} onChange={(value) => updateDetails({ availableFrom: value })} />
+                      <Field
+                        label="Nächste Aktion fällig"
+                        type="date"
+                        value={activeListing.management.nextActionDueAt?.slice(0, 10) ?? ""}
+                        disabled={!canEdit}
+                        onChange={(value) => updateActiveManagement({
+                          nextActionDueAt: value ? `${value}T12:00:00.000Z` : undefined,
+                        })}
+                      />
+                      <SelectField
+                        label="IS24 Platzierung"
+                        value={activeDetails.is24Placement}
+                        disabled={!canEdit}
+                        options={[["", "Optional"], ["premium", "Premium-Platzierung"], ["showcase", "Schaufenster-Platzierung"]]}
+                        onChange={(is24Placement) => updateDetails({ is24Placement: is24Placement as ListingDetails["is24Placement"] })}
+                      />
+                      <SelectField
+                        label="Immowelt Platzierung"
+                        value={activeDetails.immoweltPlacement}
+                        disabled={!canEdit}
+                        options={[["", "Optional"], ["tir", "TIR"], ["booster", "Booster"]]}
+                        onChange={(immoweltPlacement) => updateDetails({ immoweltPlacement: immoweltPlacement as ListingDetails["immoweltPlacement"] })}
+                      />
+                    </div>
+                    <TextArea label="Interne Hinweise" value={activeDetails.internalNotes} disabled={!canEdit} onChange={(value) => updateDetails({ internalNotes: value })} />
+                    <div className="management-checkbox-grid">
+                      <Toggle label="Objekt freigeben" checked={activeListing.management.released} disabled={!canEdit} onChange={(released) => updateActiveManagement({ released })} />
+                      <Toggle label="Adresse veröffentlichen" checked={activeDetails.addressPublished} disabled={!canEdit} onChange={(addressPublished) => updateDetails({ addressPublished })} />
+                      <Toggle label="Google Maps freigeben" checked={activeDetails.googleMapsPublished} disabled={!canEdit} onChange={(googleMapsPublished) => updateDetails({ googleMapsPublished })} />
+                      <Toggle label="Portal-Zusatzbuchung" checked={activeDetails.portalAdditionalBooking} disabled={!canEdit} onChange={(portalAdditionalBooking) => updateDetails({ portalAdditionalBooking })} />
+                      <Toggle label="Beim Speichern zur Übertragung vormerken" checked={activeDetails.transferOnSave} disabled={!canEdit} onChange={(transferOnSave) => updateDetails({ transferOnSave })} />
+                    </div>
+                  </>
+                ) : null}
+
+                {editorTab === "address" ? (
+                  <>
+                    <h3>Objektadresse</h3>
+                    <div className="management-form-grid three">
+                      <Field label="Land" value={activeDetails.country} disabled={!canEdit} onChange={(value) => updateDetails({ country: value })} />
+                      <Field label="Straße" value={activeDetails.street} disabled={!canEdit} onChange={(value) => updateDetails({ street: value })} />
+                      <Field label="Hausnummer" value={activeDetails.houseNumber} disabled={!canEdit} onChange={(value) => updateDetails({ houseNumber: value })} />
+                      <Field label="PLZ" value={activeDetails.zip} disabled={!canEdit} onChange={(value) => updateDetails({ zip: value })} />
+                      <Field label="Ort" value={activeDetails.city} disabled={!canEdit} onChange={(value) => updateDetails({ city: value })} />
+                      <Field label="Ortsteil" value={activeDetails.district} disabled={!canEdit} onChange={(value) => updateDetails({ district: value })} />
+                      <Field label="Gebiet" value={activeDetails.areaType} disabled={!canEdit} onChange={(areaType) => updateDetails({ areaType })} />
+                      <Field label="Breitengrad" type="number" value={activeDetails.latitude} disabled={!canEdit} onChange={(value) => updateDetails({ latitude: readNumber(value) })} />
+                      <Field label="Längengrad" type="number" value={activeDetails.longitude} disabled={!canEdit} onChange={(value) => updateDetails({ longitude: readNumber(value) })} />
+                    </div>
+                    <h3>Vermarktungs-Ansprechpartner</h3>
+                    <div className="management-form-grid three">
+                      <Field label="Kontakt-Firma" value={activeDetails.contactCompany} disabled={!canEdit} onChange={(value) => updateDetails({ contactCompany: value })} />
+                      <Field label="Kontakt-Vorname" value={activeDetails.contactFirstName} disabled={!canEdit} onChange={(value) => updateDetails({ contactFirstName: value })} />
+                      <Field label="Kontakt-Nachname" value={activeDetails.contactLastName} disabled={!canEdit} onChange={(value) => updateDetails({ contactLastName: value })} />
+                      <Field label="Kontakt-E-Mail" type="email" value={activeDetails.contactEmail} disabled={!canEdit} onChange={(value) => updateDetails({ contactEmail: value })} />
+                      <Field label="Kontakt-Telefon" value={activeDetails.contactPhone} disabled={!canEdit} onChange={(value) => updateDetails({ contactPhone: value })} />
+                      <Field label="Kontakt-Fax" value={activeDetails.contactFax} disabled={!canEdit} onChange={(contactFax) => updateDetails({ contactFax })} />
+                      <Field label="Kontakt-Büro" value={activeDetails.contactOfficePhone} disabled={!canEdit} onChange={(contactOfficePhone) => updateDetails({ contactOfficePhone })} />
+                      <Field label="Kontakt-Mobil" value={activeDetails.contactMobile} disabled={!canEdit} onChange={(contactMobile) => updateDetails({ contactMobile })} />
+                    </div>
+                    <h3>Daten Verkäufer / Mieter / verknüpfte Kontakte</h3>
+                    <div className="management-form-grid four">
+                      <Field label="Anrede" value={activeDetails.ownerSalutation} disabled={!canEdit} onChange={(ownerSalutation) => updateDetails({ ownerSalutation })} />
+                      <Field label="Titel" value={activeDetails.ownerTitle} disabled={!canEdit} onChange={(ownerTitle) => updateDetails({ ownerTitle })} />
+                      <Field label="Firma" value={activeDetails.ownerCompany} disabled={!canEdit} onChange={(ownerCompany) => updateDetails({ ownerCompany })} />
+                      <Field label="Vorname" value={activeDetails.ownerFirstName} disabled={!canEdit} onChange={(ownerFirstName) => updateDetails({ ownerFirstName })} />
+                      <Field label="Nachname" value={activeDetails.ownerLastName} disabled={!canEdit} onChange={(ownerLastName) => updateDetails({ ownerLastName, ownerName: `${activeDetails.ownerFirstName} ${ownerLastName}`.trim() })} />
+                      <Field label="E-Mail" type="email" value={activeDetails.ownerEmail} disabled={!canEdit} onChange={(ownerEmail) => updateDetails({ ownerEmail })} />
+                      <Field label="Telefon" value={activeDetails.ownerPhone} disabled={!canEdit} onChange={(ownerPhone) => updateDetails({ ownerPhone })} />
+                      <Field label="Fax" value={activeDetails.ownerFax} disabled={!canEdit} onChange={(ownerFax) => updateDetails({ ownerFax })} />
+                      <Field label="Büro" value={activeDetails.ownerOfficePhone} disabled={!canEdit} onChange={(ownerOfficePhone) => updateDetails({ ownerOfficePhone })} />
+                      <Field label="Mobil" value={activeDetails.ownerMobile} disabled={!canEdit} onChange={(ownerMobile) => updateDetails({ ownerMobile })} />
+                      <Field label="Straße" value={activeDetails.ownerStreet} disabled={!canEdit} onChange={(ownerStreet) => updateDetails({ ownerStreet })} />
+                      <Field label="PLZ" value={activeDetails.ownerZip} disabled={!canEdit} onChange={(ownerZip) => updateDetails({ ownerZip })} />
+                      <Field label="Ort" value={activeDetails.ownerCity} disabled={!canEdit} onChange={(ownerCity) => updateDetails({ ownerCity })} />
+                    </div>
+                    <div className="management-checkbox-grid">
+                      <Toggle label="Kontakt ist Eigentümer" checked={activeDetails.ownerIsPropertyOwner} disabled={!canEdit} onChange={(ownerIsPropertyOwner) => updateDetails({ ownerIsPropertyOwner })} />
+                    </div>
+                  </>
+                ) : null}
+
+                {editorTab === "base" ? (
+                  <>
+                    {activeDetails.objectCategory === "land" ? (
+                      <div className="management-form-grid four">
+                        <SelectField
+                          label="Vermarktungsart"
+                          value={activeDetails.marketingType}
+                          disabled={!canEdit}
+                          options={[["purchase", "Kauf"], ["rent-lease", "Pacht"], ["leasehold", "Erbpacht"]]}
+                          onChange={(marketingType) => updateDetails({ marketingType: marketingType as ListingDetails["marketingType"] })}
+                        />
+                        <Field label="Grundstücksfläche m²" type="number" min={0} value={activeDetails.plotArea} disabled={!canEdit} onChange={(value) => updateDetails({ plotArea: readNumber(value) })} />
+                        <Field label="Kaufpreis" type="number" min={0} value={activeDetails.purchasePrice} disabled={!canEdit || activeDetails.marketingType !== "purchase"} onChange={(value) => updateDetails({ purchasePrice: readNumber(value) })} />
+                        <Field label="Preis/Pacht pro Jahr" type="number" min={0} value={activeDetails.annualLeasePrice} disabled={!canEdit || activeDetails.marketingType === "purchase"} onChange={(value) => updateDetails({ annualLeasePrice: readNumber(value) })} />
+                        <Field label="Nutzungsart" value={activeDetails.landUse} disabled={!canEdit} onChange={(landUse) => updateDetails({ landUse })} />
+                        <SelectField
+                          label="Erschließung"
+                          value={activeDetails.developmentStatus}
+                          disabled={!canEdit}
+                          options={[["", "Keine Angabe"], ["UNERSCHLOSSEN", "Unerschlossen"], ["TEILERSCHLOSSEN", "Teilerschlossen"], ["VOLLERSCHLOSSEN", "Vollerschlossen"], ["ORTSUEBLICHERSCHLOSSEN", "Ortsüblich erschlossen"]]}
+                          onChange={(developmentStatus) => updateDetails({ developmentStatus })}
+                        />
+                        <SelectField
+                          label="Bebaubar nach"
+                          value={activeDetails.buildingLaw}
+                          disabled={!canEdit}
+                          options={[["", "Keine Angabe"], ["34_NACHBARSCHAFT", "§ 34 Nachbarschaft"], ["35_AUSSENGEBIET", "§ 35 Außengebiet"], ["B_PLAN", "Bebauungsplan"], ["KEIN BAULAND", "Kein Bauland"], ["BAUERWARTUNGSLAND", "Bauerwartungsland"], ["BAULAND_OHNE_B_PLAN", "Bauland ohne B-Plan"]]}
+                          onChange={(buildingLaw) => updateDetails({ buildingLaw })}
+                        />
+                        <Field label="Empfohlene Nutzung" value={activeDetails.recommendedUse} disabled={!canEdit} onChange={(recommendedUse) => updateDetails({ recommendedUse })} />
+                        <Field label="Teilbar ab m²" type="number" min={0} value={activeDetails.divisibleFrom} disabled={!canEdit} onChange={(value) => updateDetails({ divisibleFrom: readNumber(value) })} />
+                        <Field label="GRZ" type="number" min={0} value={activeDetails.siteOccupancyRatio} disabled={!canEdit} onChange={(value) => updateDetails({ siteOccupancyRatio: readNumber(value) })} />
+                        <Field label="GFZ" type="number" min={0} value={activeDetails.floorAreaRatio} disabled={!canEdit} onChange={(value) => updateDetails({ floorAreaRatio: readNumber(value) })} />
+                      </div>
+                    ) : (
+                      <div className="management-form-grid four">
+                        <Field label="Kaufpreis" type="number" min={0} value={activeDetails.purchasePrice} disabled={!canEdit} onChange={(value) => updateDetails({ purchasePrice: readNumber(value) })} />
+                        <Field label="Wohnfläche m²" type="number" min={0} value={activeDetails.livingArea} disabled={!canEdit} onChange={(value) => updateDetails({ livingArea: readNumber(value) })} />
+                        <Field label="Nutzfläche m²" type="number" min={0} value={activeDetails.usableArea} disabled={!canEdit} onChange={(value) => updateDetails({ usableArea: readNumber(value) })} />
+                        {activeDetails.objectCategory === "house-purchase" ? <Field label="Grundstück m²" type="number" min={0} value={activeDetails.plotArea} disabled={!canEdit} onChange={(value) => updateDetails({ plotArea: readNumber(value) })} /> : null}
+                        <Field label="Zimmer" type="number" min={0} value={activeDetails.rooms} disabled={!canEdit} onChange={(value) => updateDetails({ rooms: readNumber(value) })} />
+                        <Field label="Schlafzimmer" type="number" min={0} value={activeDetails.bedrooms} disabled={!canEdit} onChange={(value) => updateDetails({ bedrooms: readNumber(value) })} />
+                        <Field label="Badezimmer" type="number" min={0} value={activeDetails.bathrooms} disabled={!canEdit} onChange={(value) => updateDetails({ bathrooms: readNumber(value) })} />
+                        <Field label="Etagenanzahl" type="number" min={0} value={activeDetails.floors} disabled={!canEdit} onChange={(value) => updateDetails({ floors: readNumber(value) })} />
+                        {activeDetails.objectCategory === "apartment-purchase" ? <Field label="Etage" type="number" min={0} value={activeDetails.floorNumber} disabled={!canEdit} onChange={(value) => updateDetails({ floorNumber: readNumber(value) })} /> : null}
+                        <Field label="Kubatur m³" type="number" min={0} value={activeDetails.cubature} disabled={!canEdit} onChange={(value) => updateDetails({ cubature: readNumber(value) })} />
+                        <Field label="Balkone" type="number" min={0} value={activeDetails.balconies} disabled={!canEdit} onChange={(value) => updateDetails({ balconies: readNumber(value) })} />
+                        <Field label="Terrassen" type="number" min={0} value={activeDetails.terraces} disabled={!canEdit} onChange={(value) => updateDetails({ terraces: readNumber(value) })} />
+                        <Field label="Loggien" type="number" min={0} value={activeDetails.loggias} disabled={!canEdit} onChange={(value) => updateDetails({ loggias: readNumber(value) })} />
+                        {activeDetails.objectCategory === "house-purchase"
+                          ? <Field label="Haustyp" value={activeDetails.houseType} disabled={!canEdit} onChange={(value) => updateDetails({ houseType: value })} />
+                          : <Field label="Wohnungstyp" value={activeDetails.apartmentType} disabled={!canEdit} onChange={(apartmentType) => updateDetails({ apartmentType })} />}
+                        <Field label="Baujahr" type="number" min={1800} value={activeDetails.constructionYear} disabled={!canEdit} onChange={(value) => updateDetails({ constructionYear: readNumber(value) })} />
+                        <Field label="Sanierungsjahr" type="number" min={0} value={activeDetails.renovationYear} disabled={!canEdit} onChange={(value) => updateDetails({ renovationYear: readNumber(value) })} />
+                        <Field label="Hausgeld" type="number" min={0} value={activeDetails.houseMoney} disabled={!canEdit || activeDetails.objectCategory !== "apartment-purchase"} onChange={(value) => updateDetails({ houseMoney: readNumber(value) })} />
+                        <Field label="Mieteinnahmen/Monat" type="number" min={0} value={activeDetails.monthlyRentIncome} disabled={!canEdit} onChange={(value) => updateDetails({ monthlyRentIncome: readNumber(value) })} />
+                        <SelectField
+                          label="Zustand"
+                          value={activeDetails.condition}
+                          disabled={!canEdit}
+                          options={[
+                            ["ERSTBEZUG", "Erstbezug"],
+                            ["NEUWERTIG", "Neuwertig"],
+                            ["PROJEKTIERT", "Projektiert"],
+                            ["ROHBAU", "Rohbau"],
+                            ["GEPFLEGT", "Gepflegt"],
+                            ["MODERNISIERT", "Modernisiert"],
+                            ["TEIL_VOLLRENOVIERT", "Teil-/vollrenoviert"],
+                            ["TEIL_SANIERT", "Teilsaniert"],
+                            ["VOLL_SANIERT", "Vollsaniert"],
+                            ["SANIERUNGSBEDUERFTIG", "Sanierungsbedürftig"],
+                            ["BAUFAELLIG", "Baufällig"],
+                            ["ENTKERNT", "Entkernt"],
+                            ["ABRISSOBJEKT", "Abrissobjekt"],
+                            ["NACH_VEREINBARUNG", "Nach Vereinbarung"],
+                          ]}
+                          onChange={(condition) => updateDetails({ condition })}
+                        />
+                        <Field label="Bauphase" value={activeDetails.constructionPhase} disabled={!canEdit} onChange={(value) => updateDetails({ constructionPhase: value })} />
+                      </div>
+                    )}
+                    <div className="management-checkbox-grid">
+                      {activeDetails.objectCategory === "land" ? (
+                        <>
+                          <Toggle label="Kurzfristig bebaubar" checked={activeDetails.buildableSoon} disabled={!canEdit} onChange={(buildableSoon) => updateDetails({ buildableSoon })} />
+                          <Toggle label="Baugenehmigung vorhanden" checked={activeDetails.buildingPermit} disabled={!canEdit} onChange={(buildingPermit) => updateDetails({ buildingPermit })} />
+                          <Toggle label="Abriss erforderlich" checked={activeDetails.demolitionRequired} disabled={!canEdit} onChange={(demolitionRequired) => updateDetails({ demolitionRequired })} />
+                        </>
+                      ) : null}
+                    </div>
+                  </>
+                ) : null}
+
+                {editorTab === "features" ? (
+                  <>
+                    <div className="management-form-grid three">
+                      {activeDetails.objectCategory !== "land" ? (
+                        <>
+                          <SelectField
+                            label="Ausstattungsqualität"
+                            value={activeDetails.equipmentQuality}
+                            disabled={!canEdit}
+                            options={[["STANDARD", "Standard"], ["GEHOBEN", "Gehoben"], ["LUXUS", "Luxus"]]}
+                            onChange={(equipmentQuality) => updateDetails({ equipmentQuality })}
+                          />
+                          <Field label="Küchenart" value={activeDetails.kitchenType} disabled={!canEdit} onChange={(value) => updateDetails({ kitchenType: value })} />
+                          <Field label="Bad-Ausstattung" value={activeDetails.bathroomFeatures} disabled={!canEdit} onChange={(value) => updateDetails({ bathroomFeatures: value })} />
+                          <Field label="Bodenbeläge" value={activeDetails.flooring} disabled={!canEdit} onChange={(value) => updateDetails({ flooring: value })} />
+                          <Field label="Heizungsart" value={activeDetails.heatingType} disabled={!canEdit} onChange={(value) => updateDetails({ heatingType: value })} />
+                          <Field label="Befeuerungsart" value={activeDetails.energySource} disabled={!canEdit} onChange={(value) => updateDetails({ energySource: value })} />
+                          <Field label="Energietyp" value={activeDetails.energyType} disabled={!canEdit} onChange={(energyType) => updateDetails({ energyType })} />
+                          <Field label="Stellplätze (Freitext)" value={activeDetails.parkingTypes} disabled={!canEdit} onChange={(value) => updateDetails({ parkingTypes: value })} />
+                          <SelectField
+                            label="Möbliert/Teilmöbliert"
+                            value={activeDetails.furnished}
+                            disabled={!canEdit}
+                            options={[["", "Keine Angabe"], ["no", "Nein"], ["furnished", "Möbliert"], ["partly-furnished", "Teilmöbliert"]]}
+                            onChange={(furnished) => updateDetails({ furnished: furnished as ListingDetails["furnished"] })}
+                          />
+                        </>
+                      ) : null}
+                      <Field label="Umgebung" value={activeDetails.surroundings} disabled={!canEdit} onChange={(surroundings) => updateDetails({ surroundings })} />
+                      <Field label="Ausblick" value={activeDetails.view} disabled={!canEdit} onChange={(value) => updateDetails({ view: value })} />
+                    </div>
+                    {activeDetails.objectCategory !== "land" ? (
+                      <>
+                        <div className="management-checkbox-grid">
+                          {([
+                            ["grannyFlat", "Einliegerwohnung"],
+                            ["guestWc", "Gäste-WC"],
+                            ["garden", "Garten/-mitbenutzung"],
+                            ["nonSmoker", "Nichtraucher"],
+                            ["attic", "Dachboden"],
+                            ["fireplace", "Kamin"],
+                            ["basement", "Keller"],
+                            ["barrierFree", "Barrierefrei"],
+                            ["assistedLiving", "Betreutes Wohnen"],
+                            ["seniorFriendly", "Seniorengerecht"],
+                            ["sauna", "Sauna"],
+                            ["pool", "Pool"],
+                            ["conservatory", "Wintergarten"],
+                            ["airConditioning", "Klimaanlage"],
+                            ["alarmSystem", "Alarmanlage"],
+                            ["elevator", "Personenaufzug"],
+                            ["monument", "Denkmalschutz"],
+                            ["rented", "Vermietet"],
+                            ["vacationSuitable", activeDetails.objectCategory === "apartment-purchase" ? "Als Ferienwohnung geeignet" : "Als Ferienhaus geeignet"],
+                          ] as Array<[keyof ListingDetails, string]>).map(([key, label]) => (
+                            <Toggle
+                              key={key}
+                              label={label}
+                              checked={Boolean(activeDetails[key])}
+                              disabled={!canEdit}
+                              onChange={(checked) => updateDetails({ [key]: checked } as Partial<ListingDetails>)}
+                            />
+                          ))}
+                        </div>
+                        <h4>Stellplätze</h4>
+                        <div className="parking-space-grid">
+                          {activeDetails.parkingSpaces.map((parking, index) => {
+                            const label = {
+                              carport: "Carport",
+                              duplex: "Duplex",
+                              outdoor: "Freiplatz",
+                              garage: "Garage",
+                              "parking-garage": "Parkhaus",
+                              underground: "Tiefgarage",
+                            }[parking.kind];
+                            return (
+                              <article key={parking.kind}>
+                                <b>{label}</b>
+                                <Field label="Anzahl" type="number" min={0} value={parking.count} disabled={!canEdit} onChange={(value) => updateDetails({
+                                  parkingSpaces: activeDetails.parkingSpaces.map((item, itemIndex) => itemIndex === index ? { ...item, count: readNumber(value) } : item),
+                                })} />
+                                <Field label="Preis pro Stellplatz" type="number" min={0} value={parking.price} disabled={!canEdit || parking.count <= 0} onChange={(value) => updateDetails({
+                                  parkingSpaces: activeDetails.parkingSpaces.map((item, itemIndex) => itemIndex === index ? { ...item, price: readNumber(value) } : item),
+                                })} />
+                              </article>
+                            );
+                          })}
+                        </div>
+                      </>
+                    ) : null}
+                  </>
+                ) : null}
+
+                {editorTab === "energy" ? (
+                  <>
+                    <div className="management-form-grid three">
+                      <SelectField
+                        label="Ausweisart"
+                        value={activeDetails.energyCertificateType}
+                        disabled={!canEdit}
+                        options={[["BEDARF", "Bedarfsausweis"], ["VERBRAUCH", "Verbrauchsausweis"]]}
+                        onChange={(energyCertificateType) => updateDetails({ energyCertificateType })}
+                      />
+                      <Field label="Gültig bis" type="date" value={activeDetails.energyCertificateValidUntil} disabled={!canEdit} onChange={(value) => updateDetails({ energyCertificateValidUntil: value })} />
+                      <Field label="Energieklasse" value={activeDetails.energyClass} disabled={!canEdit} onChange={(value) => updateDetails({ energyClass: value })} />
+                      <Field label="Endenergiebedarf" type="number" min={0} value={activeDetails.endEnergyDemand} disabled={!canEdit} onChange={(value) => updateDetails({ endEnergyDemand: readNumber(value) })} />
+                      <Field label="Ausweisjahr" type="number" min={1900} value={activeDetails.certificateYear} disabled={!canEdit} onChange={(value) => updateDetails({ certificateYear: readNumber(value) })} />
+                      <Field label="Provision" value={activeDetails.commissionText} disabled={!canEdit} onChange={(value) => updateDetails({ commissionText: value })} />
+                    </div>
+                    <div className="management-checkbox-grid">
+                      <Toggle label="Warmwasser enthalten" checked={activeDetails.warmWaterIncluded} disabled={!canEdit} onChange={(warmWaterIncluded) => updateDetails({ warmWaterIncluded })} />
+                      <Toggle label="Provisionspflichtig" checked={activeDetails.commissionRequired} disabled={!canEdit} onChange={(commissionRequired) => updateDetails({ commissionRequired })} />
+                    </div>
+                  </>
+                ) : null}
+
+                {editorTab === "texts" ? (
+                  <div className="management-form-grid">
+                    <TextArea label="Überschrift" rows={2} value={activeListing.texts.title} disabled={!canEdit} onChange={(title) => updateTexts({ title })} />
+                    <TextArea label="Objektbeschreibung" rows={8} value={activeListing.texts.description} disabled={!canEdit} onChange={(description) => updateTexts({ description })} />
+                    <TextArea label="Ausstattung" rows={8} value={activeListing.texts.equipment} disabled={!canEdit} onChange={(equipment) => updateTexts({ equipment })} />
+                    <TextArea label="Lage" rows={7} value={activeListing.texts.location} disabled={!canEdit} onChange={(location) => updateTexts({ location })} />
+                    <TextArea label="Sonstiges" rows={7} value={activeListing.texts.other} disabled={!canEdit} onChange={(other) => updateTexts({ other })} />
+                    <TextArea label="Provision" rows={4} value={activeListing.texts.commission ?? ""} disabled={!canEdit} onChange={(commission) => updateTexts({ commission })} />
+                    <TextArea label="Anmerkung / Haftungshinweis" rows={5} value={activeListing.texts.disclaimer ?? ""} disabled={!canEdit} onChange={(disclaimer) => updateTexts({ disclaimer })} />
+                    <TextArea label="Allgemeine Geschäftsbedingungen" rows={6} value={activeListing.texts.terms ?? ""} disabled={!canEdit} onChange={(terms) => updateTexts({ terms })} />
+                    <TextArea label="Freier Textblock für Empfehlungen" rows={5} value={activeListing.texts.recommendation ?? ""} disabled={!canEdit} onChange={(recommendation) => updateTexts({ recommendation })} />
+                  </div>
+                ) : null}
+
+                {editorTab === "appointments" ? (
+                  <div className="management-appointments">
+                    <div className="appointment-form">
+                      <div className="management-form-grid three">
+                        <Field label="Titel" value={appointmentDraft.title} disabled={!canEdit} onChange={(value) => setAppointmentDraft((current) => ({ ...current, title: value }))} />
+                        <Field label="Beginn" type="datetime-local" value={appointmentDraft.startsAt} disabled={!canEdit} onChange={(value) => setAppointmentDraft((current) => ({ ...current, startsAt: value }))} />
+                        <Field label="Ende" type="datetime-local" value={appointmentDraft.endsAt} disabled={!canEdit} onChange={(value) => setAppointmentDraft((current) => ({ ...current, endsAt: value }))} />
+                        <Field label="Ort" value={appointmentDraft.location} disabled={!canEdit} onChange={(value) => setAppointmentDraft((current) => ({ ...current, location: value }))} />
+                        <Field label="Kontakt" value={appointmentDraft.contactName} disabled={!canEdit} onChange={(value) => setAppointmentDraft((current) => ({ ...current, contactName: value }))} />
+                        <Field label="Kontakt-E-Mail" type="email" value={appointmentDraft.contactEmail} disabled={!canEdit} onChange={(value) => setAppointmentDraft((current) => ({ ...current, contactEmail: value }))} />
+                      </div>
+                      <TextArea label="Notizen" rows={3} value={appointmentDraft.notes} disabled={!canEdit} onChange={(value) => setAppointmentDraft((current) => ({ ...current, notes: value }))} />
+                      <button type="button" className="primary" disabled={!canEdit} onClick={addAppointment}>Termin anlegen</button>
+                    </div>
+                    <div className="appointment-list">
+                      {activeListing.management.appointments
+                        .slice()
+                        .sort((left, right) => left.startsAt.localeCompare(right.startsAt))
+                        .map((appointment) => (
+                          <article key={appointment.id}>
+                            <div>
+                              <span className={`appointment-status ${appointment.status}`}>{appointment.status === "planned" ? "Geplant" : appointment.status === "completed" ? "Erledigt" : "Abgesagt"}</span>
+                              <h4>{appointment.title}</h4>
+                              <p>{formatDate(appointment.startsAt, true)} bis {formatDate(appointment.endsAt, true)}</p>
+                              <small>{appointment.location}{appointment.contactName ? ` · ${appointment.contactName}` : ""}</small>
+                            </div>
+                            <div>
+                              <select value={appointment.status} disabled={!canEdit} onChange={(event) => updateAppointment(appointment.id, { status: event.target.value as ListingAppointment["status"] })}>
+                                <option value="planned">Geplant</option>
+                                <option value="completed">Erledigt</option>
+                                <option value="cancelled">Abgesagt</option>
+                              </select>
+                              <button type="button" onClick={() => downloadAppointment(appointment)}>Kalenderdatei</button>
+                              <button type="button" className="danger ghost" disabled={!canEdit} onClick={() => removeAppointment(appointment.id)}>Entfernen</button>
+                            </div>
+                          </article>
+                        ))}
+                      {!activeListing.management.appointments.length ? (
+                        <div className="management-empty">Noch keine Termine für dieses Objekt.</div>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+
+                {editorTab === "export" ? (
+                  <div className="management-export-grid">
+                    <section>
+                      <h4>Portalfreigabe</h4>
+                      <p>Die Portalzustände werden nach der FTP-Übertragung und über eingelesene Importberichte fortgeschrieben.</p>
+                      <div className="portal-state-list">
+                        {activeListing.management.portals.map((portalState) => {
+                          const portal = management.portals.find((item) => item.id === portalState.portalId);
+                          return (
+                            <article key={portalState.portalId}>
+                              <Toggle
+                                label={portal?.name ?? portalState.portalId}
+                                checked={portalState.enabled}
+                                disabled={!canEdit}
+                                onChange={(enabled) => updateActiveManagement({
+                                  portals: activeListing.management!.portals.map((item) => (
+                                    item.portalId === portalState.portalId
+                                      ? schedulePortalDesiredState(item, enabled)
+                                      : item
+                                  )),
+                                })}
+                              />
+                              <div className={`portal-sync-pair ${portalSyncHealth(portalState)}`}>
+                                <span>
+                                  <small>Soll</small>
+                                  <b>{portalDesiredStatus(portalState) === "online" ? "Online" : "Gelöscht"}</b>
+                                </span>
+                                <span>
+                                  <small>Ist</small>
+                                  <b className={`portal-status ${portalState.status}`}>{PORTAL_STATUS_LABELS[portalState.status]}</b>
+                                </span>
+                              </div>
+                              <small>{portalState.message || `Letzte Übertragung: ${formatDate(portalState.lastTransferAt, true)}`}</small>
+                              {portalState.nextRetryAt ? (
+                                <small>
+                                  Nächster automatischer Versuch: {formatDate(portalState.nextRetryAt, true)}
+                                  {" · "}
+                                  Versuch {(portalState.retryCount ?? 0) + 1}/4
+                                </small>
+                              ) : null}
+                              {(portalState.operationLog?.length ?? 0) > 0 ? (
+                                <details className="portal-operation-log">
+                                  <summary>Übertragungsprotokoll</summary>
+                                  {portalState.operationLog!.map((entry) => (
+                                    <div key={entry.id}>
+                                      <b>{formatDate(entry.at, true)} · {entry.kind === "delete" ? "Löschung" : entry.kind === "status-report" ? "Rückmeldung" : entry.kind === "update" ? "Änderung" : "Veröffentlichung"}</b>
+                                      <span>{entry.message}</span>
+                                    </div>
+                                  ))}
+                                </details>
+                              ) : null}
+                            </article>
+                          );
+                        })}
+                      </div>
+                    </section>
+                    <section className="expose-options">
+                      <h4>Exposé-Einstellungen</h4>
+                      <Toggle label="Kontaktdaten" checked={exposeOptions.includeContact} onChange={(includeContact) => setExposeOptions((current) => ({ ...current, includeContact }))} />
+                      <Toggle label="Vollständige Adresse" checked={exposeOptions.includeAddress} onChange={(includeAddress) => setExposeOptions((current) => ({ ...current, includeAddress }))} />
+                      <Toggle label="Freigegebene Bilder" checked={exposeOptions.includeImages} onChange={(includeImages) => setExposeOptions((current) => ({ ...current, includeImages }))} />
+                      <Toggle label="Firmenname als Logo" checked={exposeOptions.includeLogo} onChange={(includeLogo) => setExposeOptions((current) => ({ ...current, includeLogo }))} />
+                      <Toggle label="Seitenzahlen" checked={exposeOptions.includePageNumbers} onChange={(includePageNumbers) => setExposeOptions((current) => ({ ...current, includePageNumbers }))} />
+                      <Toggle label="Akzentfarben" checked={exposeOptions.includeColors} onChange={(includeColors) => setExposeOptions((current) => ({ ...current, includeColors }))} />
+                      <Toggle label="Nur Titelseite" checked={exposeOptions.firstPageOnly} onChange={(firstPageOnly) => setExposeOptions((current) => ({ ...current, firstPageOnly }))} />
+                      <button type="button" className="primary" disabled={exposeBusy} onClick={generateExpose}>Exposé herunterladen</button>
+                      <button type="button" disabled={openImmoBusy} onClick={downloadOpenImmoPackage}>
+                        {openImmoBusy ? "OpenImmo-Paket wird erstellt …" : "OpenImmo-Paket herunterladen"}
+                      </button>
+                    </section>
+                  </div>
+                ) : null}
+
+                {currentWorkflowIndex === 3 ? (
+                <section className="management-media-section">
+                  <header>
+                    <div>
+                      <h4>Medien und Informationsmaterial</h4>
+                      <p>Bilder, Grundrisse, Dokumente, Videos, Links und virtuelle Touren werden objektbezogen verwaltet.</p>
+                    </div>
+                    <div>
+                      <label className={`upload-button${canEdit ? "" : " disabled"}`}>
+                        Dateien hinzufügen
+                        <input type="file" multiple accept="image/*,.pdf,.doc,.docx" disabled={!canEdit} onChange={addFiles} />
+                      </label>
+                      <button type="button" onClick={downloadMediaZip}>Bilder als ZIP</button>
+                    </div>
+                  </header>
+
+                  <div className="media-link-form">
+                    <SelectField
+                      label="Art"
+                      value={mediaLinkKind}
+                      disabled={!canEdit}
+                      options={[["video", "Video"], ["link", "Link"], ["tour", "3D-Tour"]]}
+                      onChange={(value) => setMediaLinkKind(value as ListingMediaKind)}
+                    />
+                    <Field label="Bezeichnung" value={mediaLinkCaption} disabled={!canEdit} onChange={setMediaLinkCaption} />
+                    <Field label="URL" type="url" value={mediaLinkUrl} disabled={!canEdit} onChange={setMediaLinkUrl} />
+                    <button type="button" className="primary" disabled={!canEdit || !mediaLinkUrl.trim()} onClick={addLinkMedia}>Verknüpfung hinzufügen</button>
+                  </div>
+
+                  <div className="management-media-list">
+                    {activeListing.management.media
+                      .slice()
+                      .sort((left, right) => left.order - right.order)
+                      .map((media) => {
+                        const dataUrl = resolveListingMediaDataUrl(state, activeListing, media);
+                        const isImage = media.kind === "image" || media.kind === "floorplan";
+                        return (
+                          <article key={media.id}>
+                            <div className="management-media-preview">
+                              {isImage && dataUrl ? (
+                                <Image
+                                  src={dataUrl}
+                                  alt={media.caption || media.name}
+                                  width={160}
+                                  height={110}
+                                  sizes="160px"
+                                  unoptimized
+                                />
+                              ) : (
+                                <span>{MEDIA_KIND_LABELS[media.kind]}</span>
+                              )}
+                            </div>
+                            <div className="management-media-meta">
+                              <select
+                                value={media.kind}
+                                disabled={!canEdit}
+                                onChange={(event) => updateMedia(media.id, { kind: event.target.value as ListingMediaKind })}
+                              >
+                                {Object.entries(MEDIA_KIND_LABELS).map(([value, label]) => (
+                                  <option key={value} value={value}>{label}</option>
+                                ))}
+                              </select>
+                              <input
+                                value={media.caption}
+                                disabled={!canEdit}
+                                aria-label="Medienbeschreibung"
+                                onChange={(event) => updateMedia(media.id, { caption: event.target.value })}
+                              />
+                              <small>{media.name}{media.url ? ` · ${media.url}` : ""}</small>
+                            </div>
+                            <div className="management-media-actions">
+                              <Toggle label="Freigegeben" checked={media.released} disabled={!canEdit} onChange={(released) => updateMedia(media.id, { released })} />
+                              <button type="button" disabled={!canEdit || media.order === 0} onClick={() => moveMedia(media.id, -1)}>↑</button>
+                              <button type="button" disabled={!canEdit || media.order === activeListing.management!.media.length - 1} onClick={() => moveMedia(media.id, 1)}>↓</button>
+                              {isImage ? <button type="button" disabled={!canEdit} onClick={() => rotateMedia(media)}>Drehen</button> : null}
+                              {media.url ? <a href={media.url} target="_blank" rel="noreferrer">Öffnen</a> : null}
+                              {media.dataUrl && media.kind === "document" ? <a href={media.dataUrl} download={media.name}>Download</a> : null}
+                              <button type="button" className="danger ghost" disabled={!canEdit} onClick={() => removeMedia(media.id)}>Entfernen</button>
+                            </div>
+                          </article>
+                        );
+                      })}
+                  </div>
+                </section>
+                ) : null}
+              </div>
+              <footer className="management-editor-footer">
+                <button
+                  type="button"
+                  disabled={currentWorkflowIndex === 0}
+                  onClick={() => setEditorTab(WORKFLOW_STEPS[currentWorkflowIndex - 1]?.tab ?? "object")}
+                >
+                  Zurück
+                </button>
+                <span>Schritt {currentWorkflowIndex + 1} von {WORKFLOW_STEPS.length}</span>
+                {currentWorkflowIndex < WORKFLOW_STEPS.length - 1 ? (
+                  <button type="button" className="primary" onClick={() => setEditorTab(nextWorkflowStep.tab)}>
+                    Weiter: {nextWorkflowStep.label}
+                  </button>
+                ) : (
+                  <button type="button" className="primary" onClick={transferActive} disabled={!canTransfer || busy || !uploadAvailable}>
+                    {uploadAvailable ? "Jetzt veröffentlichen" : "Upload-Helfer offline"}
+                  </button>
+                )}
+              </footer>
+            </article>
+          ) : null}
+        </div>
+      ) : null}
+
+      {section === "files" ? (
+        <div className="management-panel">
+          <header>
+            <div>
+              <span className="eyebrow">Kommunikation</span>
+              <h3>Dateiverwaltung</h3>
+              <p>Interne Vorlagen, öffentliche Teamdateien und persönliche Dokumente bleiben nach Benutzerrechten getrennt.</p>
+            </div>
+          </header>
+          <div className="file-manager">
+            <aside className="file-folder-list">
+              <div className="file-folder-heading">
+                <b>Dateibereich</b>
+                <span>{visibleFolders.length} Ordner</span>
+              </div>
+              {(["templates", "public", "personal"] as ManagementFileScope[]).map((scope) => {
+                const label = scope === "templates"
+                  ? "Livinghaus Vorlagen"
+                  : scope === "public"
+                    ? "Öffentlich"
+                    : "Persönlich";
+                const folders = visibleFolders.filter((folder) => folder.scope === scope);
+                if (!folders.length) return null;
+                return (
+                  <section key={scope}>
+                    <h4>{label}</h4>
+                    {folders.map((folder) => (
+                      <button
+                        key={folder.id}
+                        type="button"
+                        className={activeFolder?.id === folder.id ? "active" : ""}
+                        onClick={() => setActiveFolderId(folder.id)}
+                      >
+                        <span>{folder.parentId ? "↳" : "▣"}</span>
+                        <b>{folder.name}</b>
+                        <small>{management.files.filter((file) => file.folderId === folder.id).length}</small>
+                      </button>
+                    ))}
+                  </section>
+                );
+              })}
+              <div className="file-folder-create">
+                <input value={newFolderName} placeholder="Neuer Ordner" onChange={(event) => setNewFolderName(event.target.value)} />
+                <select value={newFolderScope} onChange={(event) => setNewFolderScope(event.target.value as ManagementFileScope)}>
+                  <option value="personal">Persönlich</option>
+                  <option value="public">Öffentlich</option>
+                  {currentUser?.role === "admin" ? <option value="templates">Vorlagen</option> : null}
+                </select>
+                <button type="button" disabled={!canEdit || !newFolderName.trim()} onClick={addFileFolder}>Ordner anlegen</button>
+              </div>
+            </aside>
+            <section className="file-browser">
+              <header>
+                <div>
+                  <span className="eyebrow">{activeFolder?.scope === "personal" ? "Persönlich" : activeFolder?.scope === "templates" ? "Vorlagen" : "Team"}</span>
+                  <h4>{activeFolder?.name ?? "Kein Ordner verfügbar"}</h4>
+                </div>
+                <div>
+                  <label className={`upload-button${canWriteFolder(activeFolder) ? "" : " disabled"}`}>
+                    Dateien hinzufügen
+                    <input type="file" multiple disabled={!canWriteFolder(activeFolder)} onChange={addManagementFiles} />
+                  </label>
+                  <button type="button" className="danger ghost" disabled={!activeFolder || ["folder-templates", "folder-public"].includes(activeFolder.id) || activeFolder.id.startsWith("folder-personal-")} onClick={removeFileFolder}>Ordner löschen</button>
+                </div>
+              </header>
+              <div className="file-browser-list">
+                {management.files
+                  .filter((file) => file.folderId === activeFolder?.id)
+                  .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+                  .map((file) => {
+                    const creator = management.users.find((user) => user.id === file.createdByUserId);
+                    return (
+                      <article key={file.id}>
+                        <div className="file-type-icon">{file.name.split(".").pop()?.slice(0, 4).toUpperCase() || "DATEI"}</div>
+                        <div>
+                          <b>{file.name}</b>
+                          <span>{fileSize(file.size)} · {formatDate(file.createdAt, true)} · {creator?.name ?? "Unbekannt"}</span>
+                        </div>
+                        <a href={file.dataUrl} download={file.name}>Herunterladen</a>
+                        <button type="button" className="danger ghost" disabled={!canWriteFolder(activeFolder)} onClick={() => removeManagementFile(file.id)}>Löschen</button>
+                      </article>
+                    );
+                  })}
+                {!management.files.some((file) => file.folderId === activeFolder?.id) ? (
+                  <div className="management-empty">Dieser Ordner enthält noch keine Dateien.</div>
+                ) : null}
+              </div>
+            </section>
+          </div>
+        </div>
+      ) : null}
+
+      {section === "portals" ? (
+        <div className="management-panel">
+          <header>
+            <div>
+              <span className="eyebrow">Exportschnittstellen</span>
+              <h3>Portalübersicht</h3>
+              <p>Kontingente und lokale Statuswerte werden durch Importberichte aktualisiert.</p>
+            </div>
+          </header>
+          <div className="portal-operation-summary">
+            <div className="synchronized"><span>Synchron</span><b>{synchronizedPortalCount}</b><small>Soll und Ist stimmen überein</small></div>
+            <div className="pending"><span>Ausstehend</span><b>{pendingPortalCount}</b><small>Übertragung oder Rückmeldung offen</small></div>
+            <div className="error"><span>Fehler</span><b>{failedPortalCount}</b><small>Automatische Wiederholung aktiv</small></div>
+          </div>
+          <div className="portal-config-grid">
+            {management.portals.map((portal) => (
+              <article key={portal.id}>
+                <div className="portal-config-heading">
+                  <div><span className={`portal-dot${portal.enabled ? " online" : ""}`} /><h4>{portal.name}</h4></div>
+                  <Toggle label="Aktiv" checked={portal.enabled} disabled={!canManageCompany} onChange={(enabled) => updatePortalConfig(portal.id, { enabled })} />
+                </div>
+                <div className="portal-metrics">
+                  <div><span>Online</span><b>{portal.currentOnline}</b></div>
+                  <div><span>Kontingent</span><b>{portal.quota || "∞"}</b></div>
+                  <div><span>Bilderlimit</span><b>{portal.imageLimit}</b></div>
+                  <div><span>Textlimit Bild</span><b>{portal.captionLimit}</b></div>
+                </div>
+                <div className="management-form-grid two">
+                  <Field label="Kontingent (0 = unbegrenzt)" type="number" min={0} value={portal.quota} disabled={!canManageCompany} onChange={(value) => updatePortalConfig(portal.id, { quota: readNumber(value) })} />
+                  <Field label="Maximale Bilder" type="number" min={1} value={portal.imageLimit} disabled={!canManageCompany} onChange={(value) => updatePortalConfig(portal.id, { imageLimit: readNumber(value) })} />
+                  <Field label="Max. Zeichen Bildtext" type="number" min={1} value={portal.captionLimit} disabled={!canManageCompany} onChange={(value) => updatePortalConfig(portal.id, { captionLimit: readNumber(value) })} />
+                </div>
+                <small>Letzter Berichtsabgleich: {formatDate(portal.lastSyncAt, true)}</small>
+              </article>
+            ))}
+          </div>
+          <div className="portal-object-matrix">
+            <h4>Status je Objekt</h4>
+            <table>
+              <thead>
+                <tr><th>Objekt</th>{management.portals.map((portal) => <th key={portal.id}>{portal.name}</th>)}</tr>
+              </thead>
+              <tbody>
+                {rows.filter((row) => !row.management.archivedAt).map((row) => (
+                  <tr key={row.listing.id}>
+                    <td><b>{row.listing.externalId}</b><small>{row.listing.texts.title}</small></td>
+                    {management.portals.map((portal) => {
+                      const status = row.management.portals.find((item) => item.portalId === portal.id);
+                      return (
+                        <td key={portal.id}>
+                          <div className={`portal-matrix-status ${status ? portalSyncHealth(status) : "pending"}`}>
+                            <small>Soll {status && portalDesiredStatus(status) === "deleted" ? "gelöscht" : "online"}</small>
+                            <span className={`portal-status ${status?.status ?? "not-transferred"}`}>{PORTAL_STATUS_LABELS[status?.status ?? "not-transferred"]}</span>
+                          </div>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
+
+      {section === "reports" ? (
+        <div className="management-panel">
+          <header>
+            <div>
+              <span className="eyebrow">Rückmeldungen</span>
+              <h3>Portal- und OpenImmo-Berichte</h3>
+              <p>XML-, CSV-, JSON- und Textberichte werden anhand der Objekt-ID zugeordnet.</p>
+            </div>
+            <label className={`upload-button${reportBusy ? " disabled" : ""}`}>
+              {reportBusy ? "Bericht wird verarbeitet …" : "Importbericht einlesen"}
+              <input type="file" accept=".xml,.csv,.json,.txt,.log" disabled={reportBusy} onChange={importReportFile} />
+            </label>
+          </header>
+          <div className="report-list">
+            {management.importReports.map((report: ImportReportRecord) => (
+              <details key={report.id}>
+                <summary>
+                  <div><b>{report.filename}</b><span>{formatDate(report.importedAt, true)}</span></div>
+                  <strong>{report.matchedCount}/{report.eventCount} zugeordnet</strong>
+                </summary>
+                <table>
+                  <thead><tr><th>Objekt-ID</th><th>Portal</th><th>Status</th><th>Meldung</th></tr></thead>
+                  <tbody>
+                    {report.events.map((event, index) => (
+                      <tr key={`${event.externalId}-${event.portalId}-${index}`}>
+                        <td>{event.externalId}</td>
+                        <td>{management.portals.find((portal) => portal.id === event.portalId)?.name ?? "Alle aktiven"}</td>
+                        <td><span className={`portal-status ${event.status}`}>{PORTAL_STATUS_LABELS[event.status]}</span></td>
+                        <td>{event.message}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </details>
+            ))}
+            {!management.importReports.length ? (
+              <div className="management-empty">Noch kein Importbericht eingelesen.</div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {section === "organization" ? (
+        <div className="management-panel organization-panel">
+          <header>
+            <div>
+              <span className="eyebrow">Unternehmensstruktur</span>
+              <h3>Bereiche, Regionen und Teams</h3>
+              <p>Die Hierarchie steuert automatisch, welche Mitarbeiter, Objekte und Kennzahlen eine Führungskraft sehen darf.</p>
+            </div>
+            <span className="permission-note">{management.organizationUnits.length} Einheiten</span>
+          </header>
+
+          <div className="organization-layout">
+            <section className="organization-units">
+              {management.organizationUnits.map((unit) => {
+                const assignedCount = management.users.filter((user) => (
+                  user.organizationUnitIds.includes(unit.id)
+                )).length;
+                return (
+                  <article key={unit.id} className={unit.active ? "" : "inactive"}>
+                    <div className="organization-unit-mark">{unit.type === "company" ? "U" : unit.type === "division" ? "B" : unit.type === "region" ? "R" : "T"}</div>
+                    <div className="organization-unit-fields">
+                      <input
+                        value={unit.name}
+                        disabled={!canManageUsers}
+                        aria-label="Name der Organisationseinheit"
+                        onChange={(event) => updateOrganizationUnit(unit.id, { name: event.target.value })}
+                      />
+                      <div>
+                        <select
+                          value={unit.type}
+                          disabled={!canManageUsers || unit.id === "unit-company"}
+                          aria-label="Art der Organisationseinheit"
+                          onChange={(event) => updateOrganizationUnit(unit.id, { type: event.target.value as OrganizationUnitType })}
+                        >
+                          <option value="company">Unternehmen</option>
+                          <option value="division">Bereich</option>
+                          <option value="region">Region</option>
+                          <option value="team">Team</option>
+                        </select>
+                        <select
+                          value={unit.parentId ?? ""}
+                          disabled={!canManageUsers || unit.id === "unit-company"}
+                          aria-label="Übergeordneter Bereich"
+                          onChange={(event) => updateOrganizationUnit(unit.id, { parentId: event.target.value || undefined })}
+                        >
+                          <option value="">Keine übergeordnete Einheit</option>
+                          {management.organizationUnits.filter((candidate) => candidate.id !== unit.id).map((candidate) => (
+                            <option key={candidate.id} value={candidate.id}>{candidate.name}</option>
+                          ))}
+                        </select>
+                        <select
+                          value={unit.managerUserId ?? ""}
+                          disabled={!canManageUsers}
+                          aria-label="Leitung der Organisationseinheit"
+                          onChange={(event) => updateOrganizationUnit(unit.id, { managerUserId: event.target.value || undefined })}
+                        >
+                          <option value="">Keine Leitung</option>
+                          {management.users.filter((user) => user.active).map((user) => (
+                            <option key={user.id} value={user.id}>{user.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    <div className="organization-unit-meta">
+                      <b>{assignedCount}</b>
+                      <span>Mitarbeiter</span>
+                    </div>
+                    <Toggle
+                      label={unit.active ? "Aktiv" : "Inaktiv"}
+                      checked={unit.active}
+                      disabled={!canManageUsers || unit.id === "unit-company"}
+                      onChange={(active) => updateOrganizationUnit(unit.id, { active })}
+                    />
+                    <button
+                      type="button"
+                      className="danger ghost"
+                      disabled={!canManageUsers || unit.id === "unit-company"}
+                      onClick={() => removeOrganizationUnit(unit.id)}
+                    >
+                      Löschen
+                    </button>
+                  </article>
+                );
+              })}
+            </section>
+
+            <aside className="organization-create">
+              <span className="eyebrow">Neue Einheit</span>
+              <h4>Bereich hinzufügen</h4>
+              <Field label="Bezeichnung" value={newUnit.name} disabled={!canManageUsers} onChange={(name) => setNewUnit((current) => ({ ...current, name }))} />
+              <SelectField label="Art" value={newUnit.type} disabled={!canManageUsers} options={[["division", "Bereich"], ["region", "Region"], ["team", "Team"]]} onChange={(type) => setNewUnit((current) => ({ ...current, type: type as OrganizationUnitType }))} />
+              <SelectField label="Übergeordnet" value={newUnit.parentId} disabled={!canManageUsers} options={management.organizationUnits.filter((unit) => unit.active).map((unit) => [unit.id, unit.name])} onChange={(parentId) => setNewUnit((current) => ({ ...current, parentId }))} />
+              <SelectField label="Leitung" value={newUnit.managerUserId} disabled={!canManageUsers} options={[["", "Noch nicht zugeordnet"], ...management.users.filter((user) => user.active).map((user) => [user.id, user.name] as [string, string])]} onChange={(managerUserId) => setNewUnit((current) => ({ ...current, managerUserId }))} />
+              <button type="button" className="primary" disabled={!canManageUsers || !newUnit.name.trim()} onClick={addOrganizationUnit}>Einheit anlegen</button>
+            </aside>
+          </div>
+
+          <section className="escalation-settings">
+            <header>
+              <div><span className="eyebrow">Automatische Statusregeln</span><h4>Aktualität und Eskalationen</h4></div>
+              <p>Diese Schwellen bestimmen die Führungskräfte-Ampel, ohne Mitarbeiter manuell bewerten zu müssen.</p>
+            </header>
+            <div className="management-form-grid four">
+              <Field label="Objekt beachten ab Tagen" type="number" min={1} value={management.escalationRules.staleWarningDays} disabled={!canManageUsers} onChange={(value) => setState((current) => current.management ? { ...current, management: { ...current.management, escalationRules: { ...current.management.escalationRules, staleWarningDays: readNumber(value) } } } : current)} />
+              <Field label="Objekt kritisch ab Tagen" type="number" min={1} value={management.escalationRules.staleCriticalDays} disabled={!canManageUsers} onChange={(value) => setState((current) => current.management ? { ...current, management: { ...current.management, escalationRules: { ...current.management.escalationRules, staleCriticalDays: readNumber(value) } } } : current)} />
+              <Field label="Inaktivität beachten ab Tagen" type="number" min={1} value={management.escalationRules.inactivityWarningDays} disabled={!canManageUsers} onChange={(value) => setState((current) => current.management ? { ...current, management: { ...current.management, escalationRules: { ...current.management.escalationRules, inactivityWarningDays: readNumber(value) } } } : current)} />
+              <Field label="Inaktivität kritisch ab Tagen" type="number" min={1} value={management.escalationRules.inactivityCriticalDays} disabled={!canManageUsers} onChange={(value) => setState((current) => current.management ? { ...current, management: { ...current.management, escalationRules: { ...current.management.escalationRules, inactivityCriticalDays: readNumber(value) } } } : current)} />
+              <Field label="Erneuerung vorwarnen (Tage)" type="number" min={0} value={management.escalationRules.renewalWarningDays} disabled={!canManageUsers} onChange={(value) => setState((current) => current.management ? { ...current, management: { ...current.management, escalationRules: { ...current.management.escalationRules, renewalWarningDays: readNumber(value) } } } : current)} />
+              <Toggle label="Portalfehler sofort kritisch" checked={management.escalationRules.portalErrorsCritical} disabled={!canManageUsers} onChange={(portalErrorsCritical) => setState((current) => current.management ? { ...current, management: { ...current.management, escalationRules: { ...current.management.escalationRules, portalErrorsCritical } } } : current)} />
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {section === "company" ? (
+        <div className="management-panel">
+          <header>
+            <div>
+              <span className="eyebrow">Basisdaten</span>
+              <h3>Firmendaten und Impressum</h3>
+              <p>Diese Angaben werden für Exposés und Ansprechpartner verwendet.</p>
+            </div>
+            {!canManageCompany ? <span className="permission-note">Nur Administration</span> : null}
+          </header>
+          <div className="management-form-grid three">
+            <Field label="Firmenname" value={management.company.name} disabled={!canManageCompany} onChange={(value) => updateCompany({ name: value })} />
+            <Field label="Rechtlicher Name" value={management.company.legalName} disabled={!canManageCompany} onChange={(value) => updateCompany({ legalName: value })} />
+            <Field label="Geschäftsführung" value={management.company.managingDirector} disabled={!canManageCompany} onChange={(value) => updateCompany({ managingDirector: value })} />
+            <Field label="Straße" value={management.company.street} disabled={!canManageCompany} onChange={(value) => updateCompany({ street: value })} />
+            <Field label="Hausnummer" value={management.company.houseNumber} disabled={!canManageCompany} onChange={(value) => updateCompany({ houseNumber: value })} />
+            <Field label="PLZ" value={management.company.zip} disabled={!canManageCompany} onChange={(value) => updateCompany({ zip: value })} />
+            <Field label="Ort" value={management.company.city} disabled={!canManageCompany} onChange={(value) => updateCompany({ city: value })} />
+            <Field label="Land" value={management.company.country} disabled={!canManageCompany} onChange={(value) => updateCompany({ country: value })} />
+            <Field label="Telefon" value={management.company.phone} disabled={!canManageCompany} onChange={(value) => updateCompany({ phone: value })} />
+            <Field label="E-Mail" type="email" value={management.company.email} disabled={!canManageCompany} onChange={(value) => updateCompany({ email: value })} />
+            <Field label="Website" type="url" value={management.company.website} disabled={!canManageCompany} onChange={(value) => updateCompany({ website: value })} />
+            <Field label="Steuernummer/USt-ID" value={management.company.taxId} disabled={!canManageCompany} onChange={(value) => updateCompany({ taxId: value })} />
+            <Field label="Handelsregister" value={management.company.tradeRegister} disabled={!canManageCompany} onChange={(value) => updateCompany({ tradeRegister: value })} />
+          </div>
+          <div className="management-form-grid">
+            <TextArea label="Impressum" rows={6} value={management.company.imprint} disabled={!canManageCompany} onChange={(value) => updateCompany({ imprint: value })} />
+            <TextArea label="Allgemeine Geschäftsbedingungen" rows={8} value={management.company.terms} disabled={!canManageCompany} onChange={(value) => updateCompany({ terms: value })} />
+            <TextArea label="Datenschutz-/Cookie-Hinweis" rows={6} value={management.company.privacyNotice} disabled={!canManageCompany} onChange={(value) => updateCompany({ privacyNotice: value })} />
+          </div>
+          <section className="opening-hours">
+            <h4>Öffnungszeiten</h4>
+            {management.company.openingHours.map((hours, index) => (
+              <div key={hours.weekday}>
+                <Toggle
+                  label={hours.weekday}
+                  checked={hours.enabled}
+                  disabled={!canManageCompany}
+                  onChange={(enabled) => updateCompany({
+                    openingHours: management.company.openingHours.map((item, itemIndex) => (
+                      itemIndex === index ? { ...item, enabled } : item
+                    )),
+                  })}
+                />
+                <input type="time" value={hours.opensAt} disabled={!canManageCompany || !hours.enabled} onChange={(event) => updateCompany({ openingHours: management.company.openingHours.map((item, itemIndex) => itemIndex === index ? { ...item, opensAt: event.target.value } : item) })} />
+                <span>bis</span>
+                <input type="time" value={hours.closesAt} disabled={!canManageCompany || !hours.enabled} onChange={(event) => updateCompany({ openingHours: management.company.openingHours.map((item, itemIndex) => itemIndex === index ? { ...item, closesAt: event.target.value } : item) })} />
+                <span>Pause</span>
+                <input type="time" value={hours.pauseFrom} disabled={!canManageCompany || !hours.enabled} onChange={(event) => updateCompany({ openingHours: management.company.openingHours.map((item, itemIndex) => itemIndex === index ? { ...item, pauseFrom: event.target.value } : item) })} />
+                <span>bis</span>
+                <input type="time" value={hours.pauseUntil} disabled={!canManageCompany || !hours.enabled} onChange={(event) => updateCompany({ openingHours: management.company.openingHours.map((item, itemIndex) => itemIndex === index ? { ...item, pauseUntil: event.target.value } : item) })} />
+              </div>
+            ))}
+          </section>
+        </div>
+      ) : null}
+
+      {section === "users" ? (
+        <div className="management-panel">
+          <header>
+            <div>
+              <span className="eyebrow">Berechtigungen</span>
+              <h3>Mitarbeiter, Funktionen und Sichtbereiche</h3>
+              <p>Systemrecht und Organisationsfunktion werden getrennt. Dadurch kann eine Vertriebsleitung ihr Team sehen, während eine Handelsvertretung ausschließlich den eigenen Bereich erhält.</p>
+            </div>
+          </header>
+          <div className="user-list">
+            {management.users.map((user) => (
+              <article key={user.id} className={user.active ? "" : "inactive"}>
+                <div className="user-avatar">{user.name.slice(0, 2).toUpperCase()}</div>
+                <div>
+                  <input value={user.name} disabled={!canManageUsers} aria-label="Benutzername" onChange={(event) => updateUser(user.id, { name: event.target.value })} />
+                  <input value={user.email} disabled={!canManageUsers} type="email" aria-label="Benutzer-E-Mail" placeholder="E-Mail" onChange={(event) => updateUser(user.id, { email: event.target.value })} />
+                  <small>Letzte Aktivität: {formatDate(user.lastActiveAt, true)}</small>
+                </div>
+                <div className="user-access-fields">
+                  <label>
+                    <span>Systemrecht</span>
+                    <select value={user.role} disabled={!canManageUsers} onChange={(event) => updateUser(user.id, { role: event.target.value as ManagementRole })}>
+                      <option value="admin">Administration</option>
+                      <option value="editor">Bearbeitung</option>
+                      <option value="viewer">Nur lesen</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Funktion</span>
+                    <select value={user.businessRole} disabled={!canManageUsers} onChange={(event) => updateUser(user.id, { businessRole: event.target.value as BusinessRole })}>
+                      {Object.entries(BUSINESS_ROLE_LABELS).map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Sichtbereich</span>
+                    <select value={user.visibilityScope} disabled={!canManageUsers} onChange={(event) => updateUser(user.id, { visibilityScope: event.target.value as VisibilityScope })}>
+                      {Object.entries(VISIBILITY_SCOPE_LABELS).map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Organisationseinheit</span>
+                    <select value={user.organizationUnitIds[0] ?? ""} disabled={!canManageUsers} onChange={(event) => updateUser(user.id, { organizationUnitIds: [event.target.value] })}>
+                      {management.organizationUnits.filter((unit) => unit.active).map((unit) => (
+                        <option key={unit.id} value={unit.id}>{unit.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Vorgesetzter</span>
+                    <select value={user.managerUserId ?? ""} disabled={!canManageUsers} onChange={(event) => updateUser(user.id, { managerUserId: event.target.value || undefined })}>
+                      <option value="">Keine Zuordnung</option>
+                      {management.users.filter((candidate) => candidate.active && candidate.id !== user.id).map((candidate) => (
+                        <option key={candidate.id} value={candidate.id}>{candidate.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <Toggle label={user.active ? "Aktiv" : "Inaktiv"} checked={user.active} disabled={!canManageUsers || user.id === management.currentUserId} onChange={(active) => updateUser(user.id, { active })} />
+                {user.visibilityScope === "custom" ? (
+                  <div className="custom-visibility">
+                    <span>Individuell sichtbare Mitarbeiter</span>
+                    <div>
+                      {management.users.filter((candidate) => candidate.active && candidate.id !== user.id).map((candidate) => (
+                        <label key={candidate.id}>
+                          <input
+                            type="checkbox"
+                            checked={user.customVisibleUserIds.includes(candidate.id)}
+                            disabled={!canManageUsers}
+                            onChange={(event) => updateUser(user.id, {
+                              customVisibleUserIds: event.target.checked
+                                ? [...new Set([...user.customVisibleUserIds, candidate.id])]
+                                : user.customVisibleUserIds.filter((id) => id !== candidate.id),
+                            })}
+                          />
+                          {candidate.name}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </article>
+            ))}
+          </div>
+          <div className="new-user-form">
+            <h4>Benutzer anlegen</h4>
+            <Field label="Name" value={newUser.name} disabled={!canManageUsers} onChange={(name) => setNewUser((current) => ({ ...current, name }))} />
+            <Field label="E-Mail" type="email" value={newUser.email} disabled={!canManageUsers} onChange={(email) => setNewUser((current) => ({ ...current, email }))} />
+            <SelectField label="Systemrecht" value={newUser.role} disabled={!canManageUsers} options={[["admin", "Administration"], ["editor", "Bearbeitung"], ["viewer", "Nur lesen"]]} onChange={(role) => setNewUser((current) => ({ ...current, role: role as ManagementRole }))} />
+            <SelectField label="Funktion" value={newUser.businessRole} disabled={!canManageUsers} options={Object.entries(BUSINESS_ROLE_LABELS)} onChange={(businessRole) => setNewUser((current) => ({ ...current, businessRole: businessRole as BusinessRole }))} />
+            <SelectField label="Sichtbereich" value={newUser.visibilityScope} disabled={!canManageUsers} options={Object.entries(VISIBILITY_SCOPE_LABELS)} onChange={(visibilityScope) => setNewUser((current) => ({ ...current, visibilityScope: visibilityScope as VisibilityScope }))} />
+            <SelectField label="Organisationseinheit" value={newUser.organizationUnitId} disabled={!canManageUsers} options={management.organizationUnits.filter((unit) => unit.active).map((unit) => [unit.id, unit.name])} onChange={(organizationUnitId) => setNewUser((current) => ({ ...current, organizationUnitId }))} />
+            <SelectField label="Vorgesetzter" value={newUser.managerUserId} disabled={!canManageUsers} options={[["", "Keine Zuordnung"], ...management.users.filter((user) => user.active).map((user) => [user.id, user.name] as [string, string])]} onChange={(managerUserId) => setNewUser((current) => ({ ...current, managerUserId }))} />
+            <button type="button" className="primary" disabled={!canManageUsers || !newUser.name.trim() || !newUser.email.trim()} onClick={addUser}>Benutzer freischalten</button>
+          </div>
+        </div>
+      ) : null}
+
+      {section === "audit" ? (
+        <div className="management-panel">
+          <header>
+            <div>
+              <span className="eyebrow">Nachvollziehbarkeit</span>
+              <h3>Aktivitätsprotokoll</h3>
+              <p>Bis zu 1.000 Verwaltungsaktionen werden lokal mit Benutzer und Zeitpunkt gespeichert.</p>
+            </div>
+            <input type="search" placeholder="Aktivitäten durchsuchen" value={auditQuery} onChange={(event) => setAuditQuery(event.target.value)} />
+          </header>
+          <div className="audit-list">
+            {auditEntries.map((entry) => {
+              const user = management.users.find((item) => item.id === entry.userId);
+              return (
+                <article key={entry.id}>
+                  <time>{formatDate(entry.at, true)}</time>
+                  <div><b>{entry.action}</b><span>{entry.description}</span></div>
+                  <strong>{user?.name ?? "Unbekannt"}</strong>
+                  <small>{entry.targetType} · {entry.targetId}</small>
+                </article>
+              );
+            })}
+            {!auditEntries.length ? <div className="management-empty">Keine passenden Aktivitäten.</div> : null}
+          </div>
+        </div>
+      ) : null}
+      {showCreateWizard ? (
+        <ObjectCreationWizard
+          state={state}
+          setState={setState}
+          onClose={() => setShowCreateWizard(false)}
+          onCreated={(listingId, externalId) => {
+            setShowCreateWizard(false);
+            setActiveListingId(listingId);
+            setEditorTab("object");
+            setArchiveFilter("active");
+            setReleaseFilter("all");
+            notify(`${externalId} wurde als vollständige Objektakte angelegt.`);
+          }}
+        />
+      ) : null}
+    </section>
+  );
+}

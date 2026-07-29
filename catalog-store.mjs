@@ -1,23 +1,19 @@
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { gunzip, gzip } from "node:zlib";
 import { promisify } from "node:util";
+import { APPLICATION_DATA_DIRECTORY } from "./platform-paths.mjs";
 
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
-const applicationData = process.env.LOCALAPPDATA
-  || join(homedir(), "AppData", "Local");
 
 export const CATALOG_PATH = join(
-  applicationData,
-  "Fabian-Pascal Inseratestudio",
+  APPLICATION_DATA_DIRECTORY,
   "catalog.json.gz",
 );
 
 export const CATALOG_V2_DIRECTORY = join(
-  applicationData,
-  "Fabian-Pascal Inseratestudio",
+  APPLICATION_DATA_DIRECTORY,
   "catalog-v2",
 );
 
@@ -47,6 +43,12 @@ function safeId(value, label) {
 function withoutImageData(state) {
   return {
     ...state,
+    promotionImages: Array.isArray(state.promotionImages)
+      ? state.promotionImages.map((image) => ({ ...image, dataUrl: "" }))
+      : [],
+    promotionImage: state.promotionImage
+      ? { ...state.promotionImage, dataUrl: "" }
+      : null,
     houses: state.houses.map((house) => ({
       ...house,
       images: Array.isArray(house.images)
@@ -57,10 +59,18 @@ function withoutImageData(state) {
 }
 
 function imageEntries(state) {
-  return state.houses.flatMap((house) => house.images.map((image) => ({
-    id: safeId(image.id, "Bild-ID"),
-    mimeType: String(image.mimeType || "application/octet-stream").slice(0, 120),
-  })));
+  const images = [
+    ...state.houses.flatMap((house) => house.images),
+    ...(Array.isArray(state.promotionImages) ? state.promotionImages : []),
+    ...(state.promotionImage ? [state.promotionImage] : []),
+  ];
+  return [...new Map(images.map((image) => {
+    const entry = {
+      id: safeId(image.id, "Bild-ID"),
+      mimeType: String(image.mimeType || "application/octet-stream").slice(0, 120),
+    };
+    return [entry.id, entry];
+  })).values()];
 }
 
 function pendingManifestPath(catalogDirectory, sessionId) {

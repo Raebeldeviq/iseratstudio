@@ -35,6 +35,9 @@ test("stores and restores the complete local catalog including images", async (c
     }],
     projects: [],
     provider: { company: "Fabian Raebel" },
+    promotionImages: [],
+    promotionImage: null,
+    promotionImageEnabled: false,
   };
   const savedAt = "2026-07-22T12:00:00.000Z";
   await saveCatalogSnapshot({ state, savedAt }, catalogPath);
@@ -73,16 +76,29 @@ test("stores large catalog images separately and reuses unchanged image files", 
     }],
     projects: [],
     provider: { company: "Fabian Raebel" },
+    promotionImages: [{
+      id: "promotion-image-1",
+      name: "aktion.jpg",
+      mimeType: "image/jpeg",
+      dataUrl: "data:image/jpeg;base64,YWt0aW9uc2JpbGQ=",
+      caption: "Aktuelles Angebot für dein neues Zuhause",
+      isFloorplan: false,
+    }],
+    promotionImage: null,
+    promotionImageEnabled: false,
   };
 
   const first = await startCatalogSnapshot({ state, savedAt: "2026-07-22T13:00:00.000Z", sessionId: "session-1" }, directory);
-  assert.deepEqual(first.missingImageIds, ["image-1"]);
+  assert.deepEqual(first.missingImageIds, ["image-1", "promotion-image-1"]);
   await saveCatalogImage({ sessionId: "session-1", imageId: "image-1", data: Buffer.from("image-bytes") }, directory);
+  await saveCatalogImage({ sessionId: "session-1", imageId: "promotion-image-1", data: Buffer.from("promotion-image-bytes") }, directory);
   await commitCatalogSnapshot("session-1", directory);
 
   const manifest = await loadCatalogManifest(directory);
   assert.equal(manifest.state.houses[0].images[0].dataUrl, "");
+  assert.equal(manifest.state.promotionImages[0].dataUrl, "");
   assert.equal((await loadCatalogImage("image-1", directory)).data.toString("utf8"), "image-bytes");
+  assert.equal((await loadCatalogImage("promotion-image-1", directory)).data.toString("utf8"), "promotion-image-bytes");
 
   const updatedState = {
     ...state,

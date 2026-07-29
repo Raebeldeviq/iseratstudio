@@ -22,13 +22,37 @@ type StoredEnvelope = {
 
 function openDatabase(databaseName: string, storeName: string): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
+    if (typeof indexedDB === "undefined") {
+      reject(new Error("IndexedDB ist in diesem Browser nicht verfügbar."));
+      return;
+    }
     const request = indexedDB.open(databaseName, 1);
+    let settled = false;
+    const timeout = globalThis.setTimeout(() => {
+      settled = true;
+      reject(new Error("Der lokale Browser-Speicher antwortet nicht."));
+    }, 5000);
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      globalThis.clearTimeout(timeout);
+      reject(error);
+    };
     request.onupgradeneeded = () => {
       const db = request.result;
       if (!db.objectStoreNames.contains(storeName)) db.createObjectStore(storeName);
     };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      if (settled) {
+        request.result.close();
+        return;
+      }
+      settled = true;
+      globalThis.clearTimeout(timeout);
+      resolve(request.result);
+    };
+    request.onerror = () => fail(request.error);
+    request.onblocked = () => fail(new Error("Der lokale Browser-Speicher ist in einem anderen Tab blockiert."));
   });
 }
 
