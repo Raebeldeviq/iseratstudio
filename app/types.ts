@@ -86,6 +86,10 @@ export type ListingTexts = {
   equipment: string;
   location: string;
   other: string;
+  commission?: string;
+  disclaimer?: string;
+  terms?: string;
+  recommendation?: string;
 };
 
 export type ProjectingSettings = {
@@ -181,31 +185,62 @@ export type ListingAppointment = {
   createdAt: string;
 };
 
+export type ListingObjectCategory =
+  | "house-purchase"
+  | "apartment-purchase"
+  | "land";
+
+export type ListingMarketingType =
+  | "purchase"
+  | "rent-lease"
+  | "leasehold";
+
+export type ListingParkingSpace = {
+  kind: "carport" | "duplex" | "outdoor" | "garage" | "parking-garage" | "underground";
+  count: number;
+  price: number;
+};
+
 export type ListingDetails = {
+  objectCategory: ListingObjectCategory;
+  marketingType: ListingMarketingType;
   objectStatus: "projected" | "in-construction" | "complete";
+  objectStatusText: string;
   groupId: string;
   orderNumber: string;
   currency: "EUR" | "CHF" | "USD";
+  is24Placement: "" | "premium" | "showcase";
+  immoweltPlacement: "" | "tir" | "booster";
+  portalAdditionalBooking: boolean;
+  transferOnSave: boolean;
   availableFrom: string;
   addressPublished: boolean;
   googleMapsPublished: boolean;
+  latitude: number;
+  longitude: number;
   country: string;
   street: string;
   houseNumber: string;
   zip: string;
   city: string;
   district: string;
+  areaType: string;
   purchasePrice: number;
+  annualLeasePrice: number;
   livingArea: number;
   usableArea: number;
   plotArea: number;
+  cubature: number;
   rooms: number;
   bedrooms: number;
   bathrooms: number;
   floors: number;
+  floorNumber: number;
   balconies: number;
   terraces: number;
+  loggias: number;
   houseType: string;
+  apartmentType: string;
   constructionYear: number;
   renovationYear: number;
   condition: string;
@@ -216,8 +251,12 @@ export type ListingDetails = {
   flooring: string;
   heatingType: string;
   energySource: string;
+  energyType: string;
   parkingTypes: string;
+  parkingSpaces: ListingParkingSpace[];
   view: string;
+  surroundings: string;
+  furnished: "" | "no" | "furnished" | "partly-furnished";
   guestWc: boolean;
   garden: boolean;
   attic: boolean;
@@ -233,6 +272,22 @@ export type ListingDetails = {
   elevator: boolean;
   monument: boolean;
   rented: boolean;
+  grannyFlat: boolean;
+  nonSmoker: boolean;
+  vacationSuitable: boolean;
+  assistedLiving: boolean;
+  houseMoney: number;
+  monthlyRentIncome: number;
+  buildableSoon: boolean;
+  landUse: string;
+  developmentStatus: string;
+  buildingLaw: string;
+  buildingPermit: boolean;
+  demolitionRequired: boolean;
+  recommendedUse: string;
+  divisibleFrom: number;
+  siteOccupancyRatio: number;
+  floorAreaRatio: number;
   energyCertificateType: string;
   energyCertificateValidUntil: string;
   energyClass: string;
@@ -246,8 +301,24 @@ export type ListingDetails = {
   contactLastName: string;
   contactEmail: string;
   contactPhone: string;
+  contactFax: string;
+  contactOfficePhone: string;
+  contactMobile: string;
+  ownerSalutation: string;
+  ownerTitle: string;
+  ownerCompany: string;
+  ownerFirstName: string;
+  ownerLastName: string;
   ownerName: string;
   ownerEmail: string;
+  ownerPhone: string;
+  ownerFax: string;
+  ownerOfficePhone: string;
+  ownerMobile: string;
+  ownerStreet: string;
+  ownerZip: string;
+  ownerCity: string;
+  ownerIsPropertyOwner: boolean;
   internalNotes: string;
 };
 
@@ -316,6 +387,29 @@ export type PortalConfiguration = {
   lastSyncAt?: string;
 };
 
+export type ManagementFileScope = "templates" | "public" | "personal";
+
+export type ManagementFileFolder = {
+  id: string;
+  name: string;
+  scope: ManagementFileScope;
+  ownerUserId?: string;
+  parentId?: string;
+  accessUserIds: string[];
+  createdAt: string;
+};
+
+export type ManagementFileItem = {
+  id: string;
+  folderId: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  dataUrl: string;
+  createdAt: string;
+  createdByUserId: string;
+};
+
 export type ImportReportEvent = {
   externalId: string;
   portalId?: string;
@@ -337,19 +431,21 @@ export type AuditLogEntry = {
   at: string;
   userId: string;
   action: string;
-  targetType: "listing" | "media" | "appointment" | "portal" | "report" | "user" | "company";
+  targetType: "listing" | "media" | "appointment" | "portal" | "report" | "user" | "company" | "file" | "folder";
   targetId: string;
   description: string;
 };
 
 export type ManagementState = {
-  version: 1;
+  version: 2;
   currentUserId: string;
   users: ManagementUser[];
   company: CompanySettings;
   portals: PortalConfiguration[];
   auditLog: AuditLogEntry[];
   importReports: ImportReportRecord[];
+  fileFolders: ManagementFileFolder[];
+  files: ManagementFileItem[];
 };
 
 export type TotalSyncScope = AddressOwner | "all";

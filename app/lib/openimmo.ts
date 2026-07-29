@@ -10,6 +10,7 @@ import type {
   GeneratedListing,
   HouseImage,
   HouseTemplate,
+  ListingDetails,
   ListingMediaItem,
   ProjectInput,
   ProviderSettings,
@@ -48,6 +49,21 @@ const OPENIMMO_CONDITIONS = new Set([
 ]);
 const OPENIMMO_EQUIPMENT_QUALITIES = new Set(["STANDARD", "GEHOBEN", "LUXUS"]);
 const OPENIMMO_ENERGY_CERTIFICATE_TYPES = new Set(["BEDARF", "VERBRAUCH"]);
+const OPENIMMO_BUILDING_LAWS = new Set([
+  "34_NACHBARSCHAFT",
+  "35_AUSSENGEBIET",
+  "B_PLAN",
+  "KEIN BAULAND",
+  "BAUERWARTUNGSLAND",
+  "LAENDERSPEZIFISCH",
+  "BAULAND_OHNE_B_PLAN",
+]);
+const OPENIMMO_DEVELOPMENT_STATES = new Set([
+  "UNERSCHLOSSEN",
+  "TEILERSCHLOSSEN",
+  "VOLLERSCHLOSSEN",
+  "ORTSUEBLICHERSCHLOSSEN",
+]);
 
 function xml(value: string | number | undefined | null): string {
   return String(value ?? "")
@@ -81,6 +97,60 @@ function houseType(value: string): string {
   if (normalized.includes("stadt")) return "STADTHAUS";
   if (normalized.includes("fertig")) return "FERTIGHAUS";
   return "EINFAMILIENHAUS";
+}
+
+function apartmentType(value: string): string {
+  const normalized = value.toLocaleLowerCase("de-DE");
+  if (normalized.includes("dach")) return "DACHGESCHOSS";
+  if (normalized.includes("maisonette")) return "MAISONETTE";
+  if (normalized.includes("loft") || normalized.includes("atelier")) return "LOFT-STUDIO-ATELIER";
+  if (normalized.includes("penthouse")) return "PENTHOUSE";
+  if (normalized.includes("terrassen")) return "TERRASSEN";
+  if (normalized.includes("erdgeschoss")) return "ERDGESCHOSS";
+  if (normalized.includes("souterrain")) return "SOUTERRAIN";
+  if (normalized.includes("ferien")) return "FERIENWOHNUNG";
+  if (normalized.includes("galerie")) return "GALERIE";
+  if (normalized.includes("apartment")) return "APARTMENT";
+  return "ETAGE";
+}
+
+function landType(value: string): string {
+  const normalized = value.trim().toUpperCase();
+  if (normalized === "LAND_FORSTWIRTSCHAFT") return "LAND_FORSTWIRSCHAFT";
+  const allowed = new Set([
+    "WOHNEN",
+    "GEWERBE",
+    "INDUSTRIE",
+    "LAND_FORSTWIRSCHAFT",
+    "FREIZEIT",
+    "GEMISCHT",
+    "GEWERBEPARK",
+    "SONDERNUTZUNG",
+    "SEELIEGENSCHAFT",
+  ]);
+  return allowed.has(normalized) ? normalized : "WOHNEN";
+}
+
+function categoryXml(
+  details: ListingDetails | undefined,
+  house: HouseTemplate,
+): string {
+  const category = details?.objectCategory ?? "house-purchase";
+  const marketing = details?.marketingType ?? "purchase";
+  const rawLandUse = (details?.landUse ?? "WOHNEN").trim().toUpperCase();
+  const landUse = landType(rawLandUse);
+  const residential = category !== "land" || landUse === "WOHNEN";
+  const commercial = category === "land" && ["GEWERBE", "INDUSTRIE", "GEWERBEPARK"].includes(landUse);
+  const investment = category === "land" && rawLandUse === "ANLAGE";
+  const objectType = category === "apartment-purchase"
+    ? `<wohnung wohnungtyp="${apartmentType(details?.apartmentType ?? "")}" />`
+    : category === "land"
+      ? `<grundstueck grundst_typ="${landUse}" />`
+      : `<haus haustyp="${houseType(details?.houseType ?? house.houseType)}" />`;
+  return `
+          <nutzungsart WOHNEN="${residential}" GEWERBE="${commercial}" ANLAGE="${investment}" WAZ="false" />
+          <vermarktungsart KAUF="${marketing === "purchase"}" MIETE_PACHT="${marketing === "rent-lease"}" ERBPACHT="${marketing === "leasehold"}" LEASING="false" />
+          <objektart>${objectType}</objektart>`;
 }
 
 function openImmoValue(
@@ -238,10 +308,12 @@ function listingXml(
   timestamp: string,
   portalPublicationEnabled: boolean,
 ): string {
-  const currency = new Intl.NumberFormat("de-DE", {
-    useGrouping: false,
-    maximumFractionDigits: 2,
-  });
+  const currency = {
+    format(value: number): string {
+      const normalized = Number.isFinite(value) ? value : 0;
+      return normalized.toFixed(2).replace(/\.?0+$/, "");
+    },
+  };
   const projecting = fillMissingProjectingDefaults(listing.projectingSettings);
   const details = listing.management?.details;
   const addressStreet = details?.street ?? project.street;
@@ -275,20 +347,32 @@ function listingXml(
     OPENIMMO_ENERGY_CERTIFICATE_TYPES,
     "BEDARF",
   );
+  const category = details?.objectCategory ?? "house-purchase";
+  const isLand = category === "land";
+  const marketingType = details?.marketingType ?? "purchase";
+  const priceXml = marketingType === "rent-lease"
+    ? `<pacht>${currency.format(details?.annualLeasePrice ?? purchasePrice)}</pacht>`
+    : marketingType === "leasehold"
+      ? `<erbpacht>${currency.format(details?.annualLeasePrice ?? purchasePrice)}</erbpacht>`
+      : `<kaufpreis>${currency.format(purchasePrice)}</kaufpreis>`;
+  const totalParkingSpaces = (details?.parkingSpaces ?? [])
+    .reduce((sum, item) => sum + Math.max(0, item.count || 0), 0);
+  const buildingLaw = details?.buildingLaw?.trim().toUpperCase() ?? "";
+  const developmentStatus = details?.developmentStatus?.trim().toUpperCase() ?? "";
 
   return `
       <immobilie>
         <objektkategorie>
-          <nutzungsart WOHNEN="true" GEWERBE="false" ANLAGE="false" WAZ="false" />
-          <vermarktungsart KAUF="true" MIETE_PACHT="false" ERBPACHT="false" LEASING="false" />
-          <objektart><haus haustyp="${houseType(details?.houseType ?? house.houseType)}" /></objektart>
+          ${categoryXml(details, house)}
         </objektkategorie>
         <geo>
           <plz>${xml(addressZip)}</plz>
           <ort>${xml(addressCity)}</ort>
+          ${details?.latitude && details?.longitude ? `<geokoordinaten breitengrad="${xml(details.latitude)}" laengengrad="${xml(details.longitude)}" />` : ""}
           <strasse>${xml(addressStreet)}</strasse>
           <hausnummer>${xml(addressHouseNumber)}</hausnummer>
           <land iso_land="DEU" />
+          ${details?.floorNumber ? `<etage>${xml(details.floorNumber)}</etage>` : ""}
           <anzahl_etagen>${currency.format(floors)}</anzahl_etagen>
           <lage_gebiet gebiete="WOHN" />
           ${addressDistrict ? `<regionaler_zusatz>${xml(addressDistrict)}</regionaler_zusatz>` : ""}
@@ -304,22 +388,30 @@ function listingXml(
           <personennummer>${xml(provider.providerNumber)}</personennummer>
         </kontaktperson>
         <preise>
-          <kaufpreis>${currency.format(purchasePrice)}</kaufpreis>
+          ${priceXml}
+          ${details?.houseMoney ? `<hausgeld>${currency.format(details.houseMoney)}</hausgeld>` : ""}
           <provisionspflichtig>${details?.commissionRequired ?? projecting.commissionRequired}</provisionspflichtig>
-          <courtage_hinweis>${cdata(details?.commissionText || FIXED_PROVISION_TEXT)}</courtage_hinweis>
+          <courtage_hinweis>${cdata(listing.texts.commission || details?.commissionText || FIXED_PROVISION_TEXT)}</courtage_hinweis>
           <waehrung iso_waehrung="${xml(details?.currency ?? "EUR")}" />
         </preise>
         <flaechen>
-          <wohnflaeche>${currency.format(livingArea)}</wohnflaeche>
-          <nutzflaeche>${currency.format(usableArea)}</nutzflaeche>
+          ${isLand ? "" : `<wohnflaeche>${currency.format(livingArea)}</wohnflaeche>`}
+          ${isLand ? "" : `<nutzflaeche>${currency.format(usableArea)}</nutzflaeche>`}
+          ${details?.siteOccupancyRatio ? `<grz>${currency.format(details.siteOccupancyRatio)}</grz>` : ""}
+          ${details?.floorAreaRatio ? `<gfz>${currency.format(details.floorAreaRatio)}</gfz>` : ""}
           <grundstuecksflaeche>${currency.format(plotArea)}</grundstuecksflaeche>
-          <anzahl_zimmer>${currency.format(rooms)}</anzahl_zimmer>
-          <anzahl_schlafzimmer>${currency.format(bedrooms)}</anzahl_schlafzimmer>
-          <anzahl_badezimmer>${currency.format(bathrooms)}</anzahl_badezimmer>
+          ${isLand ? "" : `<anzahl_zimmer>${currency.format(rooms)}</anzahl_zimmer>`}
+          ${isLand ? "" : `<anzahl_schlafzimmer>${currency.format(bedrooms)}</anzahl_schlafzimmer>`}
+          ${isLand ? "" : `<anzahl_badezimmer>${currency.format(bathrooms)}</anzahl_badezimmer>`}
           ${details?.balconies ? `<anzahl_balkone>${currency.format(details.balconies)}</anzahl_balkone>` : ""}
           ${details?.terraces ? `<anzahl_terrassen>${currency.format(details.terraces)}</anzahl_terrassen>` : ""}
+          ${details?.loggias ? `<anzahl_logia>${currency.format(details.loggias)}</anzahl_logia>` : ""}
+          ${details?.divisibleFrom ? `<teilbar_ab>${currency.format(details.divisibleFrom)}</teilbar_ab>` : ""}
+          ${totalParkingSpaces ? `<anzahl_stellplaetze>${Math.round(totalParkingSpaces)}</anzahl_stellplaetze>` : ""}
+          ${details?.grannyFlat ? "<einliegerwohnung>true</einliegerwohnung>" : ""}
+          ${details?.cubature ? `<kubatur>${currency.format(details.cubature)}</kubatur>` : ""}
         </flaechen>
-        <ausstattung>
+        ${isLand ? "" : `<ausstattung>
           <ausstatt_kategorie>${xml(equipmentQuality)}</ausstatt_kategorie>
           <bad DUSCHE="${IMMOPROFESSIONAL_DEFAULTS.shower}" WANNE="${IMMOPROFESSIONAL_DEFAULTS.bathtub}" FENSTER="${IMMOPROFESSIONAL_DEFAULTS.bathroomWindow}" />
           <kueche EBK="${IMMOPROFESSIONAL_DEFAULTS.fittedKitchen}" OFFEN="${IMMOPROFESSIONAL_DEFAULTS.openKitchen}" />
@@ -339,25 +431,32 @@ function listingXml(
           <dachboden>${details?.attic ?? IMMOPROFESSIONAL_DEFAULTS.attic}</dachboden>
           <gaestewc>${details?.guestWc ?? IMMOPROFESSIONAL_DEFAULTS.guestWc}</gaestewc>
           ${details?.seniorFriendly ? "<seniorengerecht>true</seniorengerecht>" : ""}
-        </ausstattung>
+        </ausstattung>`}
         <zustand_angaben>
-          <baujahr>${xml(constructionYear)}</baujahr>
-          <zustand zustand_art="${xml(condition)}" />
-          <energiepass>
+          ${isLand ? "" : `<baujahr>${xml(constructionYear)}</baujahr>`}
+          ${isLand ? "" : `<zustand zustand_art="${xml(condition)}" />`}
+          ${isLand && OPENIMMO_BUILDING_LAWS.has(buildingLaw) ? `<bebaubar_nach bebaubar_attr="${xml(buildingLaw)}" />` : ""}
+          ${isLand && OPENIMMO_DEVELOPMENT_STATES.has(developmentStatus) ? `<erschliessung erschl_attr="${xml(developmentStatus)}" />` : ""}
+          ${isLand ? "" : `<energiepass>
             <epart>${xml(energyCertificateType)}</epart>
             ${details?.energyCertificateValidUntil ? `<gueltig_bis>${xml(details.energyCertificateValidUntil)}</gueltig_bis>` : ""}
             <mitwarmwasser>${details?.warmWaterIncluded ?? true}</mitwarmwasser>
             <endenergiebedarf>${currency.format(energyDemand)}</endenergiebedarf>
             <wertklasse>${xml(details?.energyClass || projecting.energyCertificateClass)}</wertklasse>
             <baujahr>${xml(details?.certificateYear || constructionYear)}</baujahr>
-          </energiepass>
+          </energiepass>`}
         </zustand_angaben>
         <freitexte>
           <objekttitel>${cdata(listing.texts.title)}</objekttitel>
           <lage>${cdata(listing.texts.location)}</lage>
           <ausstatt_beschr>${cdata(listing.texts.equipment)}</ausstatt_beschr>
           <objektbeschreibung>${cdata(listing.texts.description)}</objektbeschreibung>
-          <sonstige_angaben>${cdata(listing.texts.other)}</sonstige_angaben>
+          <sonstige_angaben>${cdata([
+            listing.texts.other,
+            listing.texts.disclaimer,
+            listing.texts.terms,
+            listing.texts.recommendation,
+          ].filter(Boolean).join("\n\n"))}</sonstige_angaben>
           <user_defined_simplefield feldname="Energieklasse">${cdata(projecting.energyClass)}</user_defined_simplefield>
         </freitexte>
         <anhaenge>${imageXml(listing, images)}${additionalMediaXml(listing)}</anhaenge>

@@ -4691,7 +4691,7 @@ export default function InseratStudio() {
           </h1>
           <p>
             <strong>Volle Kontrolle:</strong> Adresse erfassen, vier Haustypen wählen,
-            Texte prüfen und als Entwurf zu Immoprofessional übertragen.
+            Objekte vollständig verwalten und als OpenImmo-Paket bereitstellen.
           </p>
         </div>
         <dl className="workflow-summary" aria-label="Aktueller Projektstatus">

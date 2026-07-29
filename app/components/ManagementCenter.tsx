@@ -23,6 +23,8 @@ import type {
   ListingMediaItem,
   ListingMediaKind,
   ListingPortalStatus,
+  ManagementFileFolder,
+  ManagementFileScope,
   ManagementRole,
   ManagementUser,
   PortalConfiguration,
@@ -48,9 +50,11 @@ import {
   buildExposePdf,
   type ExposePdfOptions,
 } from "../lib/expose-pdf";
+import { buildImportPackage } from "../lib/openimmo";
 import { allocateProviderExternalIds } from "../lib/external-ids";
+import ObjectCreationWizard from "./ObjectCreationWizard";
 
-type ManagementSection = "objects" | "portals" | "reports" | "company" | "users" | "audit";
+type ManagementSection = "objects" | "files" | "portals" | "reports" | "company" | "users" | "audit";
 type EditorTab =
   | "object"
   | "address"
@@ -149,12 +153,31 @@ function formatDate(value: string | undefined, withTime = false): string {
   }).format(date);
 }
 
+function listingArea(details: ListingDetails): number {
+  return details.objectCategory === "land"
+    ? details.plotArea
+    : details.livingArea;
+}
+
+function listingAreaLabel(details: ListingDetails): string {
+  const area = `${listingArea(details)} m²`;
+  return details.objectCategory === "land"
+    ? `${area} Grundstück`
+    : `${area} · ${details.rooms} Zi.`;
+}
+
 function euro(value: number): string {
   return new Intl.NumberFormat("de-DE", {
     style: "currency",
     currency: "EUR",
     maximumFractionDigits: 0,
   }).format(value || 0);
+}
+
+function fileSize(value: number): string {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
+  return `${(value / (1024 * 1024)).toLocaleString("de-DE", { maximumFractionDigits: 1 })} MB`;
 }
 
 function downloadBlob(blob: Blob, filename: string): void {
@@ -326,6 +349,7 @@ export default function ManagementCenter({
 }: ManagementCenterProps) {
   const management = state.management;
   const [section, setSection] = useState<ManagementSection>("objects");
+  const [showCreateWizard, setShowCreateWizard] = useState(false);
   const [activeListingId, setActiveListingId] = useState("");
   const [editorTab, setEditorTab] = useState<EditorTab>("object");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -347,6 +371,7 @@ export default function ManagementCenter({
   });
   const [reportBusy, setReportBusy] = useState(false);
   const [exposeBusy, setExposeBusy] = useState(false);
+  const [openImmoBusy, setOpenImmoBusy] = useState(false);
   const [exposeOptions, setExposeOptions] = useState<ExposePdfOptions>({
     includeContact: true,
     includeAddress: false,
@@ -362,6 +387,9 @@ export default function ManagementCenter({
     role: "editor" as ManagementRole,
   });
   const [auditQuery, setAuditQuery] = useState("");
+  const [activeFolderId, setActiveFolderId] = useState("");
+  const [newFolderName, setNewFolderName] = useState("");
+  const [newFolderScope, setNewFolderScope] = useState<ManagementFileScope>("personal");
 
   const rows = useMemo(() => listingRows(state), [state]);
   const currentUser = currentManagementUser(state);
@@ -380,6 +408,19 @@ export default function ManagementCenter({
   const canManageCompany = currentUser
     ? managementPermission(currentUser.role, "manage-company")
     : false;
+  const visibleFolders = useMemo(() => {
+    if (!management || !currentUser) return [];
+    return management.fileFolders.filter((folder) => (
+      currentUser.role === "admin"
+      || folder.scope === "public"
+      || folder.scope === "templates"
+      || folder.ownerUserId === currentUser.id
+      || folder.accessUserIds.includes(currentUser.id)
+    ));
+  }, [currentUser, management]);
+  const activeFolder = visibleFolders.find((folder) => (
+    folder.id === activeFolderId
+  )) ?? visibleFolders[0];
 
   const visibleRows = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase("de-DE");
@@ -417,7 +458,7 @@ export default function ManagementCenter({
         return right.management.details.purchasePrice - left.management.details.purchasePrice;
       }
       if (sortKey === "living-area") {
-        return right.management.details.livingArea - left.management.details.livingArea;
+        return listingArea(right.management.details) - listingArea(left.management.details);
       }
       if (sortKey === "rooms") {
         return right.management.details.rooms - left.management.details.rooms;
@@ -799,6 +840,36 @@ export default function ManagementCenter({
     }
   };
 
+  const downloadOpenImmoPackage = async () => {
+    if (!activeListing || !activeProject) return;
+    setOpenImmoBusy(true);
+    try {
+      const result = await buildImportPackage({
+        project: activeProject,
+        listings: [activeListing],
+        houses: state.houses,
+        provider: state.provider,
+        promotionImages: state.promotionImages,
+        portalPublicationEnabled: activeListing.management?.released === true,
+      });
+      downloadBlob(result.blob, result.filename);
+      setState((current) => record(
+        current,
+        "OpenImmo-Paket erstellt",
+        "listing",
+        activeListing.id,
+        result.filename,
+      ));
+      notify(`OpenImmo-Paket „${result.filename}“ wurde heruntergeladen.`);
+    } catch (error) {
+      notify(error instanceof Error
+        ? `OpenImmo-Paket konnte nicht erstellt werden: ${error.message}`
+        : "OpenImmo-Paket konnte nicht erstellt werden.");
+    } finally {
+      setOpenImmoBusy(false);
+    }
+  };
+
   const addAppointment = () => {
     if (!activeListing?.management || !canEdit) return;
     if (!appointmentDraft.title.trim() || !appointmentDraft.startsAt) {
@@ -894,7 +965,7 @@ export default function ManagementCenter({
   const deleteRemoteSelected = async () => {
     if (!selectedIds.length || !canDeleteRemote || busy) return;
     if (!window.confirm(
-      `${selectedIds.length} OpenImmo-Löschauftrag${selectedIds.length === 1 ? "" : "e"} wirklich an Immoprofessional übertragen?\n\nDie Löschung wird erst durch einen späteren Importbericht bestätigt.`,
+      `${selectedIds.length} OpenImmo-Löschauftrag${selectedIds.length === 1 ? "" : "e"} wirklich an die konfigurierte Schnittstelle übertragen?\n\nDie Löschung wird erst durch einen späteren Importbericht bestätigt.`,
     )) return;
     await onDeleteListings(selectedIds);
   };
@@ -970,9 +1041,132 @@ export default function ManagementCenter({
       : current);
   };
 
+  const canWriteFolder = (folder: ManagementFileFolder | undefined): boolean => {
+    if (!folder || !currentUser || !canEdit) return false;
+    if (currentUser.role === "admin") return true;
+    if (folder.scope === "templates") return false;
+    return folder.scope === "public"
+      || folder.ownerUserId === currentUser.id
+      || folder.accessUserIds.includes(currentUser.id);
+  };
+
+  const addFileFolder = () => {
+    if (!currentUser || !newFolderName.trim() || !canEdit) return;
+    if (newFolderScope === "templates" && currentUser.role !== "admin") {
+      notify("Vorlagenordner können nur durch die Administration angelegt werden.");
+      return;
+    }
+    const at = new Date().toISOString();
+    const folder: ManagementFileFolder = {
+      id: uid("folder"),
+      name: newFolderName.trim(),
+      scope: newFolderScope,
+      ownerUserId: newFolderScope === "personal" ? currentUser.id : undefined,
+      parentId: activeFolder?.scope === newFolderScope ? activeFolder.id : undefined,
+      accessUserIds: newFolderScope === "personal"
+        ? [currentUser.id]
+        : management.users.filter((user) => user.active).map((user) => user.id),
+      createdAt: at,
+    };
+    setState((current) => {
+      if (!current.management) return current;
+      return record({
+        ...current,
+        management: {
+          ...current.management,
+          fileFolders: [...current.management.fileFolders, folder],
+        },
+      }, "Ordner angelegt", "folder", folder.id, folder.name);
+    });
+    setActiveFolderId(folder.id);
+    setNewFolderName("");
+  };
+
+  const addManagementFiles = async (event: ChangeEvent<HTMLInputElement>) => {
+    const files = [...(event.target.files ?? [])];
+    event.target.value = "";
+    if (!files.length || !activeFolder || !currentUser || !canWriteFolder(activeFolder)) return;
+    try {
+      const at = new Date().toISOString();
+      const additions = await Promise.all(files.map(async (file) => ({
+        id: uid("file"),
+        folderId: activeFolder.id,
+        name: file.name,
+        mimeType: file.type || "application/octet-stream",
+        size: file.size,
+        dataUrl: await fileDataUrl(file),
+        createdAt: at,
+        createdByUserId: currentUser.id,
+      })));
+      setState((current) => {
+        if (!current.management) return current;
+        return record({
+          ...current,
+          management: {
+            ...current.management,
+            files: [...current.management.files, ...additions],
+          },
+        }, "Dateien gespeichert", "file", activeFolder.id, `${additions.length} Datei${additions.length === 1 ? "" : "en"} in ${activeFolder.name}`);
+      });
+    } catch {
+      notify("Mindestens eine Datei konnte nicht in die Dateiverwaltung übernommen werden.");
+    }
+  };
+
+  const removeManagementFile = (fileId: string) => {
+    if (!activeFolder || !canWriteFolder(activeFolder)) return;
+    const file = management.files.find((item) => item.id === fileId);
+    if (!file || !window.confirm(`„${file.name}“ dauerhaft aus der Dateiverwaltung entfernen?`)) return;
+    setState((current) => current.management
+      ? {
+          ...current,
+          management: {
+            ...current.management,
+            files: current.management.files.filter((item) => item.id !== fileId),
+          },
+        }
+      : current);
+  };
+
+  const removeFileFolder = () => {
+    if (
+      !activeFolder
+      || ["folder-templates", "folder-public"].includes(activeFolder.id)
+      || activeFolder.id.startsWith("folder-personal-")
+      || !canWriteFolder(activeFolder)
+    ) return;
+    const childFolders = management.fileFolders.filter((folder) => (
+      folder.parentId === activeFolder.id
+    ));
+    const files = management.files.filter((file) => file.folderId === activeFolder.id);
+    if (childFolders.length || files.length) {
+      notify("Der Ordner kann erst gelöscht werden, wenn er leer ist.");
+      return;
+    }
+    if (!window.confirm(`Ordner „${activeFolder.name}“ löschen?`)) return;
+    setState((current) => current.management
+      ? {
+          ...current,
+          management: {
+            ...current.management,
+            fileFolders: current.management.fileFolders.filter((folder) => folder.id !== activeFolder.id),
+          },
+        }
+      : current);
+    setActiveFolderId(activeFolder.parentId ?? "");
+  };
+
   const addUser = () => {
     if (!canManageUsers || !newUser.name.trim()) return;
     const user = createManagementUser(newUser.name.trim(), newUser.email.trim(), newUser.role);
+    const personalFolder: ManagementFileFolder = {
+      id: `folder-personal-${user.id}`,
+      name: user.name,
+      scope: "personal",
+      ownerUserId: user.id,
+      accessUserIds: [user.id],
+      createdAt: user.createdAt,
+    };
     setState((current) => {
       if (!current.management) return current;
       return record(
@@ -981,6 +1175,7 @@ export default function ManagementCenter({
           management: {
             ...current.management,
             users: [...current.management.users, user],
+            fileFolders: [...current.management.fileFolders, personalFolder],
           },
         },
         "Benutzer angelegt",
@@ -1077,6 +1272,7 @@ export default function ManagementCenter({
       <nav className="management-nav" aria-label="Immobilienverwaltung">
         {([
           ["objects", "Objektzentrale"],
+          ["files", "Dateiverwaltung"],
           ["portals", "Portale"],
           ["reports", "Importberichte"],
           ["company", "Firmendaten"],
@@ -1096,6 +1292,15 @@ export default function ManagementCenter({
 
       {section === "objects" ? (
         <div className="management-object-workspace">
+          <div className="management-create-row">
+            <div>
+              <b>Objekte</b>
+              <span>Haus, Wohnung oder Grundstück direkt als vollständige Objektakte anlegen.</span>
+            </div>
+            <button type="button" className="primary" disabled={!canEdit} onClick={() => setShowCreateWizard(true)}>
+              + Neues Objekt anlegen
+            </button>
+          </div>
           <div className="management-toolbar">
             <input
               type="search"
@@ -1121,7 +1326,7 @@ export default function ManagementCenter({
               <option value="external-id">Objekt-ID</option>
               <option value="city">Ort</option>
               <option value="price">Preis</option>
-              <option value="living-area">Wohnfläche</option>
+              <option value="living-area">Fläche</option>
               <option value="rooms">Zimmer</option>
             </select>
           </div>
@@ -1188,7 +1393,7 @@ export default function ManagementCenter({
                       </button>
                     </td>
                     <td>{listingManagement.details.zip} {listingManagement.details.city}<small>{listingManagement.details.district}</small></td>
-                    <td>{euro(listingManagement.details.purchasePrice)}<small>{listingManagement.details.livingArea} m² · {listingManagement.details.rooms} Zi.</small></td>
+                    <td>{euro(listingManagement.details.purchasePrice)}<small>{listingAreaLabel(listingManagement.details)}</small></td>
                     <td>{listingManagement.released ? "Ja" : "Nein"}</td>
                     <td>{formatDate(listingManagement.updatedAt, true)}</td>
                     <td>
@@ -1219,8 +1424,11 @@ export default function ManagementCenter({
                 </div>
                 <div className="management-editor-actions">
                   <button type="button" onClick={generateExpose} disabled={exposeBusy}>{exposeBusy ? "PDF wird erstellt …" : "Exposé-PDF"}</button>
+                  <button type="button" onClick={downloadOpenImmoPackage} disabled={openImmoBusy}>
+                    {openImmoBusy ? "Paket wird erstellt …" : "OpenImmo-Paket"}
+                  </button>
                   <button type="button" className="primary" onClick={transferActive} disabled={!canTransfer || busy || !uploadAvailable}>
-                    {uploadAvailable ? "An Immoprofessional übertragen" : "Upload-Helfer offline"}
+                    {uploadAvailable ? "OpenImmo übertragen" : "Upload-Helfer offline"}
                   </button>
                   <button type="button" aria-label="Editor schließen" onClick={() => setActiveListingId("")}>×</button>
                 </div>
@@ -1245,6 +1453,17 @@ export default function ManagementCenter({
                     <div className="management-form-grid three">
                       <Field label="Objekt-ID" value={activeListing.externalId} disabled onChange={() => undefined} />
                       <SelectField
+                        label="Hauptrubrik"
+                        value={activeDetails.objectCategory}
+                        disabled={!canEdit}
+                        options={[
+                          ["house-purchase", "Haus Kauf"],
+                          ["apartment-purchase", "Wohnung Kauf"],
+                          ["land", "Grundstück"],
+                        ]}
+                        onChange={(objectCategory) => updateDetails({ objectCategory: objectCategory as ListingDetails["objectCategory"] })}
+                      />
+                      <SelectField
                         label="Objektstatus"
                         value={activeDetails.objectStatus}
                         disabled={!canEdit}
@@ -1257,14 +1476,31 @@ export default function ManagementCenter({
                       />
                       <Field label="Gruppen-ID" value={activeDetails.groupId} disabled={!canEdit} onChange={(value) => updateDetails({ groupId: value })} />
                       <Field label="Auftragsnummer" value={activeDetails.orderNumber} disabled={!canEdit} onChange={(value) => updateDetails({ orderNumber: value })} />
+                      <Field label="Status des Objektes" value={activeDetails.objectStatusText} disabled={!canEdit} onChange={(objectStatusText) => updateDetails({ objectStatusText })} />
                       <SelectField label="Währung" value={activeDetails.currency} disabled={!canEdit} options={[["EUR", "EUR"], ["CHF", "CHF"], ["USD", "USD"]]} onChange={(value) => updateDetails({ currency: value as ListingDetails["currency"] })} />
                       <Field label="Verfügbar ab" type="date" value={activeDetails.availableFrom} disabled={!canEdit} onChange={(value) => updateDetails({ availableFrom: value })} />
+                      <SelectField
+                        label="IS24 Platzierung"
+                        value={activeDetails.is24Placement}
+                        disabled={!canEdit}
+                        options={[["", "Optional"], ["premium", "Premium-Platzierung"], ["showcase", "Schaufenster-Platzierung"]]}
+                        onChange={(is24Placement) => updateDetails({ is24Placement: is24Placement as ListingDetails["is24Placement"] })}
+                      />
+                      <SelectField
+                        label="Immowelt Platzierung"
+                        value={activeDetails.immoweltPlacement}
+                        disabled={!canEdit}
+                        options={[["", "Optional"], ["tir", "TIR"], ["booster", "Booster"]]}
+                        onChange={(immoweltPlacement) => updateDetails({ immoweltPlacement: immoweltPlacement as ListingDetails["immoweltPlacement"] })}
+                      />
                     </div>
                     <TextArea label="Interne Hinweise" value={activeDetails.internalNotes} disabled={!canEdit} onChange={(value) => updateDetails({ internalNotes: value })} />
                     <div className="management-checkbox-grid">
                       <Toggle label="Objekt freigeben" checked={activeListing.management.released} disabled={!canEdit} onChange={(released) => updateActiveManagement({ released })} />
                       <Toggle label="Adresse veröffentlichen" checked={activeDetails.addressPublished} disabled={!canEdit} onChange={(addressPublished) => updateDetails({ addressPublished })} />
                       <Toggle label="Google Maps freigeben" checked={activeDetails.googleMapsPublished} disabled={!canEdit} onChange={(googleMapsPublished) => updateDetails({ googleMapsPublished })} />
+                      <Toggle label="Portal-Zusatzbuchung" checked={activeDetails.portalAdditionalBooking} disabled={!canEdit} onChange={(portalAdditionalBooking) => updateDetails({ portalAdditionalBooking })} />
+                      <Toggle label="Beim Speichern zur Übertragung vormerken" checked={activeDetails.transferOnSave} disabled={!canEdit} onChange={(transferOnSave) => updateDetails({ transferOnSave })} />
                     </div>
                   </>
                 ) : null}
@@ -1279,106 +1515,226 @@ export default function ManagementCenter({
                       <Field label="PLZ" value={activeDetails.zip} disabled={!canEdit} onChange={(value) => updateDetails({ zip: value })} />
                       <Field label="Ort" value={activeDetails.city} disabled={!canEdit} onChange={(value) => updateDetails({ city: value })} />
                       <Field label="Ortsteil" value={activeDetails.district} disabled={!canEdit} onChange={(value) => updateDetails({ district: value })} />
+                      <Field label="Gebiet" value={activeDetails.areaType} disabled={!canEdit} onChange={(areaType) => updateDetails({ areaType })} />
+                      <Field label="Breitengrad" type="number" value={activeDetails.latitude} disabled={!canEdit} onChange={(value) => updateDetails({ latitude: readNumber(value) })} />
+                      <Field label="Längengrad" type="number" value={activeDetails.longitude} disabled={!canEdit} onChange={(value) => updateDetails({ longitude: readNumber(value) })} />
                     </div>
-                    <h3>Ansprechpartner und Eigentümer</h3>
+                    <h3>Vermarktungs-Ansprechpartner</h3>
                     <div className="management-form-grid three">
                       <Field label="Kontakt-Firma" value={activeDetails.contactCompany} disabled={!canEdit} onChange={(value) => updateDetails({ contactCompany: value })} />
                       <Field label="Kontakt-Vorname" value={activeDetails.contactFirstName} disabled={!canEdit} onChange={(value) => updateDetails({ contactFirstName: value })} />
                       <Field label="Kontakt-Nachname" value={activeDetails.contactLastName} disabled={!canEdit} onChange={(value) => updateDetails({ contactLastName: value })} />
                       <Field label="Kontakt-E-Mail" type="email" value={activeDetails.contactEmail} disabled={!canEdit} onChange={(value) => updateDetails({ contactEmail: value })} />
                       <Field label="Kontakt-Telefon" value={activeDetails.contactPhone} disabled={!canEdit} onChange={(value) => updateDetails({ contactPhone: value })} />
-                      <Field label="Eigentümer" value={activeDetails.ownerName} disabled={!canEdit} onChange={(value) => updateDetails({ ownerName: value })} />
-                      <Field label="Eigentümer-E-Mail" type="email" value={activeDetails.ownerEmail} disabled={!canEdit} onChange={(value) => updateDetails({ ownerEmail: value })} />
+                      <Field label="Kontakt-Fax" value={activeDetails.contactFax} disabled={!canEdit} onChange={(contactFax) => updateDetails({ contactFax })} />
+                      <Field label="Kontakt-Büro" value={activeDetails.contactOfficePhone} disabled={!canEdit} onChange={(contactOfficePhone) => updateDetails({ contactOfficePhone })} />
+                      <Field label="Kontakt-Mobil" value={activeDetails.contactMobile} disabled={!canEdit} onChange={(contactMobile) => updateDetails({ contactMobile })} />
+                    </div>
+                    <h3>Daten Verkäufer / Mieter / verknüpfte Kontakte</h3>
+                    <div className="management-form-grid four">
+                      <Field label="Anrede" value={activeDetails.ownerSalutation} disabled={!canEdit} onChange={(ownerSalutation) => updateDetails({ ownerSalutation })} />
+                      <Field label="Titel" value={activeDetails.ownerTitle} disabled={!canEdit} onChange={(ownerTitle) => updateDetails({ ownerTitle })} />
+                      <Field label="Firma" value={activeDetails.ownerCompany} disabled={!canEdit} onChange={(ownerCompany) => updateDetails({ ownerCompany })} />
+                      <Field label="Vorname" value={activeDetails.ownerFirstName} disabled={!canEdit} onChange={(ownerFirstName) => updateDetails({ ownerFirstName })} />
+                      <Field label="Nachname" value={activeDetails.ownerLastName} disabled={!canEdit} onChange={(ownerLastName) => updateDetails({ ownerLastName, ownerName: `${activeDetails.ownerFirstName} ${ownerLastName}`.trim() })} />
+                      <Field label="E-Mail" type="email" value={activeDetails.ownerEmail} disabled={!canEdit} onChange={(ownerEmail) => updateDetails({ ownerEmail })} />
+                      <Field label="Telefon" value={activeDetails.ownerPhone} disabled={!canEdit} onChange={(ownerPhone) => updateDetails({ ownerPhone })} />
+                      <Field label="Fax" value={activeDetails.ownerFax} disabled={!canEdit} onChange={(ownerFax) => updateDetails({ ownerFax })} />
+                      <Field label="Büro" value={activeDetails.ownerOfficePhone} disabled={!canEdit} onChange={(ownerOfficePhone) => updateDetails({ ownerOfficePhone })} />
+                      <Field label="Mobil" value={activeDetails.ownerMobile} disabled={!canEdit} onChange={(ownerMobile) => updateDetails({ ownerMobile })} />
+                      <Field label="Straße" value={activeDetails.ownerStreet} disabled={!canEdit} onChange={(ownerStreet) => updateDetails({ ownerStreet })} />
+                      <Field label="PLZ" value={activeDetails.ownerZip} disabled={!canEdit} onChange={(ownerZip) => updateDetails({ ownerZip })} />
+                      <Field label="Ort" value={activeDetails.ownerCity} disabled={!canEdit} onChange={(ownerCity) => updateDetails({ ownerCity })} />
+                    </div>
+                    <div className="management-checkbox-grid">
+                      <Toggle label="Kontakt ist Eigentümer" checked={activeDetails.ownerIsPropertyOwner} disabled={!canEdit} onChange={(ownerIsPropertyOwner) => updateDetails({ ownerIsPropertyOwner })} />
                     </div>
                   </>
                 ) : null}
 
                 {editorTab === "base" ? (
-                  <div className="management-form-grid four">
-                    <Field label="Kaufpreis" type="number" min={0} value={activeDetails.purchasePrice} disabled={!canEdit} onChange={(value) => updateDetails({ purchasePrice: readNumber(value) })} />
-                    <Field label="Wohnfläche m²" type="number" min={0} value={activeDetails.livingArea} disabled={!canEdit} onChange={(value) => updateDetails({ livingArea: readNumber(value) })} />
-                    <Field label="Nutzfläche m²" type="number" min={0} value={activeDetails.usableArea} disabled={!canEdit} onChange={(value) => updateDetails({ usableArea: readNumber(value) })} />
-                    <Field label="Grundstück m²" type="number" min={0} value={activeDetails.plotArea} disabled={!canEdit} onChange={(value) => updateDetails({ plotArea: readNumber(value) })} />
-                    <Field label="Zimmer" type="number" min={0} value={activeDetails.rooms} disabled={!canEdit} onChange={(value) => updateDetails({ rooms: readNumber(value) })} />
-                    <Field label="Schlafzimmer" type="number" min={0} value={activeDetails.bedrooms} disabled={!canEdit} onChange={(value) => updateDetails({ bedrooms: readNumber(value) })} />
-                    <Field label="Badezimmer" type="number" min={0} value={activeDetails.bathrooms} disabled={!canEdit} onChange={(value) => updateDetails({ bathrooms: readNumber(value) })} />
-                    <Field label="Etagen" type="number" min={0} value={activeDetails.floors} disabled={!canEdit} onChange={(value) => updateDetails({ floors: readNumber(value) })} />
-                    <Field label="Balkone" type="number" min={0} value={activeDetails.balconies} disabled={!canEdit} onChange={(value) => updateDetails({ balconies: readNumber(value) })} />
-                    <Field label="Terrassen" type="number" min={0} value={activeDetails.terraces} disabled={!canEdit} onChange={(value) => updateDetails({ terraces: readNumber(value) })} />
-                    <Field label="Haustyp" value={activeDetails.houseType} disabled={!canEdit} onChange={(value) => updateDetails({ houseType: value })} />
-                    <Field label="Baujahr" type="number" min={1800} value={activeDetails.constructionYear} disabled={!canEdit} onChange={(value) => updateDetails({ constructionYear: readNumber(value) })} />
-                    <Field label="Sanierungsjahr" type="number" min={0} value={activeDetails.renovationYear} disabled={!canEdit} onChange={(value) => updateDetails({ renovationYear: readNumber(value) })} />
-                    <SelectField
-                      label="Zustand"
-                      value={activeDetails.condition}
-                      disabled={!canEdit}
-                      options={[
-                        ["ERSTBEZUG", "Erstbezug"],
-                        ["NEUWERTIG", "Neuwertig"],
-                        ["PROJEKTIERT", "Projektiert"],
-                        ["ROHBAU", "Rohbau"],
-                        ["GEPFLEGT", "Gepflegt"],
-                        ["MODERNISIERT", "Modernisiert"],
-                        ["TEIL_VOLLRENOVIERT", "Teil-/vollrenoviert"],
-                        ["TEIL_SANIERT", "Teilsaniert"],
-                        ["VOLL_SANIERT", "Vollsaniert"],
-                        ["SANIERUNGSBEDUERFTIG", "Sanierungsbedürftig"],
-                        ["BAUFAELLIG", "Baufällig"],
-                        ["ENTKERNT", "Entkernt"],
-                        ["ABRISSOBJEKT", "Abrissobjekt"],
-                        ["NACH_VEREINBARUNG", "Nach Vereinbarung"],
-                      ]}
-                      onChange={(condition) => updateDetails({ condition })}
-                    />
-                    <Field label="Bauphase" value={activeDetails.constructionPhase} disabled={!canEdit} onChange={(value) => updateDetails({ constructionPhase: value })} />
-                  </div>
+                  <>
+                    {activeDetails.objectCategory === "land" ? (
+                      <div className="management-form-grid four">
+                        <SelectField
+                          label="Vermarktungsart"
+                          value={activeDetails.marketingType}
+                          disabled={!canEdit}
+                          options={[["purchase", "Kauf"], ["rent-lease", "Pacht"], ["leasehold", "Erbpacht"]]}
+                          onChange={(marketingType) => updateDetails({ marketingType: marketingType as ListingDetails["marketingType"] })}
+                        />
+                        <Field label="Grundstücksfläche m²" type="number" min={0} value={activeDetails.plotArea} disabled={!canEdit} onChange={(value) => updateDetails({ plotArea: readNumber(value) })} />
+                        <Field label="Kaufpreis" type="number" min={0} value={activeDetails.purchasePrice} disabled={!canEdit || activeDetails.marketingType !== "purchase"} onChange={(value) => updateDetails({ purchasePrice: readNumber(value) })} />
+                        <Field label="Preis/Pacht pro Jahr" type="number" min={0} value={activeDetails.annualLeasePrice} disabled={!canEdit || activeDetails.marketingType === "purchase"} onChange={(value) => updateDetails({ annualLeasePrice: readNumber(value) })} />
+                        <Field label="Nutzungsart" value={activeDetails.landUse} disabled={!canEdit} onChange={(landUse) => updateDetails({ landUse })} />
+                        <SelectField
+                          label="Erschließung"
+                          value={activeDetails.developmentStatus}
+                          disabled={!canEdit}
+                          options={[["", "Keine Angabe"], ["UNERSCHLOSSEN", "Unerschlossen"], ["TEILERSCHLOSSEN", "Teilerschlossen"], ["VOLLERSCHLOSSEN", "Vollerschlossen"], ["ORTSUEBLICHERSCHLOSSEN", "Ortsüblich erschlossen"]]}
+                          onChange={(developmentStatus) => updateDetails({ developmentStatus })}
+                        />
+                        <SelectField
+                          label="Bebaubar nach"
+                          value={activeDetails.buildingLaw}
+                          disabled={!canEdit}
+                          options={[["", "Keine Angabe"], ["34_NACHBARSCHAFT", "§ 34 Nachbarschaft"], ["35_AUSSENGEBIET", "§ 35 Außengebiet"], ["B_PLAN", "Bebauungsplan"], ["KEIN BAULAND", "Kein Bauland"], ["BAUERWARTUNGSLAND", "Bauerwartungsland"], ["BAULAND_OHNE_B_PLAN", "Bauland ohne B-Plan"]]}
+                          onChange={(buildingLaw) => updateDetails({ buildingLaw })}
+                        />
+                        <Field label="Empfohlene Nutzung" value={activeDetails.recommendedUse} disabled={!canEdit} onChange={(recommendedUse) => updateDetails({ recommendedUse })} />
+                        <Field label="Teilbar ab m²" type="number" min={0} value={activeDetails.divisibleFrom} disabled={!canEdit} onChange={(value) => updateDetails({ divisibleFrom: readNumber(value) })} />
+                        <Field label="GRZ" type="number" min={0} value={activeDetails.siteOccupancyRatio} disabled={!canEdit} onChange={(value) => updateDetails({ siteOccupancyRatio: readNumber(value) })} />
+                        <Field label="GFZ" type="number" min={0} value={activeDetails.floorAreaRatio} disabled={!canEdit} onChange={(value) => updateDetails({ floorAreaRatio: readNumber(value) })} />
+                      </div>
+                    ) : (
+                      <div className="management-form-grid four">
+                        <Field label="Kaufpreis" type="number" min={0} value={activeDetails.purchasePrice} disabled={!canEdit} onChange={(value) => updateDetails({ purchasePrice: readNumber(value) })} />
+                        <Field label="Wohnfläche m²" type="number" min={0} value={activeDetails.livingArea} disabled={!canEdit} onChange={(value) => updateDetails({ livingArea: readNumber(value) })} />
+                        <Field label="Nutzfläche m²" type="number" min={0} value={activeDetails.usableArea} disabled={!canEdit} onChange={(value) => updateDetails({ usableArea: readNumber(value) })} />
+                        {activeDetails.objectCategory === "house-purchase" ? <Field label="Grundstück m²" type="number" min={0} value={activeDetails.plotArea} disabled={!canEdit} onChange={(value) => updateDetails({ plotArea: readNumber(value) })} /> : null}
+                        <Field label="Zimmer" type="number" min={0} value={activeDetails.rooms} disabled={!canEdit} onChange={(value) => updateDetails({ rooms: readNumber(value) })} />
+                        <Field label="Schlafzimmer" type="number" min={0} value={activeDetails.bedrooms} disabled={!canEdit} onChange={(value) => updateDetails({ bedrooms: readNumber(value) })} />
+                        <Field label="Badezimmer" type="number" min={0} value={activeDetails.bathrooms} disabled={!canEdit} onChange={(value) => updateDetails({ bathrooms: readNumber(value) })} />
+                        <Field label="Etagenanzahl" type="number" min={0} value={activeDetails.floors} disabled={!canEdit} onChange={(value) => updateDetails({ floors: readNumber(value) })} />
+                        {activeDetails.objectCategory === "apartment-purchase" ? <Field label="Etage" type="number" min={0} value={activeDetails.floorNumber} disabled={!canEdit} onChange={(value) => updateDetails({ floorNumber: readNumber(value) })} /> : null}
+                        <Field label="Kubatur m³" type="number" min={0} value={activeDetails.cubature} disabled={!canEdit} onChange={(value) => updateDetails({ cubature: readNumber(value) })} />
+                        <Field label="Balkone" type="number" min={0} value={activeDetails.balconies} disabled={!canEdit} onChange={(value) => updateDetails({ balconies: readNumber(value) })} />
+                        <Field label="Terrassen" type="number" min={0} value={activeDetails.terraces} disabled={!canEdit} onChange={(value) => updateDetails({ terraces: readNumber(value) })} />
+                        <Field label="Loggien" type="number" min={0} value={activeDetails.loggias} disabled={!canEdit} onChange={(value) => updateDetails({ loggias: readNumber(value) })} />
+                        {activeDetails.objectCategory === "house-purchase"
+                          ? <Field label="Haustyp" value={activeDetails.houseType} disabled={!canEdit} onChange={(value) => updateDetails({ houseType: value })} />
+                          : <Field label="Wohnungstyp" value={activeDetails.apartmentType} disabled={!canEdit} onChange={(apartmentType) => updateDetails({ apartmentType })} />}
+                        <Field label="Baujahr" type="number" min={1800} value={activeDetails.constructionYear} disabled={!canEdit} onChange={(value) => updateDetails({ constructionYear: readNumber(value) })} />
+                        <Field label="Sanierungsjahr" type="number" min={0} value={activeDetails.renovationYear} disabled={!canEdit} onChange={(value) => updateDetails({ renovationYear: readNumber(value) })} />
+                        <Field label="Hausgeld" type="number" min={0} value={activeDetails.houseMoney} disabled={!canEdit || activeDetails.objectCategory !== "apartment-purchase"} onChange={(value) => updateDetails({ houseMoney: readNumber(value) })} />
+                        <Field label="Mieteinnahmen/Monat" type="number" min={0} value={activeDetails.monthlyRentIncome} disabled={!canEdit} onChange={(value) => updateDetails({ monthlyRentIncome: readNumber(value) })} />
+                        <SelectField
+                          label="Zustand"
+                          value={activeDetails.condition}
+                          disabled={!canEdit}
+                          options={[
+                            ["ERSTBEZUG", "Erstbezug"],
+                            ["NEUWERTIG", "Neuwertig"],
+                            ["PROJEKTIERT", "Projektiert"],
+                            ["ROHBAU", "Rohbau"],
+                            ["GEPFLEGT", "Gepflegt"],
+                            ["MODERNISIERT", "Modernisiert"],
+                            ["TEIL_VOLLRENOVIERT", "Teil-/vollrenoviert"],
+                            ["TEIL_SANIERT", "Teilsaniert"],
+                            ["VOLL_SANIERT", "Vollsaniert"],
+                            ["SANIERUNGSBEDUERFTIG", "Sanierungsbedürftig"],
+                            ["BAUFAELLIG", "Baufällig"],
+                            ["ENTKERNT", "Entkernt"],
+                            ["ABRISSOBJEKT", "Abrissobjekt"],
+                            ["NACH_VEREINBARUNG", "Nach Vereinbarung"],
+                          ]}
+                          onChange={(condition) => updateDetails({ condition })}
+                        />
+                        <Field label="Bauphase" value={activeDetails.constructionPhase} disabled={!canEdit} onChange={(value) => updateDetails({ constructionPhase: value })} />
+                      </div>
+                    )}
+                    <div className="management-checkbox-grid">
+                      {activeDetails.objectCategory === "land" ? (
+                        <>
+                          <Toggle label="Kurzfristig bebaubar" checked={activeDetails.buildableSoon} disabled={!canEdit} onChange={(buildableSoon) => updateDetails({ buildableSoon })} />
+                          <Toggle label="Baugenehmigung vorhanden" checked={activeDetails.buildingPermit} disabled={!canEdit} onChange={(buildingPermit) => updateDetails({ buildingPermit })} />
+                          <Toggle label="Abriss erforderlich" checked={activeDetails.demolitionRequired} disabled={!canEdit} onChange={(demolitionRequired) => updateDetails({ demolitionRequired })} />
+                        </>
+                      ) : null}
+                    </div>
+                  </>
                 ) : null}
 
                 {editorTab === "features" ? (
                   <>
                     <div className="management-form-grid three">
-                      <SelectField
-                        label="Ausstattungsqualität"
-                        value={activeDetails.equipmentQuality}
-                        disabled={!canEdit}
-                        options={[["STANDARD", "Standard"], ["GEHOBEN", "Gehoben"], ["LUXUS", "Luxus"]]}
-                        onChange={(equipmentQuality) => updateDetails({ equipmentQuality })}
-                      />
-                      <Field label="Küchenart" value={activeDetails.kitchenType} disabled={!canEdit} onChange={(value) => updateDetails({ kitchenType: value })} />
-                      <Field label="Bad-Ausstattung" value={activeDetails.bathroomFeatures} disabled={!canEdit} onChange={(value) => updateDetails({ bathroomFeatures: value })} />
-                      <Field label="Bodenbeläge" value={activeDetails.flooring} disabled={!canEdit} onChange={(value) => updateDetails({ flooring: value })} />
-                      <Field label="Heizungsart" value={activeDetails.heatingType} disabled={!canEdit} onChange={(value) => updateDetails({ heatingType: value })} />
-                      <Field label="Energieträger" value={activeDetails.energySource} disabled={!canEdit} onChange={(value) => updateDetails({ energySource: value })} />
-                      <Field label="Stellplätze" value={activeDetails.parkingTypes} disabled={!canEdit} onChange={(value) => updateDetails({ parkingTypes: value })} />
+                      {activeDetails.objectCategory !== "land" ? (
+                        <>
+                          <SelectField
+                            label="Ausstattungsqualität"
+                            value={activeDetails.equipmentQuality}
+                            disabled={!canEdit}
+                            options={[["STANDARD", "Standard"], ["GEHOBEN", "Gehoben"], ["LUXUS", "Luxus"]]}
+                            onChange={(equipmentQuality) => updateDetails({ equipmentQuality })}
+                          />
+                          <Field label="Küchenart" value={activeDetails.kitchenType} disabled={!canEdit} onChange={(value) => updateDetails({ kitchenType: value })} />
+                          <Field label="Bad-Ausstattung" value={activeDetails.bathroomFeatures} disabled={!canEdit} onChange={(value) => updateDetails({ bathroomFeatures: value })} />
+                          <Field label="Bodenbeläge" value={activeDetails.flooring} disabled={!canEdit} onChange={(value) => updateDetails({ flooring: value })} />
+                          <Field label="Heizungsart" value={activeDetails.heatingType} disabled={!canEdit} onChange={(value) => updateDetails({ heatingType: value })} />
+                          <Field label="Befeuerungsart" value={activeDetails.energySource} disabled={!canEdit} onChange={(value) => updateDetails({ energySource: value })} />
+                          <Field label="Energietyp" value={activeDetails.energyType} disabled={!canEdit} onChange={(energyType) => updateDetails({ energyType })} />
+                          <Field label="Stellplätze (Freitext)" value={activeDetails.parkingTypes} disabled={!canEdit} onChange={(value) => updateDetails({ parkingTypes: value })} />
+                          <SelectField
+                            label="Möbliert/Teilmöbliert"
+                            value={activeDetails.furnished}
+                            disabled={!canEdit}
+                            options={[["", "Keine Angabe"], ["no", "Nein"], ["furnished", "Möbliert"], ["partly-furnished", "Teilmöbliert"]]}
+                            onChange={(furnished) => updateDetails({ furnished: furnished as ListingDetails["furnished"] })}
+                          />
+                        </>
+                      ) : null}
+                      <Field label="Umgebung" value={activeDetails.surroundings} disabled={!canEdit} onChange={(surroundings) => updateDetails({ surroundings })} />
                       <Field label="Ausblick" value={activeDetails.view} disabled={!canEdit} onChange={(value) => updateDetails({ view: value })} />
                     </div>
-                    <div className="management-checkbox-grid">
-                      {([
-                        ["guestWc", "Gäste-WC"],
-                        ["garden", "Garten"],
-                        ["attic", "Dachboden"],
-                        ["fireplace", "Kamin"],
-                        ["basement", "Keller"],
-                        ["barrierFree", "Barrierefrei"],
-                        ["seniorFriendly", "Seniorengerecht"],
-                        ["sauna", "Sauna"],
-                        ["pool", "Pool"],
-                        ["conservatory", "Wintergarten"],
-                        ["airConditioning", "Klimaanlage"],
-                        ["alarmSystem", "Alarmanlage"],
-                        ["elevator", "Aufzug"],
-                        ["monument", "Denkmalschutz"],
-                        ["rented", "Vermietet"],
-                      ] as Array<[keyof ListingDetails, string]>).map(([key, label]) => (
-                        <Toggle
-                          key={key}
-                          label={label}
-                          checked={Boolean(activeDetails[key])}
-                          disabled={!canEdit}
-                          onChange={(checked) => updateDetails({ [key]: checked } as Partial<ListingDetails>)}
-                        />
-                      ))}
-                    </div>
+                    {activeDetails.objectCategory !== "land" ? (
+                      <>
+                        <div className="management-checkbox-grid">
+                          {([
+                            ["grannyFlat", "Einliegerwohnung"],
+                            ["guestWc", "Gäste-WC"],
+                            ["garden", "Garten/-mitbenutzung"],
+                            ["nonSmoker", "Nichtraucher"],
+                            ["attic", "Dachboden"],
+                            ["fireplace", "Kamin"],
+                            ["basement", "Keller"],
+                            ["barrierFree", "Barrierefrei"],
+                            ["assistedLiving", "Betreutes Wohnen"],
+                            ["seniorFriendly", "Seniorengerecht"],
+                            ["sauna", "Sauna"],
+                            ["pool", "Pool"],
+                            ["conservatory", "Wintergarten"],
+                            ["airConditioning", "Klimaanlage"],
+                            ["alarmSystem", "Alarmanlage"],
+                            ["elevator", "Personenaufzug"],
+                            ["monument", "Denkmalschutz"],
+                            ["rented", "Vermietet"],
+                            ["vacationSuitable", activeDetails.objectCategory === "apartment-purchase" ? "Als Ferienwohnung geeignet" : "Als Ferienhaus geeignet"],
+                          ] as Array<[keyof ListingDetails, string]>).map(([key, label]) => (
+                            <Toggle
+                              key={key}
+                              label={label}
+                              checked={Boolean(activeDetails[key])}
+                              disabled={!canEdit}
+                              onChange={(checked) => updateDetails({ [key]: checked } as Partial<ListingDetails>)}
+                            />
+                          ))}
+                        </div>
+                        <h4>Stellplätze</h4>
+                        <div className="parking-space-grid">
+                          {activeDetails.parkingSpaces.map((parking, index) => {
+                            const label = {
+                              carport: "Carport",
+                              duplex: "Duplex",
+                              outdoor: "Freiplatz",
+                              garage: "Garage",
+                              "parking-garage": "Parkhaus",
+                              underground: "Tiefgarage",
+                            }[parking.kind];
+                            return (
+                              <article key={parking.kind}>
+                                <b>{label}</b>
+                                <Field label="Anzahl" type="number" min={0} value={parking.count} disabled={!canEdit} onChange={(value) => updateDetails({
+                                  parkingSpaces: activeDetails.parkingSpaces.map((item, itemIndex) => itemIndex === index ? { ...item, count: readNumber(value) } : item),
+                                })} />
+                                <Field label="Preis pro Stellplatz" type="number" min={0} value={parking.price} disabled={!canEdit || parking.count <= 0} onChange={(value) => updateDetails({
+                                  parkingSpaces: activeDetails.parkingSpaces.map((item, itemIndex) => itemIndex === index ? { ...item, price: readNumber(value) } : item),
+                                })} />
+                              </article>
+                            );
+                          })}
+                        </div>
+                      </>
+                    ) : null}
                   </>
                 ) : null}
 
@@ -1412,6 +1768,10 @@ export default function ManagementCenter({
                     <TextArea label="Ausstattung" rows={8} value={activeListing.texts.equipment} disabled={!canEdit} onChange={(equipment) => updateTexts({ equipment })} />
                     <TextArea label="Lage" rows={7} value={activeListing.texts.location} disabled={!canEdit} onChange={(location) => updateTexts({ location })} />
                     <TextArea label="Sonstiges" rows={7} value={activeListing.texts.other} disabled={!canEdit} onChange={(other) => updateTexts({ other })} />
+                    <TextArea label="Provision" rows={4} value={activeListing.texts.commission ?? ""} disabled={!canEdit} onChange={(commission) => updateTexts({ commission })} />
+                    <TextArea label="Anmerkung / Haftungshinweis" rows={5} value={activeListing.texts.disclaimer ?? ""} disabled={!canEdit} onChange={(disclaimer) => updateTexts({ disclaimer })} />
+                    <TextArea label="Allgemeine Geschäftsbedingungen" rows={6} value={activeListing.texts.terms ?? ""} disabled={!canEdit} onChange={(terms) => updateTexts({ terms })} />
+                    <TextArea label="Freier Textblock für Empfehlungen" rows={5} value={activeListing.texts.recommendation ?? ""} disabled={!canEdit} onChange={(recommendation) => updateTexts({ recommendation })} />
                   </div>
                 ) : null}
 
@@ -1496,6 +1856,9 @@ export default function ManagementCenter({
                       <Toggle label="Akzentfarben" checked={exposeOptions.includeColors} onChange={(includeColors) => setExposeOptions((current) => ({ ...current, includeColors }))} />
                       <Toggle label="Nur Titelseite" checked={exposeOptions.firstPageOnly} onChange={(firstPageOnly) => setExposeOptions((current) => ({ ...current, firstPageOnly }))} />
                       <button type="button" className="primary" disabled={exposeBusy} onClick={generateExpose}>Exposé herunterladen</button>
+                      <button type="button" disabled={openImmoBusy} onClick={downloadOpenImmoPackage}>
+                        {openImmoBusy ? "OpenImmo-Paket wird erstellt …" : "OpenImmo-Paket herunterladen"}
+                      </button>
                     </section>
                   </div>
                 ) : null}
@@ -1589,6 +1952,98 @@ export default function ManagementCenter({
         </div>
       ) : null}
 
+      {section === "files" ? (
+        <div className="management-panel">
+          <header>
+            <div>
+              <span className="eyebrow">Kommunikation</span>
+              <h3>Dateiverwaltung</h3>
+              <p>Interne Vorlagen, öffentliche Teamdateien und persönliche Dokumente bleiben nach Benutzerrechten getrennt.</p>
+            </div>
+          </header>
+          <div className="file-manager">
+            <aside className="file-folder-list">
+              <div className="file-folder-heading">
+                <b>Dateibereich</b>
+                <span>{visibleFolders.length} Ordner</span>
+              </div>
+              {(["templates", "public", "personal"] as ManagementFileScope[]).map((scope) => {
+                const label = scope === "templates"
+                  ? "Livinghaus Vorlagen"
+                  : scope === "public"
+                    ? "Öffentlich"
+                    : "Persönlich";
+                const folders = visibleFolders.filter((folder) => folder.scope === scope);
+                if (!folders.length) return null;
+                return (
+                  <section key={scope}>
+                    <h4>{label}</h4>
+                    {folders.map((folder) => (
+                      <button
+                        key={folder.id}
+                        type="button"
+                        className={activeFolder?.id === folder.id ? "active" : ""}
+                        onClick={() => setActiveFolderId(folder.id)}
+                      >
+                        <span>{folder.parentId ? "↳" : "▣"}</span>
+                        <b>{folder.name}</b>
+                        <small>{management.files.filter((file) => file.folderId === folder.id).length}</small>
+                      </button>
+                    ))}
+                  </section>
+                );
+              })}
+              <div className="file-folder-create">
+                <input value={newFolderName} placeholder="Neuer Ordner" onChange={(event) => setNewFolderName(event.target.value)} />
+                <select value={newFolderScope} onChange={(event) => setNewFolderScope(event.target.value as ManagementFileScope)}>
+                  <option value="personal">Persönlich</option>
+                  <option value="public">Öffentlich</option>
+                  {currentUser?.role === "admin" ? <option value="templates">Vorlagen</option> : null}
+                </select>
+                <button type="button" disabled={!canEdit || !newFolderName.trim()} onClick={addFileFolder}>Ordner anlegen</button>
+              </div>
+            </aside>
+            <section className="file-browser">
+              <header>
+                <div>
+                  <span className="eyebrow">{activeFolder?.scope === "personal" ? "Persönlich" : activeFolder?.scope === "templates" ? "Vorlagen" : "Team"}</span>
+                  <h4>{activeFolder?.name ?? "Kein Ordner verfügbar"}</h4>
+                </div>
+                <div>
+                  <label className={`upload-button${canWriteFolder(activeFolder) ? "" : " disabled"}`}>
+                    Dateien hinzufügen
+                    <input type="file" multiple disabled={!canWriteFolder(activeFolder)} onChange={addManagementFiles} />
+                  </label>
+                  <button type="button" className="danger ghost" disabled={!activeFolder || ["folder-templates", "folder-public"].includes(activeFolder.id) || activeFolder.id.startsWith("folder-personal-")} onClick={removeFileFolder}>Ordner löschen</button>
+                </div>
+              </header>
+              <div className="file-browser-list">
+                {management.files
+                  .filter((file) => file.folderId === activeFolder?.id)
+                  .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+                  .map((file) => {
+                    const creator = management.users.find((user) => user.id === file.createdByUserId);
+                    return (
+                      <article key={file.id}>
+                        <div className="file-type-icon">{file.name.split(".").pop()?.slice(0, 4).toUpperCase() || "DATEI"}</div>
+                        <div>
+                          <b>{file.name}</b>
+                          <span>{fileSize(file.size)} · {formatDate(file.createdAt, true)} · {creator?.name ?? "Unbekannt"}</span>
+                        </div>
+                        <a href={file.dataUrl} download={file.name}>Herunterladen</a>
+                        <button type="button" className="danger ghost" disabled={!canWriteFolder(activeFolder)} onClick={() => removeManagementFile(file.id)}>Löschen</button>
+                      </article>
+                    );
+                  })}
+                {!management.files.some((file) => file.folderId === activeFolder?.id) ? (
+                  <div className="management-empty">Dieser Ordner enthält noch keine Dateien.</div>
+                ) : null}
+              </div>
+            </section>
+          </div>
+        </div>
+      ) : null}
+
       {section === "portals" ? (
         <div className="management-panel">
           <header>
@@ -1647,7 +2102,7 @@ export default function ManagementCenter({
           <header>
             <div>
               <span className="eyebrow">Rückmeldungen</span>
-              <h3>Immoprofessional-Importberichte</h3>
+              <h3>Portal- und OpenImmo-Berichte</h3>
               <p>XML-, CSV-, JSON- und Textberichte werden anhand der Objekt-ID zugeordnet.</p>
             </div>
             <label className={`upload-button${reportBusy ? " disabled" : ""}`}>
@@ -1803,6 +2258,21 @@ export default function ManagementCenter({
             {!auditEntries.length ? <div className="management-empty">Keine passenden Aktivitäten.</div> : null}
           </div>
         </div>
+      ) : null}
+      {showCreateWizard ? (
+        <ObjectCreationWizard
+          state={state}
+          setState={setState}
+          onClose={() => setShowCreateWizard(false)}
+          onCreated={(listingId, externalId) => {
+            setShowCreateWizard(false);
+            setActiveListingId(listingId);
+            setEditorTab("object");
+            setArchiveFilter("active");
+            setReleaseFilter("all");
+            notify(`${externalId} wurde als vollständige Objektakte angelegt.`);
+          }}
+        />
       ) : null}
     </section>
   );

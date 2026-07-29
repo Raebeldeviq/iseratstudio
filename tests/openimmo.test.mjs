@@ -227,6 +227,150 @@ test("preserves explicit per-listing projecting values during export", () => {
   assert.match(xml, /<user_defined_simplefield feldname="Energieklasse"><!\[CDATA\[B\]\]><\/user_defined_simplefield>/);
 });
 
+test("exports direct apartment and land objects with their real OpenImmo categories", () => {
+  const project = {
+    id: "project-direct",
+    name: "Direkte Objekte",
+    street: "Testweg",
+    houseNumber: "8",
+    zip: "14552",
+    city: "Michendorf",
+    district: "",
+    plotArea: 740,
+    plotPrice: 0,
+    additionalCosts: 0,
+    locationFacts: "",
+    transportFacts: "",
+    familyFacts: "",
+    natureFacts: "",
+    notes: "",
+    selectedHouseIds: ["direct-apartment", "direct-land"],
+    listings: [],
+    createdAt: "2026-07-29T00:00:00.000Z",
+  };
+  const template = {
+    archived: true,
+    name: "Freies Objekt",
+    houseType: "Einfamilienhaus",
+    livingArea: 90,
+    rooms: 3,
+    bedrooms: 2,
+    bathrooms: 1,
+    floors: 1,
+    housePrice: 0,
+    constructionYear: 2020,
+    energyDemand: 70,
+    energyClass: "B",
+    heatingType: "",
+    energySource: "",
+    architecture: "",
+    equipmentHighlights: "",
+    useStandardPackage: false,
+    images: [],
+  };
+  const management = (details) => ({
+    lifecycle: "ready",
+    released: true,
+    createdAt: "2026-07-29T00:00:00.000Z",
+    updatedAt: "2026-07-29T00:00:00.000Z",
+    details,
+    media: [],
+    appointments: [],
+    portals: [],
+  });
+  const listings = [{
+    id: "apartment",
+    externalId: "30435-14001",
+    templateId: "direct-apartment",
+    templateName: "Wohnung Kauf",
+    price: 330000,
+    version: 1,
+    texts: {
+      title: "Eigentumswohnung",
+      description: "",
+      equipment: "",
+      location: "",
+      other: "",
+    },
+    management: management({
+      objectCategory: "apartment-purchase",
+      marketingType: "purchase",
+      apartmentType: "Penthouse",
+      purchasePrice: 330000,
+      livingArea: 90,
+      usableArea: 10,
+      plotArea: 0,
+      rooms: 3,
+      bedrooms: 2,
+      bathrooms: 1,
+      floors: 4,
+      floorNumber: 4,
+      currency: "EUR",
+      commissionRequired: false,
+      energyCertificateType: "BEDARF",
+      energyClass: "B",
+      endEnergyDemand: 70,
+      certificateYear: 2020,
+      addressPublished: false,
+    }),
+  }, {
+    id: "land",
+    externalId: "30435-14002",
+    templateId: "direct-land",
+    templateName: "Grundstück",
+    price: 12000,
+    version: 1,
+    texts: {
+      title: "Grundstück zur Pacht",
+      description: "",
+      equipment: "",
+      location: "",
+      other: "",
+    },
+    management: management({
+      objectCategory: "land",
+      marketingType: "rent-lease",
+      landUse: "WOHNEN",
+      annualLeasePrice: 12000,
+      purchasePrice: 0,
+      plotArea: 740,
+      divisibleFrom: 370,
+      siteOccupancyRatio: 0.3,
+      floorAreaRatio: 0.6,
+      buildingLaw: "B_PLAN",
+      developmentStatus: "VOLLERSCHLOSSEN",
+      currency: "EUR",
+      commissionRequired: false,
+      addressPublished: false,
+    }),
+  }];
+  const xml = buildOpenImmoXml({
+    project,
+    listings,
+    houses: [
+      { ...template, id: "direct-apartment" },
+      { ...template, id: "direct-land" },
+    ],
+    provider: {
+      providerNumber: "30435",
+      company: "Testfirma",
+      firstName: "Max",
+      lastName: "Mustermann",
+      email: "test@example.com",
+      phone: "0000",
+    },
+  });
+
+  assert.match(xml, /<wohnung wohnungtyp="PENTHOUSE" \/>/);
+  assert.match(xml, /<grundstueck grundst_typ="WOHNEN" \/>/);
+  assert.match(xml, /<vermarktungsart KAUF="false" MIETE_PACHT="true" ERBPACHT="false" LEASING="false" \/>/);
+  assert.match(xml, /<pacht>12000<\/pacht>/);
+  assert.match(xml, /<grz>0\.3<\/grz>/);
+  assert.match(xml, /<gfz>0\.6<\/gfz>/);
+  assert.match(xml, /<bebaubar_nach bebaubar_attr="B_PLAN" \/>/);
+  assert.match(xml, /<erschliessung erschl_attr="VOLLERSCHLOSSEN" \/>/);
+});
+
 test("creates explicit OpenImmo DELETE packages without listing content", async () => {
   const provider = {
     providerNumber: "30435",

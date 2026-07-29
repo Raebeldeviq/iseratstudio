@@ -9,7 +9,10 @@ import type {
   ListingLifecycleStatus,
   ListingManagement,
   ListingMediaItem,
+  ListingObjectCategory,
+  ListingParkingSpace,
   ListingPortalState,
+  ManagementFileFolder,
   ManagementRole,
   ManagementState,
   ManagementUser,
@@ -18,6 +21,7 @@ import type {
   ProviderSettings,
   StudioState,
 } from "../types";
+import { allocateProviderExternalIds } from "./external-ids.ts";
 
 const DEFAULT_PORTALS: PortalConfiguration[] = [
   {
@@ -128,19 +132,51 @@ function defaultUsers(provider: ProviderSettings, now: string): ManagementUser[]
   ];
 }
 
+function defaultFileFolders(
+  users: ManagementUser[],
+  now: string,
+): ManagementFileFolder[] {
+  return [
+    {
+      id: "folder-templates",
+      name: "Livinghaus Vorlagen",
+      scope: "templates",
+      accessUserIds: users.map((user) => user.id),
+      createdAt: now,
+    },
+    {
+      id: "folder-public",
+      name: "Öffentlich",
+      scope: "public",
+      accessUserIds: users.map((user) => user.id),
+      createdAt: now,
+    },
+    ...users.map((user) => ({
+      id: `folder-personal-${user.id}`,
+      name: user.name,
+      scope: "personal" as const,
+      ownerUserId: user.id,
+      accessUserIds: [user.id],
+      createdAt: now,
+    })),
+  ];
+}
+
 export function createManagementState(
   provider: ProviderSettings,
   now = new Date().toISOString(),
 ): ManagementState {
   const users = defaultUsers(provider, now);
   return {
-    version: 1,
+    version: 2,
     currentUserId: users[0].id,
     users,
     company: defaultCompany(provider),
     portals: DEFAULT_PORTALS.map((portal) => ({ ...portal })),
     auditLog: [],
     importReports: [],
+    fileFolders: defaultFileFolders(users, now),
+    files: [],
   };
 }
 
@@ -246,31 +282,58 @@ function defaultDetails(
   provider: ProviderSettings,
 ): ListingDetails {
   const projecting = listing.projectingSettings ?? {};
+  const parkingSpaces: ListingParkingSpace[] = [
+    "carport",
+    "duplex",
+    "outdoor",
+    "garage",
+    "parking-garage",
+    "underground",
+  ].map((kind) => ({
+    kind: kind as ListingParkingSpace["kind"],
+    count: 0,
+    price: 0,
+  }));
   return {
+    objectCategory: "house-purchase",
+    marketingType: "purchase",
     objectStatus: "projected",
+    objectStatusText: "",
     groupId: "",
     orderNumber: "",
     currency: "EUR",
+    is24Placement: "",
+    immoweltPlacement: "",
+    portalAdditionalBooking: false,
+    transferOnSave: true,
     availableFrom: "",
     addressPublished: false,
     googleMapsPublished: false,
+    latitude: 0,
+    longitude: 0,
     country: "Deutschland",
     street: project.street,
     houseNumber: project.houseNumber,
     zip: project.zip,
     city: project.city,
     district: project.district,
+    areaType: "Wohngebiet",
     purchasePrice: listing.price,
+    annualLeasePrice: 0,
     livingArea: house?.livingArea ?? 0,
     usableArea: house?.livingArea ?? 0,
     plotArea: project.plotArea,
+    cubature: 0,
     rooms: house?.rooms ?? 0,
     bedrooms: house?.bedrooms ?? 0,
     bathrooms: house?.bathrooms ?? 0,
     floors: house?.floors ?? 0,
+    floorNumber: 0,
     balconies: 0,
     terraces: 0,
+    loggias: 0,
     houseType: house?.houseType ?? listing.templateName,
+    apartmentType: "",
     constructionYear: house?.constructionYear ?? new Date().getFullYear(),
     renovationYear: 0,
     condition: "ERSTBEZUG",
@@ -281,8 +344,12 @@ function defaultDetails(
     flooring: "",
     heatingType: house?.heatingType ?? "FUSSBODEN",
     energySource: house?.energySource ?? "LUFTWAERMEPUMPE",
+    energyType: projecting.kfw40 ? "KFW40" : projecting.kfw55 ? "KFW55" : "",
     parkingTypes: "",
+    parkingSpaces,
     view: "",
+    surroundings: "",
+    furnished: "",
     guestWc: true,
     garden: true,
     attic: true,
@@ -298,6 +365,22 @@ function defaultDetails(
     elevator: false,
     monument: false,
     rented: false,
+    grannyFlat: false,
+    nonSmoker: false,
+    vacationSuitable: false,
+    assistedLiving: false,
+    houseMoney: 0,
+    monthlyRentIncome: 0,
+    buildableSoon: false,
+    landUse: "WOHNEN",
+    developmentStatus: "",
+    buildingLaw: "",
+    buildingPermit: false,
+    demolitionRequired: false,
+    recommendedUse: "",
+    divisibleFrom: 0,
+    siteOccupancyRatio: 0,
+    floorAreaRatio: 0,
     energyCertificateType: "BEDARF",
     energyCertificateValidUntil: "",
     energyClass: projecting.energyClass ?? house?.energyClass ?? "A+",
@@ -311,8 +394,24 @@ function defaultDetails(
     contactLastName: provider.lastName,
     contactEmail: provider.email,
     contactPhone: provider.phone,
+    contactFax: "",
+    contactOfficePhone: "",
+    contactMobile: "",
+    ownerSalutation: "",
+    ownerTitle: "",
+    ownerCompany: "",
+    ownerFirstName: "",
+    ownerLastName: "",
     ownerName: "",
     ownerEmail: "",
+    ownerPhone: "",
+    ownerFax: "",
+    ownerOfficePhone: "",
+    ownerMobile: "",
+    ownerStreet: "",
+    ownerZip: "",
+    ownerCity: "",
+    ownerIsPropertyOwner: false,
     internalNotes: project.notes,
   };
 }
@@ -394,8 +493,22 @@ export function normalizeStudioManagementState(
     user.id === current?.currentUserId && user.active
   )) ?? users.find((user) => user.active) ?? users[0];
   const portals = normalizedPortals(current?.portals);
+  const folderFallbacks = defaultFileFolders(users, now);
+  const existingFolders = current?.fileFolders ?? [];
+  const fileFolders = [
+    ...existingFolders,
+    ...folderFallbacks.filter((fallbackFolder) => (
+      !existingFolders.some((folder) => (
+        folder.id === fallbackFolder.id
+        || (
+          folder.scope === "personal"
+          && folder.ownerUserId === fallbackFolder.ownerUserId
+        )
+      ))
+    )),
+  ];
   const management: ManagementState = {
-    version: 1,
+    version: 2,
     currentUserId: activeUser?.id ?? "",
     users,
     company: {
@@ -406,6 +519,8 @@ export function normalizeStudioManagementState(
     portals,
     auditLog: current?.auditLog ?? [],
     importReports: current?.importReports ?? [],
+    fileFolders,
+    files: current?.files ?? [],
   };
   const sourceState = { ...state, management };
   return {
@@ -488,6 +603,226 @@ export function findListing(
     if (listing) return { project, listing };
   }
   return undefined;
+}
+
+export type DirectObjectDraft = {
+  objectCategory: ListingObjectCategory;
+  templateId?: string;
+  title: string;
+  owner: ProjectInput["owner"];
+  country: string;
+  street: string;
+  houseNumber: string;
+  zip: string;
+  city: string;
+  district: string;
+  areaType: string;
+  addressPublished: boolean;
+  googleMapsPublished: boolean;
+  purchasePrice: number;
+  annualLeasePrice: number;
+  livingArea: number;
+  usableArea: number;
+  plotArea: number;
+  rooms: number;
+  bedrooms: number;
+  bathrooms: number;
+  floors: number;
+  houseType: string;
+  apartmentType: string;
+  marketingType: ListingDetails["marketingType"];
+  landUse: string;
+  developmentStatus: string;
+  buildingLaw: string;
+  buildableSoon: boolean;
+  ownerSalutation: string;
+  ownerCompany: string;
+  ownerFirstName: string;
+  ownerLastName: string;
+  ownerEmail: string;
+  ownerPhone: string;
+  ownerIsPropertyOwner: boolean;
+  internalNotes: string;
+  released: boolean;
+  portalIds: string[];
+};
+
+function directCategoryName(category: ListingObjectCategory): string {
+  if (category === "apartment-purchase") return "Wohnung Kauf";
+  if (category === "land") return "Grundstück";
+  return "Haus Kauf";
+}
+
+function directTemplate(
+  draft: DirectObjectDraft,
+  now: string,
+): HouseTemplate {
+  const name = `Freies Objekt – ${directCategoryName(draft.objectCategory)}`;
+  return {
+    id: uid("direct-template"),
+    archived: true,
+    name,
+    houseType: draft.houseType || draft.apartmentType || name,
+    livingArea: draft.livingArea,
+    rooms: draft.rooms,
+    bedrooms: draft.bedrooms,
+    bathrooms: draft.bathrooms,
+    floors: draft.floors,
+    housePrice: draft.purchasePrice,
+    constructionYear: new Date(now).getFullYear(),
+    energyDemand: 0,
+    energyClass: "",
+    heatingType: "",
+    energySource: "",
+    architecture: "",
+    equipmentHighlights: "",
+    useStandardPackage: false,
+    images: [],
+  };
+}
+
+export function createDirectObject(
+  inputState: StudioState,
+  draft: DirectObjectDraft,
+  now = new Date().toISOString(),
+): { state: StudioState; listingId: string; externalId: string } {
+  const state = normalizeStudioManagementState(inputState, now);
+  const listingId = uid("listing");
+  const projectId = uid("object");
+  const externalId = allocateProviderExternalIds(
+    state.provider.providerNumber,
+    state.projects.flatMap((project) => (
+      project.listings.map((listing) => listing.externalId)
+    )),
+    1,
+  )[0];
+  const selectedTemplate = draft.objectCategory === "house-purchase"
+    ? state.houses.find((house) => (
+        house.id === draft.templateId && house.archived !== true
+      ))
+    : undefined;
+  const generatedTemplate = selectedTemplate
+    ? undefined
+    : directTemplate(draft, now);
+  const template = selectedTemplate ?? generatedTemplate!;
+  const project: ProjectInput = {
+    id: projectId,
+    owner: draft.owner,
+    name: draft.city.trim()
+      ? `${directCategoryName(draft.objectCategory)} · ${draft.city.trim()}`
+      : `${directCategoryName(draft.objectCategory)} · ${externalId}`,
+    street: draft.street.trim(),
+    houseNumber: draft.houseNumber.trim(),
+    zip: draft.zip.trim(),
+    city: draft.city.trim(),
+    district: draft.district.trim(),
+    plotArea: draft.plotArea,
+    plotPrice: draft.objectCategory === "land" ? draft.purchasePrice : 0,
+    additionalCosts: 0,
+    locationFacts: "",
+    transportFacts: "",
+    familyFacts: "",
+    natureFacts: "",
+    notes: draft.internalNotes.trim(),
+    selectedHouseIds: [template.id],
+    listings: [{
+      id: listingId,
+      externalId,
+      templateId: template.id,
+      templateName: template.name,
+      price: draft.purchasePrice || draft.annualLeasePrice,
+      texts: {
+        title: draft.title.trim(),
+        description: "",
+        equipment: "",
+        location: "",
+        other: "",
+        commission: "",
+        disclaimer: "Die von uns gemachten Informationen beruhen auf Angaben des Verkäufers bzw. der Verkäuferin. Für die Richtigkeit und Vollständigkeit der Angaben kann keine Gewähr bzw. Haftung übernommen werden. Ein Zwischenverkauf und Irrtümer sind vorbehalten.",
+        terms: "",
+        recommendation: "",
+      },
+      version: 1,
+    }],
+    createdAt: now,
+  };
+  let next = normalizeStudioManagementState({
+    ...state,
+    houses: generatedTemplate ? [...state.houses, generatedTemplate] : state.houses,
+    projects: [...state.projects, project],
+  }, now);
+  next = mapListing(next, listingId, (listing) => {
+    if (!listing.management) return listing;
+    const selectedPortalIds = new Set(draft.portalIds);
+    const details: ListingDetails = {
+      ...listing.management.details,
+      objectCategory: draft.objectCategory,
+      marketingType: draft.marketingType,
+      country: draft.country.trim() || "Deutschland",
+      street: draft.street.trim(),
+      houseNumber: draft.houseNumber.trim(),
+      zip: draft.zip.trim(),
+      city: draft.city.trim(),
+      district: draft.district.trim(),
+      areaType: draft.areaType,
+      addressPublished: draft.addressPublished,
+      googleMapsPublished: draft.googleMapsPublished,
+      purchasePrice: draft.purchasePrice,
+      annualLeasePrice: draft.annualLeasePrice,
+      livingArea: draft.livingArea || template.livingArea,
+      usableArea: draft.usableArea,
+      plotArea: draft.plotArea,
+      rooms: draft.rooms || template.rooms,
+      bedrooms: draft.bedrooms || template.bedrooms,
+      bathrooms: draft.bathrooms || template.bathrooms,
+      floors: draft.floors || template.floors,
+      houseType: draft.houseType || template.houseType,
+      apartmentType: draft.apartmentType,
+      landUse: draft.landUse,
+      developmentStatus: draft.developmentStatus,
+      buildingLaw: draft.buildingLaw,
+      buildableSoon: draft.buildableSoon,
+      ownerSalutation: draft.ownerSalutation,
+      ownerCompany: draft.ownerCompany.trim(),
+      ownerFirstName: draft.ownerFirstName.trim(),
+      ownerLastName: draft.ownerLastName.trim(),
+      ownerName: [
+        draft.ownerFirstName.trim(),
+        draft.ownerLastName.trim(),
+      ].filter(Boolean).join(" ") || draft.ownerCompany.trim(),
+      ownerEmail: draft.ownerEmail.trim(),
+      ownerPhone: draft.ownerPhone.trim(),
+      ownerIsPropertyOwner: draft.ownerIsPropertyOwner,
+      internalNotes: draft.internalNotes.trim(),
+    };
+    const management: ListingManagement = {
+      ...listing.management,
+      released: draft.released,
+      updatedAt: now,
+      details,
+      portals: listing.management.portals.map((portal) => ({
+        ...portal,
+        enabled: selectedPortalIds.has(portal.portalId),
+        status: "not-transferred",
+        message: undefined,
+      })),
+    };
+    return {
+      ...listing,
+      price: draft.purchasePrice || draft.annualLeasePrice,
+      management: {
+        ...management,
+        lifecycle: deriveListingLifecycle(management),
+      },
+    };
+  });
+  next = appendAuditLog(next, {
+    action: "Objekt angelegt",
+    targetType: "listing",
+    targetId: listingId,
+    description: `${externalId} · ${directCategoryName(draft.objectCategory)} · ${draft.title.trim()}`,
+  }, now);
+  return { state: next, listingId, externalId };
 }
 
 export function resolveListingMediaDataUrl(

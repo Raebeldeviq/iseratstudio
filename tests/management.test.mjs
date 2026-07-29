@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   appendAuditLog,
+  createDirectObject,
   managementPermission,
   normalizeStudioManagementState,
 } from "../app/lib/management.ts";
@@ -124,4 +125,66 @@ test("enforces role permissions and records the acting user", () => {
   }, "2026-07-29T11:00:00.000Z");
   assert.equal(withAudit.management.auditLog.length, 1);
   assert.equal(withAudit.management.auditLog[0].userId, "user-fabian");
+});
+
+test("creates a complete direct land object without exposing a catalog template", () => {
+  const normalized = normalizeStudioManagementState(fixture());
+  const result = createDirectObject(normalized, {
+    objectCategory: "land",
+    title: "Baugrundstück in Michendorf",
+    owner: "fabian",
+    country: "Deutschland",
+    street: "Waldweg",
+    houseNumber: "12",
+    zip: "14552",
+    city: "Michendorf",
+    district: "",
+    areaType: "Wohngebiet",
+    addressPublished: false,
+    googleMapsPublished: true,
+    purchasePrice: 220000,
+    annualLeasePrice: 0,
+    livingArea: 0,
+    usableArea: 0,
+    plotArea: 740,
+    rooms: 0,
+    bedrooms: 0,
+    bathrooms: 0,
+    floors: 0,
+    houseType: "",
+    apartmentType: "",
+    marketingType: "purchase",
+    landUse: "WOHNEN",
+    developmentStatus: "VOLLERSCHLOSSEN",
+    buildingLaw: "B_PLAN",
+    buildableSoon: true,
+    ownerSalutation: "Frau",
+    ownerCompany: "",
+    ownerFirstName: "Erika",
+    ownerLastName: "Mustermann",
+    ownerEmail: "erika@example.de",
+    ownerPhone: "030 456",
+    ownerIsPropertyOwner: true,
+    internalNotes: "Alleinauftrag liegt vor",
+    released: true,
+    portalIds: ["immoscout24", "kleinanzeigen"],
+  }, "2026-07-29T12:00:00.000Z");
+
+  const entry = result.state.projects
+    .flatMap((project) => project.listings.map((listing) => ({ project, listing })))
+    .find(({ listing }) => listing.id === result.listingId);
+  assert.ok(entry);
+  assert.equal(result.externalId, "30435-13227");
+  assert.equal(entry.listing.management.details.objectCategory, "land");
+  assert.equal(entry.listing.management.details.plotArea, 740);
+  assert.equal(entry.listing.management.details.ownerLastName, "Mustermann");
+  assert.equal(entry.listing.management.lifecycle, "ready");
+  assert.deepEqual(
+    entry.listing.management.portals.filter((portal) => portal.enabled).map((portal) => portal.portalId),
+    ["immoscout24", "kleinanzeigen"],
+  );
+  const template = result.state.houses.find((house) => house.id === entry.listing.templateId);
+  assert.equal(template.archived, true);
+  assert.equal(result.state.management.version, 2);
+  assert.ok(result.state.management.fileFolders.some((folder) => folder.id === "folder-public"));
 });

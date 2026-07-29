@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Fabian&Pascal Inseratestudio",
   description:
-    "Lokale Haustyp-Verwaltung, Inseratserstellung und kontrollierter Immoprofessional-Import.",
+    "Objektverwaltung, Inseratserstellung, Exposés und standardisierte OpenImmo-Exporte.",
 };
 
 export default function RootLayout({
