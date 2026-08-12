@@ -5,6 +5,8 @@ import test from "node:test";
 const studioSource = await readFile(new URL("../app/InseratStudio.tsx", import.meta.url), "utf8");
 const plotSource = await readFile(new URL("../app/components/PlotManagement.tsx", import.meta.url), "utf8");
 const stylesSource = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+const helperSource = await readFile(new URL("../local-upload-server.mjs", import.meta.url), "utf8");
+const schedulerServiceSource = await readFile(new URL("../listing-rotation-scheduler-service.mjs", import.meta.url), "utf8");
 
 test("uses the five-step workflow without a project tab", () => {
   const navigation = studioSource.slice(
@@ -26,7 +28,9 @@ test("keeps the only plot selection beside the shared house pool", () => {
   assert.match(studioSource, /centralHousePoolPanel/);
   assert.match(studioSource, /selectedPlotIds\.flatMap/);
   assert.match(studioSource, /managedListings = selectedWorkflowProjects\.flatMap/);
-  assert.match(studioSource, /projects: current\.projects\.filter\(\(project\) => project\.plotId && selectedIds\.has\(project\.plotId\)\)/);
+  assert.doesNotMatch(studioSource, /runSafeLocalScheduler/);
+  assert.doesNotMatch(schedulerServiceSource, /selectedPlotIds/);
+  assert.match(helperSource, /listingRotationSchedulerService\.run/);
   assert.doesNotMatch(studioSource, /selectedBatchProjectIds/);
   assert.doesNotMatch(stylesSource, /plot-view-switch|batch-address-groups|listing-variant-row|listing-group-management/);
 });

@@ -209,6 +209,11 @@ export async function commitCatalogSnapshot(sessionIdValue, catalogDirectory = C
   return { savedAt: manifest.savedAt };
 }
 
+export async function discardCatalogSnapshot(sessionIdValue, catalogDirectory = CATALOG_V2_DIRECTORY) {
+  const sessionId = safeId(sessionIdValue, "Sicherungssitzung");
+  await rm(pendingManifestPath(catalogDirectory, sessionId), { force: true });
+}
+
 export async function loadCatalogManifest(catalogDirectory = CATALOG_V2_DIRECTORY) {
   let manifest;
   try {

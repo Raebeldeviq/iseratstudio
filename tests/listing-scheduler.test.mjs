@@ -43,6 +43,14 @@ function project(projectIndex, listingsPerAddress = 4) {
     houses.push(selectedHouse);
     group = assignListingGroupVariant(group, group.variants[index].id, selectedHouse, listing(selectedHouse, `${projectIndex}-${index}`), { idFactory, now: "2026-06-01T08:00:00.000Z" });
   }
+  for (const variant of group.variants.filter((item) => item.listing)) {
+    group = updateListingControl(group, variant.listing, {
+      status: "published",
+      statusMessage: "Veröffentlicht",
+      lastSuccessAt: "2026-06-01T08:00:00.000Z",
+      lastUpdatedAt: "2026-06-01T08:00:00.000Z",
+    }, { idFactory, now: "2026-06-01T08:00:00.000Z" });
+  }
   return {
     project: { id: projectId, name: `Adresse ${projectIndex}`, listings: group.variants.map((variant) => variant.listing), listingGroup: group, createdAt: "2026-06-01T08:00:00.000Z" },
     houses,

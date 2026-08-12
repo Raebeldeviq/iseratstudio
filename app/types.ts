@@ -22,6 +22,7 @@ export type WorkflowStatus =
   | "scheduled"
   | "processing"
   | "published"
+  | "transferred_pending_import"
   | "blocked"
   | "failed"
   | "archived"
@@ -255,6 +256,7 @@ export type GeneratedListing = {
   promotionImageId?: string;
   promotionAssignedAt?: string;
   lastUploadedAt?: string;
+  transferredAt?: string;
   nextUpdateAt?: string;
   status?: WorkflowStatus;
   statusMessage?: string;
@@ -330,6 +332,8 @@ export type ListingAutomationControl = {
   updateMode: ListingUpdateMode;
   schedulerSelectionId: string;
   schedulerSelectedAt: string;
+  pendingRotationListingId?: string;
+  pendingRotationJobId?: string;
   processLease: { token: string; startedAt: string } | null;
 };
 
@@ -385,10 +389,27 @@ export type SchedulerSettings = {
 export type SchedulerRunLog = {
   id: string;
   timestamp: string;
+  startedAt?: string;
+  endedAt?: string;
+  trigger?: string;
+  operatingMode?: "off" | "canary" | "active";
+  operatingModeFallbackReason?: string;
   mode: ListingUpdateMode | "dry-run";
   selectedListingIds: string[];
   completedListingIds: string[];
   failedListingIds: string[];
+  resumedListingIds?: string[];
+  dueCount?: number;
+  selectedCount?: number;
+  skippedCount?: number;
+  skippedListings?: Array<{
+    projectId: string;
+    listingId: string;
+    externalId?: string;
+    reason: string;
+  }>;
+  errorCount?: number;
+  abortReason?: string;
   status: WorkflowStatus;
   statusMessage: string;
   error: string;

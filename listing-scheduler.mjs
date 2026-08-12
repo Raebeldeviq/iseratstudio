@@ -152,7 +152,7 @@ function settingMinute(value) {
   return hours * 60 + minutes;
 }
 
-export function schedulerWindowBlockReasons(schedulerValue, at = nowIso()) {
+export function schedulerWindowBlockReasons(schedulerValue, at = nowIso(), options = {}) {
   const scheduler = normalizeListingScheduler(schedulerValue, { now: at });
   const { settings } = scheduler;
   const reasons = [];
@@ -162,11 +162,11 @@ export function schedulerWindowBlockReasons(schedulerValue, at = nowIso()) {
   if (settings.mode === "blocked") reasons.push("Der Scheduler-Modus ist gesperrt.");
   if (!Number.isFinite(timestamp)) reasons.push("Der Ausführungszeitpunkt ist ungültig.");
   const date = new Date(at);
-  if (!settings.allowedWeekdays.includes(date.getDay())) reasons.push("Der heutige Wochentag ist nicht freigegeben.");
+  if (!options.ignoreTimeWindow && !settings.allowedWeekdays.includes(date.getDay())) reasons.push("Der heutige Wochentag ist nicht freigegeben.");
   const minute = minuteOfDay(at);
   const start = settingMinute(settings.startTime);
   const end = settingMinute(settings.endTime);
-  if (minute < start || minute > end) reasons.push("Der aktuelle Zeitpunkt liegt außerhalb des Zeitfensters.");
+  if (!options.ignoreTimeWindow && (minute < start || minute > end)) reasons.push("Der aktuelle Zeitpunkt liegt außerhalb des Zeitfensters.");
   if (scheduler.lastRunAt) {
     const spacingMs = settings.minimumSpacingHours * 60 * 60 * 1000;
     if (timestamp - Date.parse(scheduler.lastRunAt) < spacingMs) reasons.push("Der globale Mindestabstand seit dem letzten Lauf ist noch nicht erreicht.");
@@ -177,6 +177,26 @@ export function schedulerWindowBlockReasons(schedulerValue, at = nowIso()) {
 function daysBetween(later, earlier) {
   const difference = Date.parse(later) - Date.parse(earlier);
   return Number.isFinite(difference) ? Math.max(0, difference / 86400000) : 0;
+}
+
+export function listingDueAt(groupValue, listing, settingsValue = {}) {
+  const settings = { ...LISTING_SCHEDULER_DEFAULTS, ...(settingsValue || {}) };
+  const control = listingControl(groupValue, listing);
+  const firstPublication = control.lastSuccessAt
+    || control.lastUpdatedAt
+    || listing.lastUploadedAt
+    || listing.createdAt
+    || groupValue.createdAt;
+  if (!firstPublication || !Number.isFinite(Date.parse(firstPublication))) return "";
+  const intervalDays = control.lastSuccessAt || control.lastUpdatedAt || listing.lastUploadedAt
+    ? settings.updateIntervalDays
+    : settings.initialWaitDays;
+  return new Date(Date.parse(firstPublication) + intervalDays * 86400000).toISOString();
+}
+
+export function isListingDue(groupValue, listing, settingsValue, at = nowIso()) {
+  const dueAt = listingDueAt(groupValue, listing, settingsValue);
+  return Boolean(dueAt) && Date.parse(dueAt) <= Date.parse(at);
 }
 
 export function listingHealthScore(groupValue, listing, settingsValue, at = nowIso()) {
@@ -199,6 +219,22 @@ export function listingSchedulerBlockReasons(groupValue, listing, schedulerValue
   const scheduler = normalizeListingScheduler(schedulerValue, { now: at });
   const control = listingControl(groupValue, listing);
   const reasons = listingRotationBlockReasons(groupValue, listing, at, { normalized: true });
+  if (control.status !== WORKFLOW_STATUS.PUBLISHED) {
+    reasons.push("Nur ein bestätigtes veröffentlichtes Inserat darf automatisch rotiert werden.");
+  }
+  const pendingRotation = (options.project?.listings || []).find((candidate) =>
+    candidate.rotationSourceListingId === listing.id
+    && !candidate.rotationArchivedAt
+    && [
+      WORKFLOW_STATUS.SCHEDULED,
+      WORKFLOW_STATUS.PROCESSING,
+      WORKFLOW_STATUS.PREPARED,
+      WORKFLOW_STATUS.FAILED,
+      WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT,
+    ].includes(normalizeWorkflowStatus(candidate.status, WORKFLOW_STATUS.PREPARED)));
+  if (pendingRotation) {
+    reasons.push(`Die Rotationskopie ${pendingRotation.externalId || pendingRotation.id} wartet noch auf Übertragung oder Importbestätigung.`);
+  }
   if (options.distribution && options.distributionValidation && options.project) {
     reasons.push(...listingRotationPoolBlockReasons(
       options.distribution,
@@ -208,12 +244,30 @@ export function listingSchedulerBlockReasons(groupValue, listing, schedulerValue
       listing,
     ));
   }
-  const createdAt = listing.createdAt || groupValue.createdAt;
-  if (createdAt && daysBetween(at, createdAt) < scheduler.settings.initialWaitDays) reasons.push("Wartezeit bis zur ersten Aktualisierung ist noch nicht abgelaufen.");
-  const baseline = control.lastSuccessAt || control.lastUpdatedAt;
-  if (baseline && daysBetween(at, baseline) < scheduler.settings.updateIntervalDays) reasons.push("Das inseratsbezogene Aktualisierungsintervall ist noch nicht erreicht.");
+  const dueAt = listingDueAt(groupValue, listing, scheduler.settings);
+  if (!dueAt) reasons.push("Für das Inserat fehlt ein belastbarer Veröffentlichungs- oder Erstellungszeitpunkt.");
+  else if (Date.parse(dueAt) > Date.parse(at)) reasons.push(`Das Inserat wird erst am ${dueAt} fällig.`);
   if (control.schedulerSelectionId && localDayKey(control.schedulerSelectedAt || at) === localDayKey(at)) reasons.push("Das Inserat ist für den heutigen Lauf bereits reserviert.");
   return [...new Set(reasons)];
+}
+
+export function schedulerDueListings(state, at = nowIso()) {
+  const scheduler = normalizeListingScheduler(state.scheduler, { now: at });
+  const due = [];
+  for (const project of state.projects || []) {
+    if (project.isActive === false) continue;
+    const group = normalizeListingGroup(project.listingGroup, project.id, { now: at });
+    if (group.automation.rotationEnabled === false) continue;
+    for (const listing of project.listings || []) {
+      const control = listingControl(group, listing);
+      if (!control.automaticUpdateEnabled || control.status !== WORKFLOW_STATUS.PUBLISHED) continue;
+      const dueAt = listingDueAt(group, listing, scheduler.settings);
+      if (dueAt && Date.parse(dueAt) <= Date.parse(at)) {
+        due.push({ projectId: project.id, listingId: listing.id, dueAt });
+      }
+    }
+  }
+  return due;
 }
 
 function successfulUpdatesToday(project, at) {
@@ -227,7 +281,9 @@ function successfulUpdatesToday(project, at) {
 
 export function selectSchedulerListings(state, at = nowIso(), options = {}) {
   const scheduler = normalizeListingScheduler(state.scheduler, { now: at });
-  const windowIssues = options.ignoreWindow ? [] : schedulerWindowBlockReasons(scheduler, at);
+  const windowIssues = options.ignoreWindow
+    ? []
+    : schedulerWindowBlockReasons(scheduler, at, { ignoreTimeWindow: options.ignoreTimeWindow === true });
   const activeProjects = state.projects.filter((project) => project.isActive !== false);
   const completedToday = activeProjects.flatMap((project) => successfulUpdatesToday(project, at));
   const remainingGlobal = Math.max(0, scheduler.settings.maxUpdatesPerDay - completedToday.length);
@@ -255,6 +311,16 @@ export function selectSchedulerListings(state, at = nowIso(), options = {}) {
     if (!addressCapacity) continue;
     const candidates = [];
     for (const listing of project.listings || []) {
+      if (options.allowedListingIds instanceof Set
+        && !options.allowedListingIds.has(String(listing.id || ""))
+        && !options.allowedListingIds.has(String(listing.externalId || ""))) {
+        skipped.push({
+          projectId: project.id,
+          listingId: listing.id,
+          reasons: ["Das Inserat ist im globalen Canary-Betriebsmodus nicht freigegeben."],
+        });
+        continue;
+      }
       const reasons = listingSchedulerBlockReasons(group, listing, scheduler, at, {
         state,
         projectId: project.id,
@@ -328,7 +394,7 @@ export function reserveSchedulerSelection(state, selectionResult, options = {}) 
       ? WORKFLOW_STATUS.PREPARED
       : Array.isArray(options.failedListingIds) && options.failedListingIds.length
         ? WORKFLOW_STATUS.FAILED
-        : WORKFLOW_STATUS.PUBLISHED,
+        : WORKFLOW_STATUS.PREPARED,
     statusMessage: options.mode === "dry-run"
       ? "Dry Run ausgewählt"
       : `${Array.isArray(options.completedListingIds) ? options.completedListingIds.length : 0} von ${selectedIds.size} Inseraten verarbeitet`,

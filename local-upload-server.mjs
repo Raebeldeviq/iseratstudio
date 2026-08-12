@@ -36,6 +36,12 @@ import {
   readPlotExpose,
 } from "./plot-expose-store.mjs";
 import { createPlotSyncService } from "./plot-sync-service.mjs";
+import { buildImportPackage } from "./app/lib/openimmo.ts";
+import { createUploadJobId } from "./batch-upload.mjs";
+import { createCatalogStateStore } from "./catalog-state-store.mjs";
+import { createListingRotationSchedulerService } from "./listing-rotation-scheduler-service.mjs";
+import { createPersistentLease } from "./persistent-lease.mjs";
+import { createListingRotationOperatingModeStore } from "./listing-rotation-operating-mode.mjs";
 
 const HOST = "127.0.0.1";
 const PORT = 43182;
@@ -45,6 +51,9 @@ const MAX_IMAGE_BYTES = 100 * 1024 * 1024;
 const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
 const UPLOAD_LOG_PATH = join(APPLICATION_DATA_DIRECTORY, "upload.log");
 const UPLOAD_JOB_LEDGER_PATH = join(APPLICATION_DATA_DIRECTORY, "upload-jobs.json");
+const LISTING_SCHEDULER_LOG_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-scheduler.log");
+const LISTING_SCHEDULER_LOCK_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-scheduler.lock");
+const LISTING_ROTATION_MODE_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-rotation-mode.json");
 const SESSION_TOKEN = String(process.env.FPI_SESSION_TOKEN || randomBytes(32).toString("hex"));
 const allowedOrigins = new Set([
   "http://localhost:43181",
@@ -52,8 +61,12 @@ const allowedOrigins = new Set([
 ]);
 let credentialCache;
 const writeUploadLog = createStructuredFileLogger(UPLOAD_LOG_PATH, { jobType: "immoprofessional-upload" });
+const writeListingSchedulerLog = createStructuredFileLogger(LISTING_SCHEDULER_LOG_PATH, { jobType: "listing-rotation-scheduler" });
 const uploadJobLedger = createUploadJobLedger(UPLOAD_JOB_LEDGER_PATH);
 const plotSyncService = createPlotSyncService();
+const catalogStateStore = createCatalogStateStore();
+const listingSchedulerLease = createPersistentLease(LISTING_SCHEDULER_LOCK_PATH);
+const listingRotationOperatingModeStore = createListingRotationOperatingModeStore(LISTING_ROTATION_MODE_PATH);
 
 async function credentialVault() {
   if (!credentialCache) credentialCache = await loadCredentialVault();
@@ -142,7 +155,7 @@ async function logUpload(event, details = {}) {
     const status = event === "failed"
       ? WORKFLOW_STATUS.FAILED
       : event === "transferred"
-        ? WORKFLOW_STATUS.PUBLISHED
+        ? WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT
         : WORKFLOW_STATUS.PROCESSING;
     await writeUploadLog(event, { status, ...details });
   } catch {
@@ -193,6 +206,126 @@ async function verifyFtpCredentials(ftp) {
     verificationClient.close();
   }
 }
+
+async function hydratedCatalogImage(image) {
+  if (/^data:image\/(?:jpeg|png|webp);base64,/iu.test(String(image?.dataUrl || ""))) return image;
+  const stored = await loadCatalogImage(image.id);
+  return {
+    ...image,
+    mimeType: stored.mimeType,
+    dataUrl: `data:${stored.mimeType};base64,${stored.data.toString("base64")}`,
+  };
+}
+
+async function automaticRotationUpload({ state, project, listing, runId }) {
+  const jobId = createUploadJobId(project, listing);
+  const uploadJob = {
+    jobId,
+    projectId: project.id,
+    listingId: listing.id,
+    jobType: "automatic-listing-rotation",
+  };
+  const claim = await uploadJobLedger.claim(uploadJob);
+  if (claim.alreadyCompleted) {
+    await logUpload("idempotent-skip", {
+      ...uploadJob,
+      runId,
+      externalId: listing.externalId,
+      status: WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT,
+      message: "Der automatische Rotationsupload war bereits erfolgreich übertragen.",
+    });
+    return { ok: true, idempotent: true, jobId };
+  }
+
+  let client;
+  try {
+    const vault = await credentialVault();
+    const ftp = vault.credentials;
+    if (!ftp.ftpHost || !ftp.ftpUser || !ftp.ftpPassword) {
+      throw new Error("Der FTP-Zugang ist unvollständig.");
+    }
+    const sourceHouse = state.houses.find((house) => house.id === listing.templateId);
+    if (!sourceHouse) throw new Error("Der Haustyp der Rotationskopie ist nicht mehr vorhanden.");
+    const hydratedHouse = {
+      ...sourceHouse,
+      images: await Promise.all((sourceHouse.images || []).map(hydratedCatalogImage)),
+    };
+    const packageResult = await buildImportPackage({
+      project,
+      listings: [listing],
+      houses: [hydratedHouse],
+      provider: state.provider,
+      promotionImageEnabled: false,
+      promotionImagesByListingId: {},
+    });
+    const archive = Buffer.from(await packageResult.blob.arrayBuffer());
+    const remotePath = String(ftp.ftpPath || "/").trim();
+    await logUpload("started", {
+      ...uploadJob,
+      runId,
+      externalId: listing.externalId,
+      filename: packageResult.filename,
+      archiveBytes: archive.length,
+      host: String(ftp.ftpHost),
+      remotePath,
+      status: WORKFLOW_STATUS.PROCESSING,
+    });
+    client = new Client(300_000);
+    client.ftp.verbose = false;
+    await client.access(ftpAccessOptions(ftp));
+    if (remotePath && remotePath !== "/") await client.cd(remotePath);
+    await logUpload("connected", {
+      ...uploadJob,
+      runId,
+      externalId: listing.externalId,
+      filename: packageResult.filename,
+      host: String(ftp.ftpHost),
+      remotePath,
+      transport: ftp.ftpSecure,
+      status: WORKFLOW_STATUS.PROCESSING,
+    });
+    await client.uploadFrom(Readable.from(archive), packageResult.filename);
+    await uploadJobLedger.complete(uploadJob);
+    await logUpload("transferred", {
+      ...uploadJob,
+      runId,
+      externalId: listing.externalId,
+      filename: packageResult.filename,
+      archiveBytes: archive.length,
+      host: String(ftp.ftpHost),
+      remotePath,
+      transport: ftp.ftpSecure,
+      status: WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT,
+      message: "FTPS-Übertragung abgeschlossen; Portalimport ist noch nicht bestätigt.",
+    });
+    return { ok: true, idempotent: false, jobId, filename: packageResult.filename };
+  } catch (error) {
+    await uploadJobLedger.fail({
+      ...uploadJob,
+      errorCode: String(error?.code || "AUTOMATIC_ROTATION_UPLOAD_FAILED"),
+      message: error instanceof Error ? error.message : "Automatischer Rotationsupload fehlgeschlagen.",
+    }).catch(() => undefined);
+    await logUpload("failed", {
+      ...uploadJob,
+      runId,
+      externalId: listing.externalId,
+      status: WORKFLOW_STATUS.FAILED,
+      errorCode: String(error?.code || "AUTOMATIC_ROTATION_UPLOAD_FAILED"),
+      message: error instanceof Error ? error.message : "Automatischer Rotationsupload fehlgeschlagen.",
+    });
+    throw error;
+  } finally {
+    client?.close();
+  }
+}
+
+const listingRotationSchedulerService = createListingRotationSchedulerService({
+  store: catalogStateStore,
+  lease: listingSchedulerLease,
+  operatingModeStore: listingRotationOperatingModeStore,
+  upload: automaticRotationUpload,
+  writeRunLog: (event, details) => writeListingSchedulerLog(event, details),
+});
 
 async function saveToDownloads(archive, requestedFilename) {
   const downloadsDirectory = join(homedir(), "Downloads");
@@ -440,7 +573,7 @@ const server = createServer(async (request, response) => {
       };
       const claim = await uploadJobLedger.claim(uploadJob);
       if (claim.alreadyCompleted) {
-        await uploadLog("idempotent-skip", { status: WORKFLOW_STATUS.PUBLISHED, message: "Der Upload-Job war bereits erfolgreich abgeschlossen." });
+        await uploadLog("idempotent-skip", { status: WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT, message: "Der Upload-Job war bereits erfolgreich übertragen." });
         send(response, 200, { ok: true, idempotent: true, message: "Der Upload war bereits erfolgreich abgeschlossen und wurde nicht erneut übertragen." }, origin);
         return;
       }
@@ -619,7 +752,7 @@ const server = createServer(async (request, response) => {
     };
     const claim = await uploadJobLedger.claim(uploadJob);
     if (claim.alreadyCompleted) {
-      await uploadLog("idempotent-skip", { status: WORKFLOW_STATUS.PUBLISHED, message: "Der Upload-Job war bereits erfolgreich abgeschlossen." });
+      await uploadLog("idempotent-skip", { status: WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT, message: "Der Upload-Job war bereits erfolgreich übertragen." });
       send(response, 200, { ok: true, idempotent: true, message: "Der Upload war bereits erfolgreich abgeschlossen und wurde nicht erneut übertragen." }, origin);
       return;
     }
@@ -681,15 +814,38 @@ async function startLocalHelper() {
   server.listen(PORT, HOST, () => {
     console.log(`Fabian&Pascal Helfer: http://${HOST}:${PORT}`);
   });
-  void plotSyncService.runIfDue().catch((error) => {
-    console.error(`Grundstücksabgleich: ${error instanceof Error ? error.message : "Start fehlgeschlagen."}`);
-  });
+  void (async () => {
+    try {
+      const result = await listingRotationSchedulerService.run({
+        trigger: "startup-catch-up",
+        ignoreTimeWindow: true,
+      });
+      if (!result.ok && result.abortReason) {
+        console.error(`Inseratrotation: ${result.abortReason}`);
+      }
+    } catch (error) {
+      console.error(`Inseratrotation: ${error instanceof Error ? error.message : "Start-Catch-up fehlgeschlagen."}`);
+    }
+    try {
+      await plotSyncService.runIfDue();
+    } catch (error) {
+      console.error(`Grundstücksabgleich: ${error instanceof Error ? error.message : "Start fehlgeschlagen."}`);
+    }
+  })();
   const syncTimer = setInterval(() => {
     void plotSyncService.runIfDue().catch((error) => {
       if (error?.code !== "PLOT_SYNC_LOCKED") console.error(`Grundstücksabgleich: ${error instanceof Error ? error.message : "Zeitplan fehlgeschlagen."}`);
     });
   }, 60_000);
   syncTimer.unref();
+  const listingSchedulerTimer = setInterval(() => {
+    void listingRotationSchedulerService.runIfDue({ trigger: "periodic" }).catch((error) => {
+      if (error?.code !== "LISTING_SCHEDULER_LOCKED") {
+        console.error(`Inseratrotation: ${error instanceof Error ? error.message : "Zeitplan fehlgeschlagen."}`);
+      }
+    });
+  }, 60_000);
+  listingSchedulerTimer.unref();
 }
 
 startLocalHelper().catch((error) => {

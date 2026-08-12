@@ -41,7 +41,7 @@ test("safe cleanup is idempotent and migrates canonical statuses", () => {
   assert.equal(first.state.dataSchemaVersion, STUDIO_DATA_SCHEMA_VERSION);
   assert.equal("notes" in first.state.projects[0], false);
   assert.equal(first.state.projects[0].listings.length, 1);
-  assert.equal(first.state.projects[0].listings[0].status, WORKFLOW_STATUS.PUBLISHED);
+  assert.equal(first.state.projects[0].listings[0].status, WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT);
   assert.equal("uploadStatus" in first.state.projects[0].listings[0], false);
   assert.equal(first.state.projects[0].listingGroup.listingControls.length, 1);
   assert.equal(first.state.projects[0].listingGroup.listingControls[0].status, WORKFLOW_STATUS.PREPARED);

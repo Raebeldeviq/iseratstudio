@@ -92,7 +92,10 @@ export function createUploadJobLedger(path, options = {}) {
         const ledger = await readLedger(path);
         const jobId = validJobId(input.jobId);
         const current = ledger.jobs.find((job) => job.jobId === jobId);
-        if (current?.status === WORKFLOW_STATUS.PUBLISHED) {
+        if (
+          current?.status === WORKFLOW_STATUS.PUBLISHED
+          || current?.status === WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT
+        ) {
           return { claimed: false, alreadyCompleted: true, job: current };
         }
         const activeAt = Date.parse(current?.updatedAt || "");
@@ -113,7 +116,7 @@ export function createUploadJobLedger(path, options = {}) {
       });
     },
     complete(input, now = new Date().toISOString()) {
-      return serialized(() => mutate(input, WORKFLOW_STATUS.PUBLISHED, text(now, 50)));
+      return serialized(() => mutate(input, WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT, text(now, 50)));
     },
     fail(input, now = new Date().toISOString()) {
       return serialized(() => mutate(input, WORKFLOW_STATUS.FAILED, text(now, 50)));

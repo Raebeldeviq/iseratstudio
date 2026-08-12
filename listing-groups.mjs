@@ -396,7 +396,7 @@ function normalizeStoredControl(stored, projectId) {
   return {
     listingId: String(stored?.listingId || ""), externalId: String(stored?.externalId || ""),
     projectId, variantId: String(stored?.variantId || ""), automaticUpdateEnabled: stored?.automaticUpdateEnabled !== false,
-    automaticDeletionEnabled: stored?.automaticDeletionEnabled === true,
+    automaticDeletionEnabled: false,
     premiumPlacement: stored?.premiumPlacement === true, manualLock: stored?.manualLock === true,
     lockedUntil: String(stored?.lockedUntil || ""), lockReason: String(stored?.lockReason || ""),
     lastUpdatedAt: String(stored?.lastUpdatedAt || ""), nextUpdatedAt: String(stored?.nextUpdatedAt || ""),
@@ -409,6 +409,8 @@ function normalizeStoredControl(stored, projectId) {
       ? stored.updateMode : "prepare-only",
     schedulerSelectionId: String(stored?.schedulerSelectionId || ""),
     schedulerSelectedAt: String(stored?.schedulerSelectedAt || ""),
+    pendingRotationListingId: String(stored?.pendingRotationListingId || ""),
+    pendingRotationJobId: String(stored?.pendingRotationJobId || ""),
     processLease: stored?.processLease && typeof stored.processLease === "object" ? stored.processLease : null,
   };
 }
@@ -499,14 +501,19 @@ export function recordListingGroupCopy(groupValue, variantId, newListing, option
       lastError: "",
       status: WORKFLOW_STATUS.PUBLISHED,
       statusMessage: options.statusMessage || workflowStatusMessage(options.status || WORKFLOW_STATUS.PUBLISHED),
-      schedulerSelectionId: "", schedulerSelectedAt: "", processLease: null,
+      schedulerSelectionId: "", schedulerSelectedAt: "",
+      pendingRotationListingId: "", pendingRotationJobId: "", processLease: null,
     }, { idFactory, now: timestamp });
   } else {
     group = updateListingControl(group, sourceListing, {
       lastAttemptAt: timestamp,
-      status: WORKFLOW_STATUS.PREPARED,
-      statusMessage: "Entwurf wartet auf Upload",
+      status: normalizeWorkflowStatus(options.sourceStatus, WORKFLOW_STATUS.PUBLISHED),
+      statusMessage: options.sourceStatusMessage || "Veröffentlicht · Rotationskopie wartet auf Importbestätigung",
       lastError: "",
+      schedulerSelectionId: "",
+      schedulerSelectedAt: "",
+      pendingRotationListingId: newListing.id,
+      pendingRotationJobId: String(options.pendingRotationJobId || ""),
       processLease: null,
     }, { idFactory, now: timestamp });
   }
@@ -540,8 +547,12 @@ export function recordListingGroupFailure(groupValue, variantId, mode, issues, o
     group = updateListingControl(group, options.sourceListing, {
       lastAttemptAt: timestamp,
       lastError: issues.join(" · "),
-      status: WORKFLOW_STATUS.FAILED,
-      statusMessage: "Fehlgeschlagen",
+      status: options.preserveSourcePublication === true
+        ? WORKFLOW_STATUS.PUBLISHED
+        : WORKFLOW_STATUS.FAILED,
+      statusMessage: options.preserveSourcePublication === true
+        ? "Veröffentlicht · Rotation fehlgeschlagen"
+        : "Fehlgeschlagen",
       schedulerSelectionId: "", schedulerSelectedAt: "", processLease: null,
     }, { idFactory, now: timestamp });
   }

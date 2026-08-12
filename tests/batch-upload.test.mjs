@@ -84,7 +84,7 @@ test("creates the required persistent per-listing upload record", () => {
   assert.equal(log.statusMessage, "Upload fehlgeschlagen");
   assert.match(log.jobId, /^upload:/);
   assert.equal(log.error, "Testfehler");
-  assert.equal(log.nextUpdatedAt, "2026-08-05T10:00:00.000Z");
+  assert.equal(log.nextUpdatedAt, "");
 });
 
 test("uploads a prepared rotation instead of re-uploading its protected source", () => {

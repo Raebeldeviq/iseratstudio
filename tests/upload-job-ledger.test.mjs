@@ -22,7 +22,7 @@ test("persists upload claims and makes successful retries idempotent", async () 
   await ledger.complete(input, "2026-07-25T10:00:40.000Z");
   const repeated = await createUploadJobLedger(path).claim(input, "2026-07-25T11:00:00.000Z");
   assert.equal(repeated.alreadyCompleted, true);
-  assert.equal(repeated.job.status, WORKFLOW_STATUS.PUBLISHED);
+  assert.equal(repeated.job.status, WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT);
 });
 
 test("allows retry after an expired or failed job", async () => {

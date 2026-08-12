@@ -244,6 +244,91 @@ Lokale Daten liegen unter:
 
 `~/Library/Application Support/Fabian-Pascal Inseratestudio`
 
+## Persistente automatische Inseratrotation
+
+Die automatische Rotation läuft im persistenten lokalen Background-Helper und
+nicht mehr in einem React-`useEffect`. Sie arbeitet deshalb auch ohne geöffnete
+Browserseite. Beim Helper-Start erfolgt ein Catch-up-Lauf für verpasste
+Termine; anschließend prüft der Helper den gespeicherten Zeitplan selbständig.
+Ein dateibasierter, während der Verarbeitung erneuerter Scheduler-Claim
+verhindert parallele oder doppelte Läufe und kann nach einem Helper-Abbruch
+sicher übernommen werden.
+
+Der automatische Umfang besteht aus allen aktiven, verwalteten Inseraten, für
+die `automaticUpdateEnabled` eingeschaltet ist. `selectedPlotIds` ist nur eine
+UI- und Arbeitsauswahl für manuelle Aktionen und beeinflusst den automatischen
+Scheduler nicht. Fälligkeit wird bewusst dynamisch aus bestätigtem
+Veröffentlichungszeitpunkt, Erstwartezeit, Aktualisierungsintervall und dem
+inseratsbezogenen Steuerdatensatz berechnet. Ein zusätzlich persistierter
+`due`-Status ist nicht erforderlich: Er würde bestehende Kataloge migrieren
+und könnte einen tatsächlich veröffentlichten Zustand nur wegen Zeitablaufs
+überschreiben. Jeder Schedulerlauf protokolliert die berechnete Anzahl
+fälliger, ausgewählter, fortgesetzter, übersprungener und fehlerhafter
+Inserate sowie Start, Ende und Abbruchgrund.
+
+Der Ablauf des automatischen Rotationsauftrags ist:
+
+`scheduled → processing → prepared → transferred_pending_import → published`
+
+`scheduled` und `processing` liegen auf dem Steuerdatensatz des weiterhin
+veröffentlichten Ausgangsinserats; ab `prepared` besitzt die neue Kopie ihren
+eigenen Zustand. Das Ausgangsinserat selbst bleibt währenddessen `published`,
+weil es weiterhin die zuletzt bestätigte Veröffentlichung bezeichnet. Eine erfolgreiche
+FTPS-Übertragung endet ausschließlich in `transferred_pending_import`. Erst
+ein separates, eindeutig zugeordnetes Ereignis `import-confirmed` darf die
+neue Kopie auf `published` anheben. Bei FTPS-Fehler, unklarem Importzustand
+oder Helper-Abbruch bleibt das alte Inserat unverändert veröffentlicht; der
+idempotente Uploadauftrag wird mit derselben Job-ID fortgesetzt.
+
+Neue Rotationskopien erhalten weiterhin eine kollisionsgeprüfte eindeutige
+Objektnummer. Automatische und externe Löschung ist technisch deaktiviert:
+Der Helper erzeugt keinen `DELETE`-Auftrag, archiviert das alte Inserat nicht
+nach einem Transfer und verändert bei unklarem Importzustand keine bestehende
+Veröffentlichung. Scheduler-Protokoll und Lock liegen zusammen mit den
+übrigen lokalen Laufzeitdaten im Application-Support-Verzeichnis.
+
+### Globaler fail-closed Betriebsmodus
+
+Die automatische Rotation besitzt zusätzlich einen persistenten globalen
+Betriebsmodus in `listing-rotation-mode.json` im Application-Support-Verzeichnis:
+
+- `off` erkennt und protokolliert fällige Inserate, erzeugt aber weder eine
+  Rotationskopie noch einen Uploadauftrag.
+- `canary` verarbeitet ausschließlich explizit freigegebene interne
+  Listing-IDs oder externe Objektnummern. Alle anderen fälligen Inserate
+  erscheinen mit eindeutigem Skip-Grund im Schedulerprotokoll.
+- `active` aktiviert den regulären Backgroundbetrieb innerhalb der bestehenden
+  Schedulerlimits.
+
+Fehlt die Konfiguration, ist sie beschädigt oder enthält sie einen unbekannten
+Wert, wird immer `off` verwendet. Diese Sperre gilt auch für Startup-Catch-up
+und das Wiederaufnehmen vorbereiteter Rotationen. Ein Helper-Neustart kann
+damit ohne vorherige ausdrückliche Freigabe keinen produktiven FTPS-Auftrag
+erzeugen.
+
+Der aktuelle Zustand lässt sich ohne Helper-Start und ohne Upload lesen:
+
+```bash
+node listing-rotation-mode-cli.mjs status
+```
+
+Genau ein Canary-Inserat wird über seine interne Listing-ID oder seine externe
+Objektnummer freigegeben:
+
+```bash
+node listing-rotation-mode-cli.mjs set --mode canary --listing-id 30460-XXXXXX
+```
+
+Die übrigen Modi werden explizit gesetzt:
+
+```bash
+node listing-rotation-mode-cli.mjs set --mode off
+node listing-rotation-mode-cli.mjs set --mode active
+```
+
+Das CLI ändert ausschließlich die persistente Modusdatei. Es startet den
+Helper nicht und führt selbst weder Rotation noch FTPS-Transfer aus.
+
 ## Dynamisches Inseratsmanagement und sichere Variantenrotation
 
 Jede neue oder aus Excel importierte Adresse besitzt eine persistente

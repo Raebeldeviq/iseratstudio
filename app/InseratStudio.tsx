@@ -3065,49 +3065,6 @@ export default function InseratStudio() {
     event.target.value = "";
   };
 
-  useEffect(() => {
-    if (!ready || isPrimaryTab !== true) return;
-    const runSafeLocalScheduler = () => {
-      setState((current) => {
-        const currentScheduler = normalizeListingScheduler(current.scheduler);
-        if (!currentScheduler.settings.enabled || currentScheduler.settings.paused) return current;
-        const selectedIds = new Set(current.selectedPlotIds || []);
-        if (!selectedIds.size) return current;
-        const selectedState = { ...current, projects: current.projects.filter((project) => project.plotId && selectedIds.has(project.plotId)) };
-        const selection = selectSchedulerListings(selectedState);
-        if (!selection.selections.length) return current;
-        let nextState = current;
-        const completedIds: string[] = [];
-        const failedIds: string[] = [];
-        for (const item of selection.selections) {
-          const result = prepareManagedCopyInState(
-            nextState,
-            item.project.id,
-            item.listing.id,
-            selection.scheduler.settings.mode === "full-auto"
-              ? "full-auto"
-              : selection.scheduler.settings.mode === "copy-without-delete"
-                ? "copy-without-delete"
-                : "prepare-only",
-          );
-          nextState = result.state;
-          (result.ok ? completedIds : failedIds).push(item.listing.id);
-        }
-        return reserveSchedulerSelection(nextState, selection, {
-          mode: selection.scheduler.settings.mode,
-          completedListingIds: completedIds,
-          failedListingIds: failedIds,
-        }).state as StudioState;
-      });
-    };
-    const initialTimer = window.setTimeout(runSafeLocalScheduler, 5_000);
-    const interval = window.setInterval(runSafeLocalScheduler, 60_000);
-    return () => {
-      window.clearTimeout(initialTimer);
-      window.clearInterval(interval);
-    };
-  }, [ready, isPrimaryTab]);
-
   const centralHousePoolPanel = (
     <section className="workspace central-house-pool-workspace" aria-label="Gemeinsamer Hauspool">
       <div className="content-card">
@@ -3712,7 +3669,7 @@ export default function InseratStudio() {
               <div>
                 <span className="eyebrow">Global und inseratsbezogen</span>
                 <h2>Inseratsmanager</h2>
-                <small className="section-note">Der Scheduler lädt alle vorhandenen Inserate dynamisch und verteilt jede Runde adressübergreifend. Premium- und manuell gesperrte Anzeigen werden übersprungen; ein Fehler stoppt niemals andere Inserate.</small>
+                <small className="section-note">Der lokale Background-Helper verarbeitet alle aktiven Inserate mit eingeschalteter Automatik auch ohne geöffnete Browserseite. Die Grundstücksauswahl bleibt reine UI-/Arbeitsauswahl; ein Fehler stoppt niemals andere Inserate.</small>
               </div>
               <span className={scheduler.settings.paused || !scheduler.settings.enabled ? "status offline" : "status online"}>
                 {scheduler.settings.paused || !scheduler.settings.enabled ? "Automatik pausiert" : "Automatik aktiv"}
@@ -3727,7 +3684,7 @@ export default function InseratStudio() {
                 <input type="checkbox" checked={scheduler.settings.paused} onChange={(event) => updateScheduler({ paused: event.target.checked })} />
                 <span><b>Automatik pausieren</b><small>Stoppt neue Auswahlen, ohne gespeicherte Daten zu verändern.</small></span>
               </label>
-              <label className="field"><span>Modus</span><select value={scheduler.settings.mode} onChange={(event) => updateScheduler({ mode: event.target.value as SchedulerSettings["mode"] })}><option value="prepare-only">Nur vorbereiten</option><option value="copy-without-delete">Kopieren ohne Löschen</option><option value="full-auto">Vollautomatisch</option><option value="blocked">Gesperrt</option></select></label>
+              <label className="field"><span>Modus</span><select value={scheduler.settings.mode} onChange={(event) => updateScheduler({ mode: event.target.value as SchedulerSettings["mode"] })}><option value="prepare-only">Nur vorbereiten</option><option value="copy-without-delete">Kopieren ohne Löschen</option><option value="full-auto">Helper-Automatik · ohne Löschen</option><option value="blocked">Gesperrt</option></select></label>
               <Field label="Maximal pro Tag" type="number" min={1} value={scheduler.settings.maxUpdatesPerDay} onChange={(value) => updateScheduler({ maxUpdatesPerDay: Number(value) })} />
               <Field label="Maximal je Adresse/Tag" type="number" min={1} value={scheduler.settings.maxUpdatesPerAddressPerDay} onChange={(value) => updateScheduler({ maxUpdatesPerAddressPerDay: Number(value) })} />
               <Field label="Mindestabstand" type="number" min={1} suffix="Stunden" value={scheduler.settings.minimumSpacingHours} onChange={(value) => updateScheduler({ minimumSpacingHours: Number(value) })} />
@@ -3741,7 +3698,7 @@ export default function InseratStudio() {
               <button className="primary" onClick={runGlobalSchedulerDryRun}>Globalen Dry Run starten</button>
               <button className="secondary" onClick={prepareGlobalDailyRun}>Fälligen Tageslauf vorbereiten</button>
             </div>
-            <p className="security-note">Sicherheitsgrenze: Die Auswahl, Prüfung, Rotation und Entwurfserstellung sind implementiert. Automatisches Löschen bleibt blockiert, bis Immoprofessional eine bestätigte Löschschnittstelle und einen zurücklesbaren Erfolgsstatus bereitstellt.</p>
+            <p className="security-note">Sicherheitsgrenze: Der Helper erstellt und überträgt fällige Rotationskopien automatisch. Ein FTPS-Erfolg bleibt „Importbestätigung ausstehend“; erst ein separates bestätigtes Importereignis wird „Veröffentlicht“. Automatisches und externes Löschen bleibt vollständig deaktiviert.</p>
           </div>
 
           <div className="content-card manager-list-card">

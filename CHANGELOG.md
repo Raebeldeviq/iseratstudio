@@ -1,5 +1,83 @@
 # Änderungsprotokoll
 
+## Unreleased · Persistente automatische Inseratrotation – 12. August 2026
+
+### Report
+
+- Den automatischen Inserat-Scheduler aus dem Browser-`useEffect` in den
+  persistenten lokalen Background-Helper verlegt. Der Helper führt beim Start
+  einen Catch-up-Lauf aus und prüft danach seinen Zeitplan unabhängig von einer
+  geöffneten Browserseite.
+- Die automatische Reichweite verwendet alle aktiven verwalteten Inserate mit
+  eingeschalteter automatischer Aktualisierung. `selectedPlotIds` bleibt
+  ausschließlich UI-/Arbeitsauswahl für manuelle Abläufe.
+- Einen persistenten, während langer Läufe token-geprüft erneuerten
+  Scheduler-Claim mit Ablaufzeit und Crash-Recovery sowie
+  vollständige strukturierte Laufprotokolle für Start, Ende, Fälligkeit,
+  Auswahl, Fortsetzung, Überspringen, Fehler und Abbruchgrund ergänzt.
+- Den Rotationsablauf auf `scheduled → processing → prepared →
+  transferred_pending_import → published` bereinigt. `published` wird nur
+  durch eine explizite Importbestätigung gesetzt; ein FTPS-Transfer allein
+  bleibt „Importbestätigung ausstehend“.
+- Rotationskopien erhalten weiterhin kollisionsgeprüfte neue Objektnummern.
+  Uploadaufträge verwenden die vorhandene deterministische Job-ID,
+  Job-Deduplizierung und Lease-Logik.
+- Externe und automatische Löschung bleiben deaktiviert. Weder FTPS-Fehler
+  noch Helper-Abbruch oder unklarer Importzustand archivieren oder verändern
+  das alte veröffentlichte Inserat.
+- Einen persistenten globalen Betriebsmodus `off | canary | active` ergänzt.
+  Fehlende, beschädigte und unbekannte Konfigurationen fallen geschlossen auf
+  `off` zurück; dies gilt auch für Startup-Catch-up und wiederaufzunehmende
+  vorbereitete Rotationen.
+- Im Canary-Modus werden nur explizit konfigurierte interne Listing-IDs oder
+  externe Objektnummern verarbeitet. Weitere fällige Inserate werden mit
+  eindeutigem Skip-Grund protokolliert.
+- Ein separates lokales CLI für Status und explizite Moduswechsel ergänzt. Das
+  CLI startet keinen Helper und löst selbst keinen Upload aus.
+- Integrationsprüfungen für leere UI-Auswahl, Betrieb ohne Browser,
+  Helper-Neustart, Catch-up, identische Wiederholung, eindeutige
+  Objektnummern, mehrere Fälligkeiten, FTPS-Fehler, Jobabbruch, persistenten
+  Lock und ausgeschlossene externe Löschung ergänzt.
+
+### Begründung
+
+Ein Browser-Effekt ist kein zuverlässiger Scheduler: Er existiert nur bei
+geöffneter Seite und koppelt fachliche Automatik irrtümlich an UI-Zustand. Der
+lokale Helper besitzt bereits die persistente Katalog-, Upload-, Credential-
+und FTPS-Infrastruktur und ist daher der kleinste belastbare Ausführungsort.
+Fälligkeit bleibt dynamisch berechnet, damit veröffentlichte Altdaten nicht
+allein durch Zeitablauf in einen migrationsanfälligen `due`-Status umgeschrieben
+werden. Der explizite Zwischenstatus trennt Transporterfolg sauber von einer
+noch nicht bestätigten Veröffentlichung.
+
+### Hürden und Risiken
+
+- Immoprofessional liefert im vorhandenen Workflow noch keinen automatisch
+  zurücklesbaren, belastbaren Importstatus. Erfolgreiche Transfers bleiben
+  deshalb absichtlich `transferred_pending_import`, bis ein eindeutig
+  zugeordnetes `import-confirmed`-Ereignis vorliegt.
+- Der Helper schreibt Scheduler-Zustände über katalogweite Compare-and-swap-
+  Snapshots. Konflikte werden wiederholt; ein dauerhafter konkurrierender
+  Schreiber führt geschlossen zum Abbruch und wird protokolliert.
+- Ein produktiver FTPS-Test und jede Portalaktion wurden bewusst ausgelassen.
+  Die Tests verwenden ausschließlich lokale Zustände und injizierte
+  Uploadadapter.
+- Die persistente Modusdatei wird absichtlich nicht automatisch auf `active`
+  migriert. Vor dem ersten Helper-Neustart bleibt der produktive Fallback
+  dadurch `off`.
+- Keine bestehende Sicherheits-, Lock-, Deduplizierungs- oder
+  Katalogmigrationslogik wurde gelockert. Es gibt weiterhin keinen
+  automatischen `DELETE`-Pfad.
+
+### Tests
+
+- TypeScript-Prüfung mit lokal installiertem Compiler.
+- Scheduler-, Status-, Lock-, Restart-, Deduplizierungs-, Batch- und
+  Workflow-Integrationstests lokal ohne Netzwerk- oder Portalzugriff.
+- Betriebsmodus-Tests für fehlende, beschädigte und unbekannte Konfiguration,
+  Startup-Catch-up bei `off`, selektive Canary-Verarbeitung, Helper-Neustart
+  im Canary-Modus und den Wechsel `canary → active`.
+
 ## Version 0.18.0 · Grundstücksauswahl als zentraler Workflow-Einstieg – 25. Juli 2026
 
 ### Report

@@ -4,6 +4,7 @@ export const WORKFLOW_STATUS = Object.freeze({
   SCHEDULED: "scheduled",
   PROCESSING: "processing",
   PUBLISHED: "published",
+  TRANSFERRED_PENDING_IMPORT: "transferred_pending_import",
   BLOCKED: "blocked",
   FAILED: "failed",
   ARCHIVED: "archived",
@@ -18,6 +19,7 @@ export const WORKFLOW_STATUS_LABELS = Object.freeze({
   [WORKFLOW_STATUS.SCHEDULED]: "Eingeplant",
   [WORKFLOW_STATUS.PROCESSING]: "In Verarbeitung",
   [WORKFLOW_STATUS.PUBLISHED]: "Veröffentlicht",
+  [WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT]: "Übertragen · Importbestätigung ausstehend",
   [WORKFLOW_STATUS.BLOCKED]: "Gesperrt",
   [WORKFLOW_STATUS.FAILED]: "Fehlgeschlagen",
   [WORKFLOW_STATUS.ARCHIVED]: "Archiviert",
@@ -37,9 +39,11 @@ const LEGACY_STATUS_MAP = Object.freeze({
   "fur tageslauf ausgewahlt": WORKFLOW_STATUS.SCHEDULED,
   lauft: WORKFLOW_STATUS.PROCESSING,
   "wird verarbeitet": WORKFLOW_STATUS.PROCESSING,
-  erfolgreich: WORKFLOW_STATUS.PUBLISHED,
-  "upload erfolgreich": WORKFLOW_STATUS.PUBLISHED,
-  "inserat abgeschlossen": WORKFLOW_STATUS.PUBLISHED,
+  "ubertragen · importbestatigung ausstehend": WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT,
+  "übertragen · importbestätigung ausstehend": WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT,
+  erfolgreich: WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT,
+  "upload erfolgreich": WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT,
+  "inserat abgeschlossen": WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT,
   ubersprungen: WORKFLOW_STATUS.BLOCKED,
   blockiert: WORKFLOW_STATUS.BLOCKED,
   gesperrt: WORKFLOW_STATUS.BLOCKED,
@@ -64,7 +68,9 @@ export function normalizeWorkflowStatus(value, fallback = WORKFLOW_STATUS.DRAFT)
   if (WORKFLOW_STATUS_VALUES.includes(direct)) return direct;
   const normalized = normalizedLegacyStatus(value);
   if (LEGACY_STATUS_MAP[normalized]) return LEGACY_STATUS_MAP[normalized];
-  if (/erfolgreich|abgeschlossen|veröffentlicht|published|success/u.test(normalized)) return WORKFLOW_STATUS.PUBLISHED;
+  if (/transferred.pending.import|ubertragen.*import|übertragen.*import/u.test(normalized)) return WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT;
+  if (/veröffentlicht|published/u.test(normalized)) return WORKFLOW_STATUS.PUBLISHED;
+  if (/upload.*erfolgreich|inserat.*abgeschlossen|erfolgreich|success/u.test(normalized)) return WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT;
   if (/vorbereitet|dry run/u.test(normalized)) return WORKFLOW_STATUS.PREPARED;
   if (/ausgewahlt|geplant|scheduled/u.test(normalized)) return WORKFLOW_STATUS.SCHEDULED;
   if (/verarbeit|lauft|processing/u.test(normalized)) return WORKFLOW_STATUS.PROCESSING;
@@ -88,5 +94,7 @@ export function workflowStatusMessage(value, existingMessage = "") {
 
 export function isSuccessfulWorkflowStatus(value) {
   const status = normalizeWorkflowStatus(value);
-  return status === WORKFLOW_STATUS.PREPARED || status === WORKFLOW_STATUS.PUBLISHED;
+  return status === WORKFLOW_STATUS.PREPARED
+    || status === WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT
+    || status === WORKFLOW_STATUS.PUBLISHED;
 }

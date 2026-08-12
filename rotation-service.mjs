@@ -34,6 +34,7 @@ export function listingRotationBlockReasons(groupValue, listing, at = nowIso(), 
   const leaseAt = Date.parse(control.processLease?.startedAt || "");
   if (
     control.processLease?.token
+    && control.processLease.token !== String(options.operationToken || "")
     && Number.isFinite(leaseAt)
     && Date.parse(at) - leaseAt < PROCESS_LEASE_MS
   ) reasons.push("Das Inserat wird bereits verarbeitet.");
@@ -94,7 +95,10 @@ export function planListingRotation(state, projectId, listingId, options = {}) {
     || validateHousePool(distribution, state.houses || [], { projects: state.projects || [], normalized: true });
   const projectDistribution = distribution.projects.find((record) => record.projectId === project.id);
   const issues = [
-    ...listingRotationBlockReasons(group, listing, at, { normalized: true }),
+    ...listingRotationBlockReasons(group, listing, at, {
+      normalized: true,
+      operationToken: options.operationToken,
+    }),
     ...listingRotationPoolBlockReasons(distribution, distributionValidation, project, group, listing),
   ];
 

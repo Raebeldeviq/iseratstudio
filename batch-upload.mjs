@@ -47,7 +47,11 @@ export function createBatchUploadPlan(state, projectIds, options = {}) {
   const promotionOverrides = options.promotionOverrides || {};
   const library = normalizePromotionLibrary(state);
   const publishedJobs = new Set((state.uploadHistory || [])
-    .filter((log) => normalizeWorkflowStatus(log.status) === WORKFLOW_STATUS.PUBLISHED)
+    .filter((log) => {
+      const status = normalizeWorkflowStatus(log.status);
+      return status === WORKFLOW_STATUS.PUBLISHED
+        || status === WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT;
+    })
     .map((log) => String(log.jobId || ""))
     .filter(Boolean));
   const plannedListingIds = new Set();
@@ -213,9 +217,11 @@ export function createBatchUploadLog(project, listing, result, options = {}) {
     promotionImageId: String(options.promotionImageId || ""),
     createdAt: String(listing.createdAt || project.createdAt || timestamp),
     updatedAt: timestamp,
-    nextUpdatedAt: new Date(Date.parse(timestamp) + intervalDays * 86400000).toISOString(),
-    status: result.ok ? WORKFLOW_STATUS.PUBLISHED : WORKFLOW_STATUS.FAILED,
-    statusMessage: result.ok ? "Upload erfolgreich" : "Upload fehlgeschlagen",
+    nextUpdatedAt: result.importConfirmed === true
+      ? new Date(Date.parse(timestamp) + intervalDays * 86400000).toISOString()
+      : "",
+    status: result.ok ? WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT : WORKFLOW_STATUS.FAILED,
+    statusMessage: result.ok ? "Übertragen · Importbestätigung ausstehend" : "Upload fehlgeschlagen",
     error: result.ok ? "" : String(result.error || "Unbekannter Uploadfehler"),
   };
 }
