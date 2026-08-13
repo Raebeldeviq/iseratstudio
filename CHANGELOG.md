@@ -1,5 +1,45 @@
 # Änderungsprotokoll
 
+## Unreleased · Immoprofessional Delete Contract Discovery – 13. August 2026
+
+### Report
+
+- Den vorhandenen OpenImmo-, FTPS-, Uploadledger-, Rotations-, Katalog- und
+  Importbestätigungspfad vollständig auf Delete-Fähigkeiten geprüft, ohne eine
+  externe oder lokale Fachmutation auszuführen.
+- Belegt, dass der OpenImmo-1.2.7d-Standard einen objektbezogenen
+  `aktionart="DELETE"`-Wert kennt. Für den konkret verwendeten
+  Immoprofessional-Importer fehlen weiterhin ein bestätigter Delete-Payload und
+  ein positiver Lösch-Rückkanal.
+- Den einmalig zulässigen FTPS-Check strikt auf Connect/PWD/LIST begrenzt. Das
+  konfigurierte Root-Verzeichnis war leer; es gab keinen Upload, Move, Rename,
+  Mkdir oder Delete.
+- Die zukünftige Jobidentität, Eligibility, Source-/Replacement-Hard-Guards,
+  Idempotenz, Claim-/CAS-Abfolge, Statusmaschine und einen 28-teiligen
+  Sicherheitstestplan in `IMMOPROFESSIONAL_DELETE_CONTRACT.md` dokumentiert.
+- `30460-032963 → 30460-810978` read-only als fachlich geeigneten zukünftigen
+  Einzel-Canary bewertet. Diese Bewertung ist keine Ausführungsfreigabe;
+  automatische Löschung und `automaticDeletionEnabled` bleiben deaktiviert.
+
+### Begründung
+
+Der allgemeine OpenImmo-Standard beweist nicht automatisch die Unterstützung
+desselben Delete-Vertrags durch einen konkreten Importer. Ebenso darf ein
+Transporterfolg niemals als erfolgreiche Providerlöschung gelten. Die
+Discovery trennt deshalb Standard, Immoprofessional-Akzeptanz und fachliche
+Bestätigung und stoppt bis zu einem belastbaren Providerbeleg fail-closed.
+
+### Hürden und Risiken
+
+- Die öffentliche Immoprofessional-Dokumentation bestätigt OpenImmo-Importe und
+  Änderungen, beschreibt aber weder Delete-Payload noch Löschbericht.
+- Der aktuelle CHANGE-Export wird produktiv akzeptiert, weicht jedoch in
+  einzelnen Verwaltungsfeldern vom offiziellen OpenImmo-1.2.7d-Schema ab. Diese
+  Provider-Toleranz darf nicht auf DELETE extrapoliert werden.
+- Das leere FTPS-Verzeichnis beweist weder Unterstützung noch Nichtunterstützung
+  von Delete. Ohne positive, objektbezogene Providerbestätigung bleibt die
+  Abschlussentscheidung `DELETE_CONTRACT_NEEDS_MORE_PROVIDER_INFORMATION`.
+
 ## Unreleased · Read-only Importberichtordner – 13. August 2026
 
 ### Report

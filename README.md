@@ -408,6 +408,13 @@ Scheduler-Verantwortung ab und wird als **Ersetzt – externe Löschung
 ausstehend** gekennzeichnet. Dieser Ablauf erzeugt weder OpenImmo-`DELETE` noch
 eine Portal-Löschung oder Archivierung.
 
+Die technische Delete-Discovery ist separat in
+[`IMMOPROFESSIONAL_DELETE_CONTRACT.md`](IMMOPROFESSIONAL_DELETE_CONTRACT.md)
+dokumentiert. OpenImmo kennt zwar einen `DELETE`-Aktionswert, der konkrete
+Immoprofessional-Payload und insbesondere dessen positive Löschbestätigung sind
+aber noch nicht belegt. Automatische Löschung bleibt daher fail-closed
+deaktiviert.
+
 ## Dynamisches Inseratsmanagement und sichere Variantenrotation
 
 Jede neue oder aus Excel importierte Adresse besitzt eine persistente

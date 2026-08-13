@@ -113,6 +113,23 @@ gleichnamiger Ordner und ein fehlender Serverordner stoppen fail-closed. Der
 atomare Katalog-CAS für Reportbeleg, Statuswechsel und Scheduler-Handover bleibt
 unverändert bestehen.
 
+### Hoch: Bestätigtes Replacement wurde mit gelöschtem Altobjekt verwechselt
+
+Eine positive Importbestätigung für die neue Rotationskopie beweist nur deren
+Veröffentlichung. Sie beweist keine externe Löschung der alten Quelle. Die
+Quelle bleibt deshalb `published`, `externalDeletionPending: true` und aus der
+Rotation entfernt, bis ein separater positiver Providerbeleg exakt ihre eigene
+externe Objektnummer bestätigt.
+
+Auch ein späterer erfolgreicher Delete-Transport wäre keine fachliche
+Bestätigung. Die Identität muss vor jedem Auftrag hart geprüft werden:
+Delete-Nummer gleich Quellnummer, Delete-Nummer ungleich Replacementnummer und
+unterschiedliche interne Listing-IDs. Eine Verletzung muss vor Payload oder
+Transport mit `DELETE_REPLACEMENT_GUARD_VIOLATION` stoppen. Der aktuell
+unbestätigte Immoprofessional-Delete- und Rückkanal ist in
+`IMMOPROFESSIONAL_DELETE_CONTRACT.md` dokumentiert; produktive Löschung bleibt
+deaktiviert.
+
 ## Verbleibende Risiken und Grenzen
 
 1. Der automatische Parser kennt bislang ausschließlich den real beobachteten
