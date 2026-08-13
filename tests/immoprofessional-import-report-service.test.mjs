@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { createUploadJobId } from "../batch-upload.mjs";
+import { IMPORT_REPORT_MAIL_FOLDER } from "../apple-mail-import-report-adapter.mjs";
 import { createImmoprofessionalImportReportService } from "../immoprofessional-import-report-service.mjs";
 import { WORKFLOW_STATUS } from "../workflow-status.mjs";
 
@@ -44,6 +45,7 @@ function setupState({ duplicate = false } = {}) {
 
 function fakeStore(initialState, options = {}) {
   let state = structuredClone(initialState);
+  let updates = 0;
   return {
     async load() { return { stored: true, savedAt: "2026-08-13T09:00:00.000Z", state }; },
     async update(mutator) {
@@ -51,98 +53,182 @@ function fakeStore(initialState, options = {}) {
       const nextState = mutation?.state || mutation;
       if (options.failConfirmation && nextState?.importReports?.length > (state.importReports || []).length) throw new Error("CATALOG_CAS_FAILED");
       state = nextState;
+      updates += 1;
       return { stored: true, state, result: mutation?.state ? mutation.result : undefined, changed: true };
     },
     current() { return state; },
+    updateCount() { return updates; },
   };
 }
 
 function fakeMail(options = {}) {
-  let moveCount = 0;
   let scanCount = 0;
-  return {
+  let readCount = 0;
+  let mutationCount = 0;
+  const candidates = options.candidates ?? [{
+    transportId: "42",
     accountName: "Livinghaus",
-    targetFolder: "Inseratestudio – Importberichte",
-    async findCandidates() { scanCount += 1; return [{ transportId: "42", accountName: "Livinghaus", mailboxName: "INBOX" }]; },
-    async readRawMessage(candidate) { return { ...candidate, rawSource: options.raw || rawSuccess }; },
-    async moveProcessedMessage() {
-      moveCount += 1;
-      if (options.failFirstMove && moveCount === 1) throw new Error("MAIL_MOVE_FAILED");
-      return { moved: true, alreadyMoved: false, accountName: "Livinghaus", folderName: "Inseratestudio – Importberichte" };
+    accountId: "synthetic-account-id",
+    accountType: "unknown",
+    mailboxName: IMPORT_REPORT_MAIL_FOLDER,
+  }];
+  const mutationTrap = async () => {
+    mutationCount += 1;
+    throw new Error("MAIL_MUTATION_FORBIDDEN");
+  };
+  return {
+    readOnly: true,
+    accountName: "Livinghaus",
+    mailboxName: IMPORT_REPORT_MAIL_FOLDER,
+    async findCandidates() {
+      scanCount += 1;
+      if (options.findError) throw options.findError;
+      return candidates;
     },
-    counts() { return { moveCount, scanCount }; },
+    async readRawMessage(candidate) {
+      readCount += 1;
+      return { ...candidate, rawSource: options.raw || rawSuccess };
+    },
+    moveProcessedMessage: options.exposeMutationTraps ? mutationTrap : undefined,
+    deleteMessage: options.exposeMutationTraps ? mutationTrap : undefined,
+    copyMessage: options.exposeMutationTraps ? mutationTrap : undefined,
+    markRead: options.exposeMutationTraps ? mutationTrap : undefined,
+    markUnread: options.exposeMutationTraps ? mutationTrap : undefined,
+    flagMessage: options.exposeMutationTraps ? mutationTrap : undefined,
+    categorizeMessage: options.exposeMutationTraps ? mutationTrap : undefined,
+    createFolder: options.exposeMutationTraps ? mutationTrap : undefined,
+    renameFolder: options.exposeMutationTraps ? mutationTrap : undefined,
+    counts() { return { scanCount, readCount, mutationCount }; },
   };
 }
 
-test("confirms, persists, then moves exactly one Inbox report", async () => {
+function createService(setup, store, mail, writeLog = async () => undefined) {
+  return createImmoprofessionalImportReportService({
+    store,
+    uploadJobLedger: { read: async () => setup.ledger },
+    mailAdapter: mail,
+    writeLog,
+  });
+}
+
+test("confirms exactly one valid report from the dedicated folder with zero mail mutations", async () => {
   const setup = setupState();
   const store = fakeStore(setup.state);
-  const mail = fakeMail();
-  const service = createImmoprofessionalImportReportService({ store, uploadJobLedger: { read: async () => setup.ledger }, mailAdapter: mail });
+  const mail = fakeMail({ exposeMutationTraps: true });
+  const service = createService(setup, store, mail);
   const result = await service.runOnce({ now: "2026-08-13T09:17:00.000Z" });
+
   assert.equal(result.processed[0].status, "confirmed");
-  assert.equal(result.processed[0].moved, true);
-  assert.deepEqual(mail.counts(), { moveCount: 1, scanCount: 1 });
-  assert.equal(store.current().projects[0].listings.find((listing) => listing.id === "copy").status, WORKFLOW_STATUS.PUBLISHED);
+  assert.equal(result.mailMutations, 0);
+  assert.deepEqual(mail.counts(), { scanCount: 1, readCount: 1, mutationCount: 0 });
+  const copy = store.current().projects[0].listings.find((listing) => listing.id === "copy");
+  assert.equal(copy.status, WORKFLOW_STATUS.PUBLISHED);
+  assert.equal(copy.lastUploadedAt, "2026-08-13T09:16:00.000Z");
+  assert.equal(copy.nextUpdateAt, "2026-08-25T09:16:00.000Z");
   assert.equal(store.current().importReports[0].processingStatus, "confirmed");
+  assert.equal(store.current().importReports[0].mailSourceFolder, IMPORT_REPORT_MAIL_FOLDER);
+  assert.equal("mailMovedAt" in store.current().importReports[0], false);
+  assert.equal(store.current().mailImportReportStatus.status, "confirmed");
 });
 
-test("restarts safely after catalog confirmation when the mail remained in Inbox", async () => {
+test("ignores a valid report that exists only in Inbox because there is no Inbox fallback", async () => {
   const setup = setupState();
   const store = fakeStore(setup.state);
-  const firstMail = fakeMail({ failFirstMove: true });
-  const first = createImmoprofessionalImportReportService({ store, uploadJobLedger: { read: async () => setup.ledger }, mailAdapter: firstMail });
-  const firstResult = await first.runOnce({ now: "2026-08-13T09:17:00.000Z" });
-  assert.equal(firstResult.processed[0].status, "confirmed");
-  assert.equal(firstResult.processed[0].moved, false);
-  assert.equal(store.current().importReports.length, 1);
-  assert.equal(store.current().importReports[0].processingStatus, "confirmed_mail_move_pending");
-
-  const restartedMail = fakeMail();
-  const restarted = createImmoprofessionalImportReportService({ store, uploadJobLedger: { read: async () => setup.ledger }, mailAdapter: restartedMail });
-  const secondResult = await restarted.runOnce({ now: "2026-08-13T09:18:00.000Z" });
-  assert.equal(secondResult.reason, "no-pending-imports");
-  assert.equal(secondResult.retriedMoves[0].moved, true);
-  assert.deepEqual(restartedMail.counts(), { moveCount: 1, scanCount: 0 });
-  assert.equal(store.current().importReports.length, 1);
-  assert.equal(store.current().importReports[0].processingStatus, "confirmed");
+  const mail = fakeMail({ candidates: [] });
+  const result = await createService(setup, store, mail).runOnce({ now: "2026-08-13T09:17:00.000Z" });
+  assert.equal(result.candidateCount, 0);
+  assert.equal(store.current().projects[0].listings.find((listing) => listing.id === "copy").status, WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT);
+  assert.equal(store.current().importReports?.length || 0, 0);
+  assert.deepEqual(mail.counts(), { scanCount: 1, readCount: 0, mutationCount: 0 });
 });
 
-test("keeps parsing errors, ambiguous reports and persistence failures in Inbox", async () => {
+test("helper restart and a report left permanently in the folder do not create a second business mutation", async () => {
+  const setup = setupState();
+  const store = fakeStore(setup.state);
+  const firstMail = fakeMail({ exposeMutationTraps: true });
+  await createService(setup, store, firstMail).runOnce({ now: "2026-08-13T09:17:00.000Z" });
+  const afterFirst = structuredClone(store.current());
+
+  const restartedMail = fakeMail({ exposeMutationTraps: true });
+  const second = await createService(setup, store, restartedMail).runOnce({ now: "2026-08-13T09:18:00.000Z" });
+  assert.equal(second.reason, "no-pending-imports");
+  assert.equal(second.ran, false);
+  assert.deepEqual(restartedMail.counts(), { scanCount: 0, readCount: 0, mutationCount: 0 });
+  assert.deepEqual(store.current(), afterFirst);
+  assert.equal(store.current().importReports.length, 1);
+});
+
+test("historical mail-move states remain readable and never trigger a mail action", async () => {
+  for (const processingStatus of ["confirmed_mail_move_pending", "mail_move_manual_review_required"]) {
+    const setup = setupState();
+    setup.state.projects[0].listings.find((listing) => listing.id === "copy").status = WORKFLOW_STATUS.PUBLISHED;
+    setup.state.importReports = [{
+      reportId: `historical-${processingStatus}`,
+      messageId: "<historical@example.invalid>",
+      rawHash: "f".repeat(64),
+      processingStatus,
+      externalObjectNumber: "30460-810978",
+      mailTransportId: "42",
+    }];
+    const store = fakeStore(setup.state);
+    const mail = fakeMail({ exposeMutationTraps: true });
+    const before = structuredClone(store.current());
+    const result = await createService(setup, store, mail).runOnce();
+    assert.equal(result.reason, "no-pending-imports");
+    assert.deepEqual(mail.counts(), { scanCount: 0, readCount: 0, mutationCount: 0 });
+    assert.deepEqual(store.current(), before);
+  }
+});
+
+test("parsing errors, ambiguous matches and CAS failures remain fail-closed", async () => {
   for (const scenario of [
-    { name: "parse", setup: setupState(), mail: fakeMail({ raw: rawSuccess.replace("Anbieter-ID: 30460", "Anbieter-ID: 99999") }), storeOptions: {} },
-    { name: "ambiguous", setup: setupState({ duplicate: true }), mail: fakeMail(), storeOptions: {} },
-    { name: "persistence", setup: setupState(), mail: fakeMail(), storeOptions: { failConfirmation: true } },
+    { name: "parse", expected: "rejected", setup: setupState(), mail: fakeMail({ raw: rawSuccess.replace("Anbieter-ID: 30460", "Anbieter-ID: 99999"), exposeMutationTraps: true }), storeOptions: {} },
+    { name: "ambiguous", expected: "ambiguous", setup: setupState({ duplicate: true }), mail: fakeMail({ exposeMutationTraps: true }), storeOptions: {} },
+    { name: "persistence", expected: "rejected", setup: setupState(), mail: fakeMail({ exposeMutationTraps: true }), storeOptions: { failConfirmation: true } },
   ]) {
     const store = fakeStore(scenario.setup.state, scenario.storeOptions);
-    const service = createImmoprofessionalImportReportService({ store, uploadJobLedger: { read: async () => scenario.setup.ledger }, mailAdapter: scenario.mail });
-    const result = await service.runOnce({ now: "2026-08-13T09:17:00.000Z" });
-    assert.equal(result.processed[0].moved, false, scenario.name);
-    assert.equal(scenario.mail.counts().moveCount, 0, scenario.name);
+    const result = await createService(scenario.setup, store, scenario.mail).runOnce({ now: "2026-08-13T09:17:00.000Z" });
+    assert.equal(result.processed[0].status, scenario.expected, scenario.name);
+    assert.equal(scenario.mail.counts().mutationCount, 0, scenario.name);
     assert.equal(store.current().projects[0].listings.find((listing) => listing.id === "copy").status, WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT, scenario.name);
   }
 });
 
-test("does not access Apple Mail when there is no pending import", async () => {
+test("does not access Apple Mail without a pending import", async () => {
   const setup = setupState();
   setup.state.projects[0].listings.find((listing) => listing.id === "copy").status = WORKFLOW_STATUS.PUBLISHED;
   const store = fakeStore(setup.state);
-  const mail = fakeMail();
-  const service = createImmoprofessionalImportReportService({ store, uploadJobLedger: { read: async () => setup.ledger }, mailAdapter: mail });
-  const result = await service.runOnce();
+  const mail = fakeMail({ exposeMutationTraps: true });
+  const result = await createService(setup, store, mail).runOnce();
   assert.equal(result.reason, "no-pending-imports");
-  assert.deepEqual(mail.counts(), { moveCount: 0, scanCount: 0 });
+  assert.deepEqual(mail.counts(), { scanCount: 0, readCount: 0, mutationCount: 0 });
 });
 
-test("fails closed and exposes setup required when Livinghaus is not uniquely resolved", async () => {
+test("missing or ambiguous account/folder exposes setup required and preserves the pending copy", async () => {
+  for (const code of [
+    "MAIL_ACCOUNT_NOT_FOUND",
+    "MAIL_ACCOUNT_AMBIGUOUS",
+    "MAIL_IMPORT_REPORT_FOLDER_NOT_FOUND",
+    "MAIL_IMPORT_REPORT_FOLDER_AMBIGUOUS",
+  ]) {
+    const setup = setupState();
+    const store = fakeStore(setup.state);
+    const error = new Error(code);
+    error.code = "MAIL_IMPORT_REPORT_SETUP_REQUIRED";
+    const mail = fakeMail({ findError: error, exposeMutationTraps: true });
+    const result = await createService(setup, store, mail).runOnce();
+    assert.equal(result.setupRequired, true, code);
+    assert.equal(store.current().mailImportReportStatus.status, "setup_required", code);
+    assert.match(store.current().mailImportReportStatus.message, /Importbericht-Ordner nicht verfügbar/u, code);
+    assert.equal(store.current().projects[0].listings.find((listing) => listing.id === "copy").status, WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT, code);
+    assert.equal(mail.counts().mutationCount, 0, code);
+  }
+});
+
+test("refuses a mail adapter that is not explicitly read-only", () => {
   const setup = setupState();
   const store = fakeStore(setup.state);
-  const error = new Error("MAIL_ACCOUNT_NOT_UNIQUE");
-  error.code = "MAIL_IMPORT_REPORT_SETUP_REQUIRED";
-  const mail = { ...fakeMail(), findCandidates: async () => { throw error; } };
-  const service = createImmoprofessionalImportReportService({ store, uploadJobLedger: { read: async () => setup.ledger }, mailAdapter: mail });
-  const result = await service.runOnce();
-  assert.equal(result.setupRequired, true);
-  assert.equal(store.current().mailImportReportStatus.status, "setup_required");
-  assert.equal(store.current().projects[0].listings.find((listing) => listing.id === "copy").status, WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT);
+  const mail = fakeMail();
+  mail.readOnly = false;
+  assert.throws(() => createService(setup, store, mail), /read-only/u);
 });

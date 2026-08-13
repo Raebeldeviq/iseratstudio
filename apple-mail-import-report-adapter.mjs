@@ -8,113 +8,70 @@ export const DEFAULT_IMPORT_REPORT_MAIL_ACCOUNT = "Livinghaus";
 
 const execFileAsync = promisify(execFile);
 
-const LIST_MESSAGES_SCRIPT = String.raw`
+const RESOLVE_TARGET_PREAMBLE = String.raw`
+    set matchingAccounts to every account whose name is accountName
+    if (count of matchingAccounts) is 0 then error "MAIL_ACCOUNT_NOT_FOUND"
+    if (count of matchingAccounts) is greater than 1 then error "MAIL_ACCOUNT_AMBIGUOUS"
+    set targetAccount to item 1 of matchingAccounts
+    set accountIdentifier to id of targetAccount as string
+    set targetBoxes to every mailbox of targetAccount whose name is folderName
+    if (count of targetBoxes) is 0 then error "MAIL_IMPORT_REPORT_FOLDER_NOT_FOUND"
+    if (count of targetBoxes) is greater than 1 then error "MAIL_IMPORT_REPORT_FOLDER_AMBIGUOUS"
+    set targetBox to item 1 of targetBoxes
+    if (id of account of targetBox as string) is not accountIdentifier then error "MAIL_IMPORT_REPORT_FOLDER_WRONG_ACCOUNT"`;
+
+const INSPECT_SETUP_SCRIPT = String.raw`
+-- FPI_OPERATION:INSPECT_IMPORT_REPORT_FOLDER
 on run argv
   set accountName to item 1 of argv
-  set expectedSubject to item 2 of argv
-  set lookbackHours to (item 3 of argv) as integer
+  set folderName to item 2 of argv
   tell application "Mail"
-    set matchingAccounts to every account whose name is accountName
-    if (count of matchingAccounts) is not 1 then error "MAIL_ACCOUNT_NOT_UNIQUE"
-    set targetAccount to item 1 of matchingAccounts
-    set localizedInboxes to every mailbox of targetAccount whose name is "Posteingang"
-    set canonicalInboxes to every mailbox of targetAccount whose name is "INBOX"
-    if ((count of localizedInboxes) + (count of canonicalInboxes)) is not 1 then error "MAIL_INBOX_NOT_UNIQUE"
-    if (count of localizedInboxes) is 1 then
-      set inboxBox to item 1 of localizedInboxes
-    else
-      set inboxBox to item 1 of canonicalInboxes
-    end if
+${RESOLVE_TARGET_PREAMBLE}
+    return "SETUP" & tab & accountIdentifier & tab & (account type of targetAccount as string) & tab & (name of targetBox as string) & tab & (class of targetBox as string)
+  end tell
+end run`;
+
+const LIST_MESSAGES_SCRIPT = String.raw`
+-- FPI_OPERATION:LIST_IMPORT_REPORTS
+on run argv
+  set accountName to item 1 of argv
+  set folderName to item 2 of argv
+  set expectedSubject to item 3 of argv
+  set lookbackHours to (item 4 of argv) as integer
+  tell application "Mail"
+${RESOLVE_TARGET_PREAMBLE}
     set cutoffDate to (current date) - (lookbackHours * hours)
-    set matches to every message of inboxBox whose subject is expectedSubject and date received is greater than cutoffDate
-    set outputText to ""
+    set matches to every message of targetBox whose subject is expectedSubject and date received is greater than cutoffDate
+    set outputText to "MAILBOX" & tab & accountIdentifier & tab & (account type of targetAccount as string) & tab & (name of targetBox as string) & linefeed
     repeat with currentMessage in matches
-      set outputText to outputText & ((id of currentMessage) as string) & linefeed
+      set outputText to outputText & "MESSAGE" & tab & ((id of currentMessage) as string) & linefeed
     end repeat
     return outputText
   end tell
 end run`;
 
-const INSPECT_SETUP_SCRIPT = String.raw`
+const READ_MESSAGE_SCRIPT = String.raw`
+-- FPI_OPERATION:READ_IMPORT_REPORT
 on run argv
   set accountName to item 1 of argv
   set folderName to item 2 of argv
+  set expectedAccountId to item 3 of argv
+  set messageIdentifier to (item 4 of argv) as integer
   tell application "Mail"
-    set matchingAccounts to every account whose name is accountName
-    if (count of matchingAccounts) is not 1 then error "MAIL_ACCOUNT_NOT_UNIQUE"
-    set targetAccount to item 1 of matchingAccounts
-    set localizedInboxes to every mailbox of targetAccount whose name is "Posteingang"
-    set canonicalInboxes to every mailbox of targetAccount whose name is "INBOX"
-    if ((count of localizedInboxes) + (count of canonicalInboxes)) is not 1 then error "MAIL_INBOX_NOT_UNIQUE"
-    set targetBoxes to every mailbox of targetAccount whose name is folderName
-    return "ACCOUNT_OK" & tab & ((count of targetBoxes) as string)
-  end tell
-end run`;
-
-const READ_MESSAGE_SCRIPT = String.raw`
-on run argv
-  set accountName to item 1 of argv
-  set messageIdentifier to (item 2 of argv) as integer
-  tell application "Mail"
-    set matchingAccounts to every account whose name is accountName
-    if (count of matchingAccounts) is not 1 then error "MAIL_ACCOUNT_NOT_UNIQUE"
-    set targetAccount to item 1 of matchingAccounts
-    set localizedInboxes to every mailbox of targetAccount whose name is "Posteingang"
-    set canonicalInboxes to every mailbox of targetAccount whose name is "INBOX"
-    if ((count of localizedInboxes) + (count of canonicalInboxes)) is not 1 then error "MAIL_INBOX_NOT_UNIQUE"
-    if (count of localizedInboxes) is 1 then
-      set inboxBox to item 1 of localizedInboxes
-    else
-      set inboxBox to item 1 of canonicalInboxes
-    end if
-    set matches to every message of inboxBox whose id is messageIdentifier
-    if (count of matches) is not 1 then error "MAIL_MESSAGE_NOT_UNIQUE"
+${RESOLVE_TARGET_PREAMBLE}
+    if accountIdentifier is not expectedAccountId then error "MAIL_ACCOUNT_ID_CHANGED"
+    set matches to every message of targetBox whose id is messageIdentifier
+    if (count of matches) is not 1 then error "MAIL_MESSAGE_NOT_UNIQUE_IN_IMPORT_REPORT_FOLDER"
     return source of item 1 of matches
   end tell
 end run`;
 
-const MOVE_MESSAGE_SCRIPT = String.raw`
-on run argv
-  set accountName to item 1 of argv
-  set messageIdentifier to (item 2 of argv) as integer
-  set expectedMessageId to item 3 of argv
-  set folderName to item 4 of argv
-  tell application "Mail"
-    set matchingAccounts to every account whose name is accountName
-    if (count of matchingAccounts) is not 1 then error "MAIL_ACCOUNT_NOT_UNIQUE"
-    set targetAccount to item 1 of matchingAccounts
-    set localizedInboxes to every mailbox of targetAccount whose name is "Posteingang"
-    set canonicalInboxes to every mailbox of targetAccount whose name is "INBOX"
-    if ((count of localizedInboxes) + (count of canonicalInboxes)) is not 1 then error "MAIL_INBOX_NOT_UNIQUE"
-    if (count of localizedInboxes) is 1 then
-      set inboxBox to item 1 of localizedInboxes
-    else
-      set inboxBox to item 1 of canonicalInboxes
-    end if
-    set targetBoxes to every mailbox of targetAccount whose name is folderName
-    if (count of targetBoxes) is 0 then
-      tell targetAccount to make new mailbox with properties {name:folderName}
-      set targetBoxes to every mailbox of targetAccount whose name is folderName
-    end if
-    if (count of targetBoxes) is not 1 then error "MAIL_TARGET_FOLDER_NOT_UNIQUE"
-    set targetBox to item 1 of targetBoxes
-    set inboxMatches to every message of inboxBox whose id is messageIdentifier
-    if (count of inboxMatches) is 1 then
-      set currentMessage to item 1 of inboxMatches
-      if (message id of currentMessage) is not expectedMessageId then error "MAIL_MESSAGE_ID_CHANGED"
-      move currentMessage to targetBox
-      return "MOVED"
-    end if
-    set destinationMatches to every message of targetBox whose message id is expectedMessageId
-    if (count of destinationMatches) is 1 then return "ALREADY_MOVED"
-    error "MAIL_MESSAGE_NOT_UNIQUE"
-  end tell
-end run`;
+const SETUP_ERROR_PATTERN = /MAIL_ACCOUNT_NOT_FOUND|MAIL_ACCOUNT_AMBIGUOUS|MAIL_ACCOUNT_ID_CHANGED|MAIL_IMPORT_REPORT_FOLDER_NOT_FOUND|MAIL_IMPORT_REPORT_FOLDER_AMBIGUOUS|MAIL_IMPORT_REPORT_FOLDER_WRONG_ACCOUNT/u;
 
 function setupError(error) {
   const message = error instanceof Error ? error.message : String(error || "Apple Mail ist nicht verfügbar.");
   const wrapped = new Error(message);
-  wrapped.code = /MAIL_ACCOUNT_NOT_UNIQUE|MAIL_INBOX_NOT_UNIQUE|MAIL_TARGET_FOLDER_NOT_UNIQUE/u.test(message)
+  wrapped.code = SETUP_ERROR_PATTERN.test(message)
     ? "MAIL_IMPORT_REPORT_SETUP_REQUIRED"
     : "MAIL_IMPORT_REPORT_ACCESS_FAILED";
   return wrapped;
@@ -125,7 +82,7 @@ async function defaultRunner(script, args, options = {}) {
     const result = await execFileAsync("osascript", ["-e", script, "--", ...args.map(String)], {
       encoding: "utf8",
       maxBuffer: options.maxBuffer || 10 * 1024 * 1024,
-      timeout: options.timeout || 30_000,
+      timeout: options.timeout || 45_000,
     });
     return result.stdout;
   } catch (error) {
@@ -139,55 +96,88 @@ function validTransportId(value) {
   return id;
 }
 
+function validAccountId(value) {
+  const accountId = String(value || "").trim();
+  if (!accountId || /[\r\n\t]/u.test(accountId)) throw new Error("Die Apple-Mail-Account-ID ist ungültig.");
+  return accountId;
+}
+
+function validMailboxHeader(output, expectedStatus, expectedMailbox) {
+  const [status, accountId, accountType, mailboxName, mailboxClass] = String(output || "").trim().split("\t");
+  if (status !== expectedStatus || !accountId || mailboxName !== expectedMailbox) {
+    const error = new Error("MAIL_IMPORT_REPORT_FOLDER_NOT_UNIQUE");
+    error.code = "MAIL_IMPORT_REPORT_SETUP_REQUIRED";
+    throw error;
+  }
+  return { accountId: validAccountId(accountId), accountType, mailboxName, mailboxClass };
+}
+
 export function createAppleMailImportReportAdapter(options = {}) {
   const runner = options.runner || defaultRunner;
   const accountName = String(options.accountName || process.env.FPI_IMPORT_REPORT_MAIL_ACCOUNT || DEFAULT_IMPORT_REPORT_MAIL_ACCOUNT).trim();
-  const targetFolder = String(options.targetFolder || IMPORT_REPORT_MAIL_FOLDER).trim();
+  const mailboxName = String(
+    options.mailboxName
+      || options.targetFolder
+      || process.env.FPI_IMPORT_REPORT_MAILBOX
+      || IMPORT_REPORT_MAIL_FOLDER,
+  ).trim();
   if (!accountName) throw new Error("Der Apple-Mail-Accountname fehlt.");
-  if (!targetFolder) throw new Error("Der Apple-Mail-Zielordner fehlt.");
+  if (!mailboxName) throw new Error("Der Apple-Mail-Importberichtordner fehlt.");
 
-  return {
+  return Object.freeze({
     accountName,
-    targetFolder,
+    mailboxName,
+    targetFolder: mailboxName,
+    readOnly: true,
     async inspectSetup() {
-      const output = String(await runner(INSPECT_SETUP_SCRIPT, [accountName, targetFolder]) || "").trim();
-      const [status, targetCountText] = output.split("\t");
-      const targetCount = Number(targetCountText);
-      if (status !== "ACCOUNT_OK" || !Number.isInteger(targetCount)) throw new Error("Apple Mail hat die Account-/Ordnerprüfung nicht eindeutig beantwortet.");
-      if (targetCount > 1) {
-        const error = new Error("MAIL_TARGET_FOLDER_NOT_UNIQUE");
-        error.code = "MAIL_IMPORT_REPORT_SETUP_REQUIRED";
-        throw error;
-      }
-      return { accountName, inboxName: "Posteingang/INBOX", targetFolder, targetFolderExists: targetCount === 1 };
+      const output = await runner(INSPECT_SETUP_SCRIPT, [accountName, mailboxName]);
+      const setup = validMailboxHeader(output, "SETUP", mailboxName);
+      return {
+        accountName,
+        accountId: setup.accountId,
+        accountType: setup.accountType,
+        mailboxName,
+        mailboxClass: setup.mailboxClass,
+        targetFolder: mailboxName,
+        targetFolderExists: true,
+        readOnly: true,
+      };
     },
     async findCandidates(input = {}) {
       const lookbackHours = Math.max(1, Math.min(720, Math.ceil(Number(input.lookbackHours) || 72)));
-      const output = await runner(LIST_MESSAGES_SCRIPT, [
+      const output = String(await runner(LIST_MESSAGES_SCRIPT, [
         accountName,
+        mailboxName,
         IMMOPROFESSIONAL_IMPORT_REPORT_SUBJECT,
         String(lookbackHours),
-      ]);
-      return String(output || "").split(/\r?\n/gu).map((value) => value.trim()).filter(Boolean).map((transportId) => ({
-        transportId: validTransportId(transportId),
-        accountName,
-        mailboxName: "Posteingang",
-      }));
+      ]) || "");
+      const lines = output.split(/\r?\n/gu).map((line) => line.trim()).filter(Boolean);
+      const header = validMailboxHeader(lines.shift(), "MAILBOX", mailboxName);
+      return lines.map((line) => {
+        const [kind, transportId] = line.split("\t");
+        if (kind !== "MESSAGE") throw new Error("Apple Mail hat eine ungültige Nachrichtenreferenz geliefert.");
+        return {
+          transportId: validTransportId(transportId),
+          accountName,
+          accountId: header.accountId,
+          accountType: header.accountType,
+          mailboxName,
+        };
+      });
     },
     async readRawMessage(candidate) {
       const transportId = validTransportId(candidate?.transportId);
-      const rawSource = await runner(READ_MESSAGE_SCRIPT, [accountName, transportId], { maxBuffer: 20 * 1024 * 1024 });
+      const accountId = validAccountId(candidate?.accountId);
+      if (candidate?.accountName !== accountName || candidate?.mailboxName !== mailboxName) {
+        throw new Error("Die Apple-Mail-Nachrichtenreferenz gehört nicht zum konfigurierten Importberichtordner.");
+      }
+      const rawSource = await runner(
+        READ_MESSAGE_SCRIPT,
+        [accountName, mailboxName, accountId, transportId],
+        { maxBuffer: 20 * 1024 * 1024 },
+      );
       if (!String(rawSource || "").trim()) throw new Error("Apple Mail lieferte eine leere Raw-Mail.");
-      return { ...candidate, accountName, mailboxName: "Posteingang", rawSource: String(rawSource) };
+      return { ...candidate, accountName, accountId, mailboxName, rawSource: String(rawSource) };
     },
-    async moveProcessedMessage(input) {
-      const transportId = validTransportId(input?.transportId);
-      const messageId = String(input?.messageId || "").trim();
-      if (!messageId) throw new Error("Die validierte Message-ID fehlt für die Mailverschiebung.");
-      const appleMessageId = messageId.replace(/^</u, "").replace(/>$/u, "");
-      const output = String(await runner(MOVE_MESSAGE_SCRIPT, [accountName, transportId, appleMessageId, targetFolder]) || "").trim();
-      if (!new Set(["MOVED", "ALREADY_MOVED"]).has(output)) throw new Error("Apple Mail hat die Mailverschiebung nicht eindeutig bestätigt.");
-      return { moved: output === "MOVED", alreadyMoved: output === "ALREADY_MOVED", accountName, folderName: targetFolder };
-    },
-  };
+  });
 }

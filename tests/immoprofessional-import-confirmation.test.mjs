@@ -87,7 +87,13 @@ function fixtureState(options = {}) {
   return { state, project, source, copy, jobId, ledger };
 }
 
-const mail = { transportId: "42", accountName: "Livinghaus", mailboxName: "INBOX", receivedAt: "2026-08-13T09:16:30.000Z" };
+const mail = {
+  transportId: "42",
+  accountName: "Livinghaus",
+  accountId: "synthetic-account-id",
+  mailboxName: "Inseratestudio – Importberichte",
+  receivedAt: "2026-08-13T09:16:30.000Z",
+};
 
 test("matches exactly one pending copy through source reference and completed upload ledger", () => {
   const { state, ledger, jobId } = fixtureState();
@@ -131,6 +137,10 @@ test("atomically publishes the copy, hands over scheduling and leaves the source
   assert.equal(confirmation.result.matchedUploadJobId, jobId);
   assert.equal(confirmation.result.nextUpdateAt, "2026-08-25T09:16:00.000Z");
   assert.equal(confirmation.state.importReports.length, 1);
+  assert.equal(confirmation.result.report.processingStatus, "confirmed");
+  assert.equal(confirmation.result.report.mailSourceFolder, "Inseratestudio – Importberichte");
+  assert.equal("mailMovedAt" in confirmation.result.report, false);
+  assert.equal(confirmation.state.mailImportReportStatus.status, "confirmed");
 
   const project = confirmation.state.projects[0];
   const source = project.listings.find((listing) => listing.id === "source-1");

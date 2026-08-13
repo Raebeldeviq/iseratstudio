@@ -1,5 +1,63 @@
 # Änderungsprotokoll
 
+## Unreleased · Read-only Importberichtordner – 13. August 2026
+
+### Report
+
+- Den produktiven Importberichtpfad vom direkten Livinghaus-Posteingang auf den
+  serverseitig durch Outlook/Exchange gepflegten Ordner
+  `Inseratestudio – Importberichte` umgestellt. Ein automatischer Inbox-Fallback
+  wurde ausdrücklich nicht ergänzt.
+- Die Account- und Ordnerauflösung fail-closed gehärtet: genau ein Account
+  `Livinghaus`, genau ein gleichnamiger Ordner in dessen Accounthierarchie und
+  stabile Account-ID. Der Exchange-Accounttyp `unknown` ist allein kein
+  Fehlergrund; lokale oder fremde gleichnamige Ordner werden nicht verwendet.
+- Sämtliche Mailmutationen aus dem Produktionspfad entfernt. Der Adapter bietet
+  ausschließlich Setup-Prüfung, Kandidatensuche und Raw-Mail-Lesen; weder Move,
+  Delete, Copy, Read/Unread, Flag, Kategorie, Ordneranlage noch Rename sind
+  implementiert.
+- Neue erfolgreiche Belege direkt mit `processingStatus: confirmed` abgelegt.
+  Historische `confirmed_mail_move_pending`, `confirmed_mail_moved` und
+  `mail_move_*`-Zustände bleiben ohne Migration lesbar und lösen keine
+  Mailaktion oder Blockade neuer Imports aus.
+- Die bestehende strikte Immoprofessional-Validierung, Message-ID-/Raw-Hash-
+  Deduplizierung, Uploadledger-Zuordnung und atomare Katalog-CAS-Bestätigung
+  unverändert erhalten. Die alte Quelle bleibt extern veröffentlicht und als
+  „Ersetzt – externe Löschung ausstehend“ markiert; es gibt weiterhin keinen
+  DELETE-, Archivierungs- oder Portal-Löschpfad.
+- UI und Betriebsdokumentation auf **Import bestätigt** beziehungsweise
+  **Importbericht-Ordner nicht verfügbar** umgestellt. Der Helper prüft beim
+  Start und danach moderat alle fünf Minuten, berührt Apple Mail aber nur bei
+  mindestens einer offenen `transferred_pending_import`-Kopie.
+
+### Begründung
+
+Eine serverseitige Exchange-Regel ist für die dauerhafte Ablage zuverlässiger
+als ein lokaler Apple-Mail-Move. Die klare Verantwortungstrennung reduziert die
+lokalen Berechtigungen auf Lesen: Exchange sortiert, das Inseratestudio
+validiert und bestätigt. Die direkte Account-/Ordnerbindung verhindert, dass
+ein gleichnamiger lokaler Ordner oder ein fremdes Konto versehentlich als
+Vertrauensgrenze verwendet wird.
+
+### Hürden und Risiken
+
+- Die Outlook-/Exchange-Regel wird außerhalb des Inseratestudios verwaltet. Ein
+  Regel- oder Synchronisationsfehler bleibt sichtbar als ausstehende
+  Importbestätigung; die Anwendung verändert weder Regel noch Mailablage.
+- Apple Mail muss den serverseitigen Ordner und dessen Raw-Nachrichten unter
+  macOS zuverlässig read-only bereitstellen. Der abschließende Realtest
+  entscheidet, ob diese Transportebene produktionsreif ist oder separat eine
+  serverseitige Read-only-API bewertet werden muss.
+- Historische Mail-Move-Diagnosezustände bleiben bewusst unverändert. Eine
+  riskante Katalogmigration und jeder erneute Move alter Berichte wurden
+  ausgeschlossen.
+
+### Tests
+
+- Synthetische Account-/Ordner-, Read-only-, Parser-, Matching-, CAS-,
+  Deduplizierungs-, Restart- und Scheduler-Handovertests; keine produktive
+  `.eml`, keine Zugangsdaten und keine Mail-, FTPS- oder Portalmutation.
+
 ## Unreleased · Immoprofessional-Importbestätigung aus Livinghaus-Mail – 13. August 2026
 
 ### Report

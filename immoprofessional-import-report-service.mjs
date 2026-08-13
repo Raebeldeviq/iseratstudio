@@ -2,8 +2,6 @@ import { createHash } from "node:crypto";
 
 import {
   confirmImportReportInState,
-  IMPORT_REPORT_PROCESSING_STATUS,
-  markImportReportMailMovedInState,
   recordImportReportReviewInState,
 } from "./immoprofessional-import-confirmation.mjs";
 import {
@@ -12,19 +10,15 @@ import {
 } from "./immoprofessional-import-report-parser.mjs";
 import { normalizeWorkflowStatus, WORKFLOW_STATUS } from "./workflow-status.mjs";
 
+// Five minutes is deliberate: import confirmation is asynchronous and does not
+// warrant a high-frequency mailbox poll. The service exits before Apple Mail is
+// touched whenever no transferred_pending_import copy exists.
 export const DEFAULT_IMPORT_REPORT_POLL_INTERVAL_MS = 5 * 60 * 1000;
 
 function pendingImportListings(state) {
   return (state.projects || []).flatMap((project) => (project.listings || []).filter((listing) =>
     listing.listingOrigin === "rotation-copy"
     && normalizeWorkflowStatus(listing.status, WORKFLOW_STATUS.DRAFT) === WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT));
-}
-
-function pendingMailMoves(state) {
-  return (state.importReports || []).filter((report) =>
-    report.processingStatus === IMPORT_REPORT_PROCESSING_STATUS.CONFIRMED_MOVE_PENDING
-    && report.mailTransportId
-    && report.messageId);
 }
 
 function lookbackHoursFor(listings, now) {
@@ -60,41 +54,10 @@ async function storeMailStatus(store, status, message, now) {
 export function createImmoprofessionalImportReportService(options) {
   if (!options?.store?.load || !options?.store?.update) throw new Error("Dem Importberichtdienst fehlt der persistente Katalogspeicher.");
   if (!options?.uploadJobLedger?.read) throw new Error("Dem Importberichtdienst fehlt das persistente Uploadledger.");
-  if (!options?.mailAdapter?.findCandidates || !options?.mailAdapter?.readRawMessage || !options?.mailAdapter?.moveProcessedMessage) {
-    throw new Error("Dem Importberichtdienst fehlt der lokale Apple-Mail-Adapter.");
+  if (!options?.mailAdapter?.findCandidates || !options?.mailAdapter?.readRawMessage || options.mailAdapter.readOnly !== true) {
+    throw new Error("Dem Importberichtdienst fehlt der read-only Apple-Mail-Adapter.");
   }
   const writeLog = options.writeLog || (async () => undefined);
-
-  async function moveReportMail(report, candidate = null, now = new Date().toISOString()) {
-    const transportId = candidate?.transportId || report.mailTransportId;
-    const messageId = candidate?.messageId || report.messageId;
-    const moved = await options.mailAdapter.moveProcessedMessage({ transportId, messageId });
-    await options.store.update((state) => ({
-      state: markImportReportMailMovedInState(state, report.reportId, moved.folderName, { now }),
-    }), { now });
-    await writeLog("mail-moved", {
-      reportId: report.reportId,
-      externalObjectNumber: report.externalObjectNumber,
-      folderName: moved.folderName,
-      idempotent: moved.alreadyMoved === true,
-    });
-    return moved;
-  }
-
-  async function retryPendingMoves(state, now) {
-    const outcomes = [];
-    for (const report of pendingMailMoves(state)) {
-      try {
-        await moveReportMail(report, null, now);
-        outcomes.push({ reportId: report.reportId, moved: true });
-      } catch (error) {
-        const reason = safeReason(error);
-        await writeLog("mail-move-failed", { reportId: report.reportId, externalObjectNumber: report.externalObjectNumber, reason });
-        outcomes.push({ reportId: report.reportId, moved: false, reason });
-      }
-    }
-    return outcomes;
-  }
 
   async function processCandidate(candidate, now) {
     let mail;
@@ -107,10 +70,7 @@ export function createImmoprofessionalImportReportService(options) {
       const persisted = await options.store.update((state) => confirmImportReportInState(
         state,
         parsed,
-        {
-          ...mail,
-          receivedAt: metadata.receivedAt,
-        },
+        { ...mail, receivedAt: metadata.receivedAt },
         ledger,
         { now },
       ), { now });
@@ -130,22 +90,24 @@ export function createImmoprofessionalImportReportService(options) {
           externalObjectNumber: parsed.externalObjectNumber,
           processingStatus: result?.status || "rejected",
           reason,
+          mailboxName: candidate.mailboxName,
+          mailMutations: 0,
         });
-        return { status: result?.status || "rejected", moved: false, reason };
+        return { status: result?.status || "rejected", reason, mailMutations: 0 };
       }
       const report = result.report;
-      try {
-        await moveReportMail(report, { transportId: candidate.transportId, messageId: parsed.messageId }, now);
-        return { status: result.status, moved: true, reportId: report.reportId, externalObjectNumber: parsed.externalObjectNumber };
-      } catch (error) {
-        const reason = safeReason(error);
-        await writeLog("confirmation-saved-mail-move-failed", {
-          reportId: report.reportId,
-          externalObjectNumber: parsed.externalObjectNumber,
-          reason,
-        });
-        return { status: result.status, moved: false, reportId: report.reportId, externalObjectNumber: parsed.externalObjectNumber, reason };
-      }
+      await writeLog(result.status === "confirmed" ? "confirmed" : "deduplicated", {
+        reportId: report.reportId,
+        externalObjectNumber: parsed.externalObjectNumber,
+        mailboxName: candidate.mailboxName,
+        mailMutations: 0,
+      });
+      return {
+        status: result.status,
+        reportId: report.reportId,
+        externalObjectNumber: parsed.externalObjectNumber,
+        mailMutations: 0,
+      };
     } catch (error) {
       const reason = safeReason(error);
       if (mail) {
@@ -158,36 +120,54 @@ export function createImmoprofessionalImportReportService(options) {
           }, { now }),
         }), { now }).catch(() => undefined);
       }
-      await writeLog("rejected", { processingStatus: "review_required", reason });
-      return { status: "rejected", moved: false, reason };
+      await writeLog("rejected", {
+        processingStatus: "review_required",
+        reason,
+        mailboxName: candidate.mailboxName,
+        mailMutations: 0,
+      });
+      return { status: "rejected", reason, mailMutations: 0 };
     }
   }
 
   async function runOnce(input = {}) {
     const now = String(input.now || new Date().toISOString());
     const snapshot = await options.store.load();
-    if (!snapshot?.stored || !snapshot.state) return { ran: false, reason: "catalog-not-stored", processed: [] };
-    const retryResults = await retryPendingMoves(snapshot.state, now);
-    const refreshed = await options.store.load();
-    const pending = pendingImportListings(refreshed.state || snapshot.state);
+    if (!snapshot?.stored || !snapshot.state) return { ran: false, reason: "catalog-not-stored", processed: [], mailMutations: 0 };
+    const pending = pendingImportListings(snapshot.state);
     if (!pending.length) {
-      return { ran: retryResults.length > 0, reason: "no-pending-imports", pendingCount: 0, retriedMoves: retryResults, processed: [] };
+      return { ran: false, reason: "no-pending-imports", pendingCount: 0, processed: [], mailMutations: 0 };
     }
     let candidates;
     try {
       candidates = await options.mailAdapter.findCandidates({ lookbackHours: lookbackHoursFor(pending, now) });
     } catch (error) {
       const reason = safeReason(error);
-      await storeMailStatus(options.store, error?.code === "MAIL_IMPORT_REPORT_SETUP_REQUIRED" ? "setup_required" : "access_failed", reason, now).catch(() => undefined);
-      await writeLog("scan-failed", { pendingCount: pending.length, reason });
-      return { ran: true, reason, pendingCount: pending.length, setupRequired: error?.code === "MAIL_IMPORT_REPORT_SETUP_REQUIRED", processed: [] };
+      const setupRequired = error?.code === "MAIL_IMPORT_REPORT_SETUP_REQUIRED";
+      const message = setupRequired
+        ? "Importbericht-Ordner nicht verfügbar. Livinghaus / Inseratestudio – Importberichte muss serverseitig eindeutig vorhanden sein."
+        : reason;
+      await storeMailStatus(options.store, setupRequired ? "setup_required" : "access_failed", message, now).catch(() => undefined);
+      await writeLog("scan-failed", { pendingCount: pending.length, reason, setupRequired, mailMutations: 0 });
+      return { ran: true, reason, pendingCount: pending.length, setupRequired, processed: [], mailMutations: 0 };
     }
     const processed = [];
     for (const candidate of candidates) processed.push(await processCandidate(candidate, now));
     if (!candidates.length) {
-      await storeMailStatus(options.store, "waiting", "Offene Immoprofessional-Importbestätigung; noch kein passender Mailbericht gefunden.", now).catch(() => undefined);
+      await storeMailStatus(
+        options.store,
+        "waiting",
+        "Offene Immoprofessional-Importbestätigung; im dedizierten Importbericht-Ordner wurde noch kein passender Bericht gefunden.",
+        now,
+      ).catch(() => undefined);
     }
-    return { ran: true, pendingCount: pending.length, candidateCount: candidates.length, retriedMoves: retryResults, processed };
+    return {
+      ran: true,
+      pendingCount: pending.length,
+      candidateCount: candidates.length,
+      processed,
+      mailMutations: 0,
+    };
   }
 
   return { runOnce };

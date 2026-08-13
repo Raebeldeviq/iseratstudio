@@ -9,9 +9,15 @@ import { MAX_LISTING_GROUP_LOGS } from "./listing-rules.mjs";
 import { normalizeWorkflowStatus, WORKFLOW_STATUS } from "./workflow-status.mjs";
 
 export const IMPORT_REPORT_PROCESSING_STATUS = Object.freeze({
-  CONFIRMED_MOVE_PENDING: "confirmed_mail_move_pending",
   CONFIRMED: "confirmed",
   REVIEW_REQUIRED: "review_required",
+  // Read compatibility only. New reports never enter these historical states.
+  CONFIRMED_MOVE_PENDING: "confirmed_mail_move_pending",
+  CONFIRMED_MOVED: "confirmed_mail_moved",
+  MOVE_REQUESTED: "mail_move_requested",
+  MOVE_AMBIGUOUS: "mail_move_ambiguous",
+  MOVE_UNRESOLVED: "mail_move_unresolved",
+  MAIL_MOVE_MANUAL_REVIEW_REQUIRED: "mail_move_manual_review_required",
 });
 
 function text(value) {
@@ -99,10 +105,11 @@ function confirmationReport(parsed, mail, match, processedAt) {
     sourceListingId: match.source.id,
     projectId: match.project.id,
     parserVersion: parsed.parserVersion,
-    processingStatus: IMPORT_REPORT_PROCESSING_STATUS.CONFIRMED_MOVE_PENDING,
+    processingStatus: IMPORT_REPORT_PROCESSING_STATUS.CONFIRMED,
     mailAccount: text(mail.accountName),
+    mailAccountId: text(mail.accountId),
     mailTransportId: text(mail.transportId),
-    mailFolderAfterProcessing: text(mail.mailboxName || "INBOX"),
+    mailSourceFolder: text(mail.mailboxName),
   };
 }
 
@@ -234,10 +241,11 @@ export function confirmImportReportInState(state, parsed, mail, uploadLedger, op
     ...state,
     importReports: [...(state.importReports || []), report].slice(-1000),
     mailImportReportStatus: {
-      status: "confirmation_saved_mail_move_pending",
-      message: `Import für ${publishedCopy.externalId} bestätigt; Mailverschiebung ausstehend.`,
+      status: "confirmed",
+      message: `Import bestätigt · ${publishedCopy.externalId} · Immoprofessional erfolgreich importiert.`,
       updatedAt: processedAt,
       externalObjectNumber: publishedCopy.externalId,
+      reportId: report.reportId,
     },
   }, project);
   return {
@@ -249,27 +257,6 @@ export function confirmImportReportInState(state, parsed, mail, uploadLedger, op
       sourceListingId: replacedSource.id,
       matchedUploadJobId: match.uploadJobId,
       nextUpdateAt,
-    },
-  };
-}
-
-export function markImportReportMailMovedInState(state, reportId, folderName, options = {}) {
-  const timestamp = text(options.now || new Date().toISOString());
-  const reports = (state.importReports || []).map((report) => report.reportId === reportId ? {
-    ...report,
-    processingStatus: IMPORT_REPORT_PROCESSING_STATUS.CONFIRMED,
-    mailFolderAfterProcessing: text(folderName),
-    mailMovedAt: timestamp,
-  } : report);
-  if (!reports.some((report, index) => report !== (state.importReports || [])[index])) return state;
-  return {
-    ...state,
-    importReports: reports,
-    mailImportReportStatus: {
-      status: "confirmed",
-      message: "Immoprofessional-Import bestätigt und Berichtsmail abgelegt.",
-      updatedAt: timestamp,
-      reportId,
     },
   };
 }

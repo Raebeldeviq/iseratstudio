@@ -3699,7 +3699,7 @@ export default function InseratStudio() {
               <button className="secondary" onClick={prepareGlobalDailyRun}>Fälligen Tageslauf vorbereiten</button>
             </div>
             <p className="security-note">Sicherheitsgrenze: Der Helper erstellt und überträgt fällige Rotationskopien automatisch. Ein FTPS-Erfolg bleibt „Importbestätigung ausstehend“; erst ein separates bestätigtes Importereignis wird „Veröffentlicht“. Automatisches und externes Löschen bleibt vollständig deaktiviert.</p>
-            {state.mailImportReportStatus && ["review_required", "setup_required", "access_failed"].includes(state.mailImportReportStatus.status) ? <p className="validation-error"><b>Importbericht prüfen</b><br />{state.mailImportReportStatus.message}</p> : null}
+            {state.mailImportReportStatus && ["review_required", "setup_required", "access_failed", "mail_move_manual_review_required"].includes(state.mailImportReportStatus.status) ? <p className="validation-error"><b>{state.mailImportReportStatus.status === "setup_required" ? "Importbericht-Ordner nicht verfügbar" : "Importbericht prüfen"}</b><br />{state.mailImportReportStatus.message}</p> : null}
           </div>
 
           <div className="content-card manager-list-card">

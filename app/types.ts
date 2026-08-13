@@ -478,10 +478,20 @@ export type ImportReportRecord = {
   sourceListingId: string;
   projectId: string;
   parserVersion: string;
-  processingStatus: "confirmed_mail_move_pending" | "confirmed";
+  processingStatus:
+    | "confirmed"
+    | "confirmed_mail_move_pending"
+    | "confirmed_mail_moved"
+    | "mail_move_requested"
+    | "mail_move_ambiguous"
+    | "mail_move_unresolved"
+    | "mail_move_manual_review_required";
   mailAccount: string;
+  mailAccountId?: string;
   mailTransportId: string;
-  mailFolderAfterProcessing: string;
+  mailSourceFolder?: string;
+  /** Historical read compatibility; new reports do not have a mail post-state. */
+  mailFolderAfterProcessing?: string;
   mailMovedAt?: string;
 };
 

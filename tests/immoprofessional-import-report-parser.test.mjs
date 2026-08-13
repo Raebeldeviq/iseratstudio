@@ -28,6 +28,7 @@ test("parses the strict real-world single-object success contract and prefers pl
 });
 
 for (const [label, from, to, expected] of [
+  ["wrong subject", "Subject: Importbericht OpenImmo XML", "Subject: Allgemeiner Importhinweis", /Mailbetreff/u],
   ["wrong sender software", "Sendersoftware: Fabian&Pascal Inseratestudio", "Sendersoftware: Fremdsystem", /Sendersoftware/u],
   ["wrong provider", "Anbieter-ID: 30460", "Anbieter-ID: 99999", /Anbieter-ID/u],
   ["batch import", "Anzahl Objekte: 1", "Anzahl Objekte: 2", /Einzelobjekt/u],

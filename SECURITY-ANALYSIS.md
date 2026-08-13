@@ -101,14 +101,17 @@ werden lokal dedupliziert. Unbekannte Formate, fehlende Account-Eindeutigkeit,
 Katalogkonflikte und mehrdeutige Listings bleiben geschlossen und sichtbar im
 Posteingang.
 
-### Mittel: Mail wurde vor gesicherter Katalogmutation abgelegt
+### Niedrig: Mailmutation war für die Importbestätigung unnötig privilegiert
 
-Der Helper speichert Reportbeleg, Statuswechsel und Scheduler-Handover zuerst
-gemeinsam über den vorhandenen Katalog-CAS. Erst nach bestätigter Persistenz wird
-genau die validierte Mail in den direkten serverseitigen Livinghaus-Ordner
-`Inseratestudio – Importberichte` verschoben. Schlägt die Verschiebung fehl,
-wird nur diese ausstehende Ablage idempotent wiederholt. Andere Mails,
-lokale „Auf meinem Mac“-Ordner und externe Löschpfade werden nicht verwendet.
+Die Ablage erfolgt jetzt vor dem Inseratestudio serverseitig über eine
+Outlook-/Exchange-Regel. Der Helper liest ausschließlich den eindeutig
+aufgelösten Ordner `Livinghaus / Inseratestudio – Importberichte`. Sein Adapter
+bietet keine Move-, Delete-, Copy-, Read-, Flag-, Kategorie-, Ordneranlage-
+oder Rename-Funktion an. Dadurch benötigt dieser Workflow keine
+Mail-Schreibfähigkeit mehr. Account- oder Ordnermehrdeutigkeit, ein lokaler
+gleichnamiger Ordner und ein fehlender Serverordner stoppen fail-closed. Der
+atomare Katalog-CAS für Reportbeleg, Statuswechsel und Scheduler-Handover bleibt
+unverändert bestehen.
 
 ## Verbleibende Risiken und Grenzen
 
@@ -146,9 +149,11 @@ lokale „Auf meinem Mac“-Ordner und externe Löschpfade werden nicht verwende
     Zertifikat technisch bestätigt. Eine spätere Servermigration durch
     Immoprofessional erfordert eine erneute Prüfung des offiziell zugewiesenen
    Hostnamens.
-11. Apple Mail benötigt auf macOS eine lokale Automationsberechtigung. Fehlt sie
-    oder ist der Accountname nicht eindeutig, bleibt der Bericht im Posteingang
-    und kein Listing wird bestätigt.
+11. Apple Mail benötigt auf macOS eine lokale read-only
+    Automationsberechtigung. Fehlt sie oder sind Account bzw. serverseitiger
+    Importberichtordner nicht eindeutig auflösbar, bleibt die Rotationskopie
+    `transferred_pending_import`. Der Helper versucht weder einen lokalen
+    Ersatzordner noch einen Inbox-Fallback oder eine Mailmutation.
 
 ## Abhängigkeitsprüfung
 

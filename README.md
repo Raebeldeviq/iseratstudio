@@ -329,7 +329,7 @@ node listing-rotation-mode-cli.mjs set --mode active
 Das CLI ändert ausschließlich die persistente Modusdatei. Es startet den
 Helper nicht und führt selbst weder Rotation noch FTPS-Transfer aus.
 
-### Immoprofessional-Importbestätigung aus Apple Mail
+### Immoprofessional-Importbestätigung aus dem serverseitigen Berichtordner
 
 Der lokale Background-Helper schließt die zweite Veröffentlichungsstufe über
 den echten Immoprofessional-Mailbericht. Stufe 1 ist ausschließlich der
@@ -338,15 +338,37 @@ erfolgreiche FTPS-Transfer; die Rotationskopie bleibt dabei
 `OK: Erfolgreich importiert` mit genau einer konkreten Objektnummer. Erst dann
 wird diese Kopie `published`.
 
-Der Zugriff verwendet ohne neue Zugangsdaten ausschließlich den vorhandenen
-Apple-Mail-Account `Livinghaus` beziehungsweise den lokalen Zuordnungsnamen aus
-`FPI_IMPORT_REPORT_MAIL_ACCOUNT`. Gesucht wird nur im eindeutig aufgelösten
-direkten Posteingang (`Posteingang` oder `INBOX`) dieses Accounts, nur nach dem
-exakten Betreff `Importbericht OpenImmo XML` und nur in einem auf offene
-Transfers begrenzten Lookback. Gibt es keine offene
-`transferred_pending_import`-Kopie, wird das Postfach nicht durchsucht. Solange
-eine Bestätigung offen ist, prüft der Helper moderat alle fünf Minuten; ein
-Helper-Neustart führt denselben idempotenten Check aus.
+Die Mailablage übernimmt eine Outlook-/Exchange-Regel auf dem Server:
+
+```text
+Betreff enthält: Importbericht OpenImmo XML
+Zielordner:       Inseratestudio – Importberichte
+```
+
+Das Inseratestudio liest danach ausschließlich den direkten Ordner
+`Livinghaus / Inseratestudio – Importberichte`. Die lokalen Selektoren können
+ohne Zugangsdaten gesetzt werden:
+
+```bash
+FPI_IMPORT_REPORT_MAIL_ACCOUNT="Livinghaus"
+FPI_IMPORT_REPORT_MAILBOX="Inseratestudio – Importberichte"
+```
+
+Der Accountname muss genau einmal vorkommen; der von Apple Mail für Exchange
+gemeldete Typ `unknown` ist allein kein Ablehnungsgrund. Der Ordner muss exakt
+einmal direkt in dieser Accounthierarchie vorhanden sein. Ein gleichnamiger
+Ordner unter „Auf meinem Mac“ oder einem anderen Account wird nicht verwendet.
+Fehlende oder mehrdeutige Account-/Ordnerauflösung stoppt mit
+**Importbericht-Ordner nicht verfügbar**. Das Inseratestudio legt den Ordner
+nicht selbst an und besitzt in diesem Workflow keinerlei Mailmutation: kein
+Verschieben, Löschen, Kopieren, Gelesen-Markieren, Markieren, Kategorisieren,
+Anlegen oder Umbenennen.
+
+Gesucht wird nur nach dem exakten Betreff und in einem auf offene Transfers
+begrenzten Lookback. Gibt es keine offene `transferred_pending_import`-Kopie,
+wird Apple Mail nicht angesprochen. Solange eine Bestätigung offen ist, prüft
+der Helper moderat alle fünf Minuten; ein Helper-Neustart führt denselben
+idempotenten read-only Check aus. Es gibt keinen automatischen Inbox-Fallback.
 
 Vertrauenswürdig ist ein Bericht nur mit dem konfigurierten
 Immoprofessional-Host in Message-ID oder SMTP-Received-Kette und vorhandenem
@@ -360,11 +382,24 @@ fail-closed mit dem sichtbaren Hinweis **Importbericht prüfen**.
 Die externe Objektnummer muss genau einer offenen Rotationskopie, deren Quelle
 und einem abgeschlossenen deterministischen Uploadjob im persistenten Ledger
 entsprechen. Reportbeleg, Kopiestatus und Scheduler-Handover werden gemeinsam
-per Katalog-CAS gespeichert. Erst danach verschiebt Apple Mail genau diese Mail
-in den serverseitigen Accountordner `Inseratestudio – Importberichte`. Bei einem
-Mailfehler bleibt die bereits atomar bestätigte Veröffentlichung erhalten und
-die einzelne Verschiebung wird idempotent nachgeholt. Message-ID und SHA-256 des
-Raw-Inhalts verhindern eine zweite fachliche Mutation.
+per Katalog-CAS gespeichert. Neue Belege enden direkt im Status `confirmed`;
+die Mail bleibt unverändert im serverseitig gepflegten Ordner. Message-ID und
+SHA-256 des Raw-Inhalts verhindern eine zweite fachliche Mutation. Historische
+`confirmed_mail_move_pending`- und `mail_move_manual_review_required`-Belege
+bleiben ohne Migration lesbar und lösen keine erneute Mailaktion aus.
+
+Der vollständige Datenfluss lautet:
+
+```text
+Immoprofessional
+→ E-Mail
+→ Outlook-/Exchange-Regel
+→ Inseratestudio – Importberichte
+→ lokaler Helper (read-only)
+→ strikter Parser
+→ eindeutige Objektnummer und Uploadbeleg
+→ atomare Importbestätigung
+```
 
 Nach der Bestätigung übernimmt die neue Kopie die automatische Rotation mit dem
 bestätigten Immoprofessional-Importzeitpunkt und dem regulär berechneten nächsten
