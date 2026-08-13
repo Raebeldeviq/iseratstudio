@@ -125,9 +125,13 @@ Auch ein späterer erfolgreicher Delete-Transport wäre keine fachliche
 Bestätigung. Die Identität muss vor jedem Auftrag hart geprüft werden:
 Delete-Nummer gleich Quellnummer, Delete-Nummer ungleich Replacementnummer und
 unterschiedliche interne Listing-IDs. Eine Verletzung muss vor Payload oder
-Transport mit `DELETE_REPLACEMENT_GUARD_VIOLATION` stoppen. Der aktuell
-unbestätigte Immoprofessional-Delete- und Rückkanal ist in
-`IMMOPROFESSIONAL_DELETE_CONTRACT.md` dokumentiert; produktive Löschung bleibt
+Transport mit `DELETE_REPLACEMENT_GUARD_VIOLATION` stoppen. Der isolierte
+Einzel-Canary `30460-287191` und sein eindeutiger positiver Immoprofessional-
+Löschbericht sind in `IMMOPROFESSIONAL_DELETE_CONTRACT.md` dokumentiert. Die
+Bestätigung verlangt exakte Objektkorrelation, Einzelobjektanzahl, freigegebene
+Sender-/Anbieterkennung, vertrauenswürdigen server22-Transport, `SPF=pass`,
+positiven Löschstatus sowie Message-ID-/Raw-Hash-Idempotenz. FTPS-Erfolg,
+Zeitablauf oder fehlender Fehler bleiben unzureichend; produktive Löschung bleibt
 deaktiviert.
 
 ## Verbleibende Risiken und Grenzen

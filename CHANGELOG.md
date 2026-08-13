@@ -1,5 +1,44 @@
 # Änderungsprotokoll
 
+## Unreleased · Reale Immoprofessional-Delete-Bestätigung – 13. August 2026
+
+### Report
+
+- Genau einen ausdrücklich autorisierten OpenImmo-DELETE-Canary für
+  `30460-287191` über den bestehenden expliziten FTPS-Kanal übertragen: ein
+  Objekt, ein DELETE, 794 Bytes, kein Retry und keine weitere externe Mutation.
+- Den separaten Delete-Modus unmittelbar danach auf `off` zurückgesetzt; ein
+  `active`-Modus, Batch-Delete, Scheduleranschluss oder automatische
+  Altinseratlöschung wurde nicht ergänzt.
+- Den echten Immoprofessional-Löschbericht im read-only Berichtordner
+  beweisgesichert und einen engen Einzelobjektparser ergänzt. Bestätigt wird nur
+  bei gültigem server22-Transport, `SPF=pass`, exakter Anbieter-/Senderkennung,
+  Objektanzahl eins, exakter Nummer `30460-287191`, eindeutigem Status
+  `Erfolgreich gelöscht` und konsistenten Börsen-Löschzeilen.
+- Den eigenen Delete-Job idempotent von `delete_pending_confirmation` auf
+  `delete_confirmed` überführbar gemacht. Message-ID und Raw-Hash binden den
+  Beleg; ein abweichender Zweitbericht stoppt als Konflikt.
+- Synthetische Parser-, Ziel-, Transport-, Warnungs-, Fehler-, Deduplizierungs-
+  und CLI-Tests ergänzt. Die echte `.eml` bleibt außerhalb des Repositories.
+
+### Begründung
+
+Der reale Providerbericht bestätigt erstmals den konkreten
+Immoprofessional-Vertrag aus `TEIL` + `modus="DELETE"` + objektbezogenem
+`aktionart="DELETE"`. Die Bestätigung bleibt absichtlich vom FTPS-Erfolg
+getrennt und ist an genau einen bereits übertragenen Canary-Job gebunden.
+
+### Hürden und Risiken
+
+- Apple Mail lieferte im beweisgesicherten Raw-Quelltext die Umlaute der
+  Löschzeilen doppelt UTF-8-kodiert. Der Parser normalisiert ausschließlich die
+  real beobachteten Sequenzen vor der weiterhin exakten Statusprüfung.
+- Eine read-only Portalbestätigung war mangels autorisierter Sitzung nicht
+  möglich. Es wurde weder ein Login noch eine Portalaktion versucht.
+- Der bestätigte Einzelvertrag darf nicht als Freigabe einer allgemeinen
+  Löschautomation ausgelegt werden. Eligibility und Source-/Replacement-
+  Vertrag für einen späteren Produktionspfad bleiben ein separater Auftrag.
+
 ## Unreleased · Immoprofessional Delete Contract Discovery – 13. August 2026
 
 ### Report

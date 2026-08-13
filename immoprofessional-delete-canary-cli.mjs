@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -10,11 +11,13 @@ import { loadCatalogManifest } from "./catalog-store.mjs";
 import { loadCredentialVault } from "./credential-vault.mjs";
 import {
   createDeleteCanaryLedger,
+  createDeleteCanaryJobIdentity,
   createDeleteCanaryModeStore,
   DELETE_CANARY_TARGET,
   executeDeleteCanary,
   prepareDeleteCanary,
 } from "./immoprofessional-delete-canary.mjs";
+import { parseImmoprofessionalDeleteReport } from "./immoprofessional-delete-report-parser.mjs";
 import { APPLICATION_DATA_DIRECTORY } from "./platform-paths.mjs";
 import { createStructuredFileLogger } from "./structured-log.mjs";
 
@@ -30,6 +33,7 @@ function parseArguments(argv) {
     externalObjectNumbers: [],
     authorizedTarget: "",
     schemaPath: "",
+    reportPath: "",
   };
   for (let index = 0; index < rest.length; index += 1) {
     const argument = rest[index];
@@ -37,6 +41,7 @@ function parseArguments(argv) {
     else if (argument === "--external-id") values.externalObjectNumbers.push(String(rest[++index] || ""));
     else if (argument === "--authorized-external-id") values.authorizedTarget = String(rest[++index] || "");
     else if (argument === "--schema") values.schemaPath = String(rest[++index] || "");
+    else if (argument === "--report") values.reportPath = String(rest[++index] || "");
     else throw new Error(`Unbekanntes Argument: ${argument}`);
   }
   return values;
@@ -117,6 +122,53 @@ export async function runDeleteCanaryCli(argv, options = {}) {
     const mode = parsed.mode.trim().toLowerCase();
     return modeStore.save({ mode, externalObjectNumbers: parsed.externalObjectNumbers });
   }
+  if (parsed.command === "confirm-report") {
+    if (parsed.externalObjectNumbers.length !== 1) throw new Error("Für die Delete-Bestätigung ist exakt ein --external-id erforderlich.");
+    if (!parsed.reportPath) throw new Error("Für die Delete-Bestätigung ist --report mit der beweisgesicherten Raw-Mail erforderlich.");
+    const mode = await modeStore.load();
+    if (mode.mode !== "off" || mode.externalObjectNumbers.length !== 0) {
+      throw new Error("Die Löschbestätigung darf nur im fail-closed Betriebsmodus off verarbeitet werden.");
+    }
+    const rawReport = options.readReport
+      ? await options.readReport(parsed.reportPath)
+      : await readFile(parsed.reportPath);
+    const report = parseImmoprofessionalDeleteReport(rawReport, {
+      expectedTarget: parsed.externalObjectNumbers[0],
+    });
+    const identity = createDeleteCanaryJobIdentity(report.externalObjectNumber);
+    const job = await ledger.confirm(identity.deleteJobId, {
+      externalObjectNumber: report.externalObjectNumber,
+      providerReportMessageId: report.messageId,
+      providerReportHash: report.rawHash,
+      providerResult: report.deleteResult,
+      providerProcessedAt: report.providerProcessedAt,
+    }, options.now?.());
+    await writeLog("confirmed", {
+      deleteJobId: identity.deleteJobId,
+      externalObjectNumber: report.externalObjectNumber,
+      providerReportMessageId: report.messageId,
+      providerReportHash: report.rawHash,
+      providerProcessedAt: report.providerProcessedAt,
+      providerResult: report.deleteResult,
+      status: job.status,
+      message: "Eindeutiger Immoprofessional-Löschbericht dem einzelnen Canary-Deletejob zugeordnet.",
+    });
+    return {
+      ok: true,
+      job: publicJob(job),
+      report: {
+        subject: report.subject,
+        messageId: report.messageId,
+        rawHash: report.rawHash,
+        providerProcessedAt: report.providerProcessedAt,
+        externalObjectNumber: report.externalObjectNumber,
+        deleteResult: report.deleteResult,
+        statusLine: report.statusLine,
+        deletedFromExchanges: report.deletedFromExchanges,
+        parserVersion: report.parserVersion,
+      },
+    };
+  }
   if (!parsed.schemaPath) throw new Error("Für preflight und transfer ist --schema mit dem offiziellen OpenImmo-XSD erforderlich.");
   if (parsed.externalObjectNumbers.length !== 1) throw new Error("Für den Delete-Canary ist exakt ein --external-id erforderlich.");
   const catalog = options.catalog || await loadCatalogManifest();
@@ -148,7 +200,7 @@ export async function runDeleteCanaryCli(argv, options = {}) {
     });
     return { ok: true, preflight: result.preflight, localListingId: result.snapshot.sourceListingId };
   }
-  if (parsed.command !== "transfer") throw new Error("Erlaubte Befehle: status, mode, preflight oder transfer.");
+  if (parsed.command !== "transfer") throw new Error("Erlaubte Befehle: status, mode, preflight, transfer oder confirm-report.");
   if (!credentials.ftpHost || !credentials.ftpUser || !credentials.ftpPassword) {
     throw new Error("Der bestehende Immoprofessional-FTPS-Zugang ist unvollständig.");
   }

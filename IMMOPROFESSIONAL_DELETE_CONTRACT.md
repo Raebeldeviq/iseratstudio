@@ -1,7 +1,63 @@
 # Immoprofessional Delete Contract Discovery
 
 Stand: 13. August 2026
-Status: Discovery abgeschlossen, produktiver Delete-Vertrag noch nicht bestätigt
+Status: Einzel-Canary bestätigt; allgemeine automatische Löschung bleibt deaktiviert
+
+## 0. Immoprofessional real beobachtet: Einzel-Canary 30460-287191
+
+Am 13. August 2026 wurde mit ausdrücklicher Einzelfreigabe genau ein
+schema-valides OpenImmo-DELETE für `30460-287191` übertragen. Die reale,
+akzeptierte Payload besaß:
+
+- OpenImmo `1.2.7`, Anbieter-ID `30460`;
+- `uebertragung/@umfang="TEIL"` und `modus="DELETE"`;
+- genau ein `immobilie`-Element und genau eine Aktion
+  `aktionart="DELETE"`;
+- `objektnr_extern`, `openimmo_obid` und `kennung_ursprung` jeweils exakt
+  `30460-287191`;
+- ZIP-Datei `delete-30460-287191-20260813T162619Z.zip`, 794 Bytes;
+- SHA-256
+  `695ee1968658b11e8829b1187bf8a0590cc50ccb059a7919e030d8c3245ef7d3`.
+
+Der explizite FTPS-Transfer an den bestehenden Immoprofessional-Kanal begann
+um `2026-08-13T16:26:19.337Z` und endete um
+`2026-08-13T16:26:20.084Z`. Es wurde genau ein Paket übertragen, ohne Retry.
+
+### Realer Providerbericht
+
+Der serverseitig verwaltete Ordner
+`Livinghaus / Inseratestudio – Importberichte` erhielt den echten Bericht mit
+Betreff `Importbericht OpenImmo XML`. Transportherkunft und SPF waren gültig;
+der beweisgesicherte Raw-Inhalt besitzt SHA-256
+`587b300529571578a25595f977b3855599b6c7fdf69cac304c1b551011eefdbb`.
+Der Plaintext nennt:
+
+- Verarbeitungszeitpunkt `13.08.2026 18:26` Europe/Berlin;
+- Sendersoftware `Fabian&Pascal Inseratestudio`;
+- Objektanzahl `1`, Anbieter-ID `30460`;
+- `OK: Objekt-Nr.: "30460-287191"`;
+- Status `Erfolgreich gelöscht -`;
+- explizite Löschungen aus Immobilienscout24, Immowelt,
+  `www.livinghaus.de` und Ebay-Kleinanzeigen;
+- keine Fehler und keine Warnung.
+
+Die Providerreaktion ist damit Klassifikation **A**. Ein enger Parser akzeptiert
+nur diesen positiven Einzelobjektvertrag mit exakter Canary-Nummer, gültigem
+server22-Transport, `SPF=pass`, freigegebener Sendersoftware und Anbieter-ID.
+Message-ID und Raw-Hash werden idempotent im separaten Delete-Ledger gebunden.
+FTPS-Erfolg, Zeitablauf oder das Fehlen eines Fehlers reichen weiterhin nicht.
+
+Eine read-only Portalprüfung war nicht möglich: Der vorhandene Browser besaß
+keine autorisierte Immoprofessional-Sitzung und führte nur auf den Plesk-Login.
+Es wurde kein Login versucht und keine Portalmutation ausgeführt. Der eindeutige
+Providerbericht ist deshalb der maschinelle Löschbeleg; es wird keine zusätzliche
+Portalbeobachtung behauptet.
+
+Ergebnis des Einzelvertrags:
+`DELETE_CONTRACT_CONFIRMED_WITH_MACHINE_CONFIRMATION`. Das bedeutet nicht,
+dass eine allgemeine Delete-Automatik aktiviert ist. Der separate Betriebsmodus
+steht wieder auf `off`, unterstützt kein `active`, und jedes Ziel außer
+`30460-287191` bleibt hart blockiert.
 
 ## 1. Ausgangslage
 

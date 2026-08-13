@@ -139,7 +139,7 @@ function htmlToText(value) {
     .trim();
 }
 
-function zonedLocalToIso(parts, timeZone = "Europe/Berlin") {
+export function zonedLocalToIso(parts, timeZone = "Europe/Berlin") {
   const wanted = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, 0);
   let candidate = wanted;
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -213,7 +213,7 @@ function validateTransport(headers, trustedHost) {
   return { messageId, messageIdDomain, receivedTrusted, spfPassed, trustedHost: normalizedHost };
 }
 
-export function parseImmoprofessionalImportReport(rawValue, options = {}) {
+export function extractImmoprofessionalReportEnvelope(rawValue, options = {}) {
   const raw = Buffer.isBuffer(rawValue) ? rawValue : Buffer.from(String(rawValue ?? ""), "utf8");
   if (!raw.length) throw new Error("Die Raw-Mail ist leer.");
   const rawText = raw.toString("utf8");
@@ -226,17 +226,29 @@ export function parseImmoprofessionalImportReport(rawValue, options = {}) {
   const bodySource = mime.plain ? "text/plain" : mime.html ? "text/html" : "";
   if (!bodySource) throw new Error("Die Mail enthält keinen auswertbaren Plaintext- oder HTML-Teil.");
   const bodyText = mime.plain || htmlToText(mime.html);
-  const fields = parseReportBody(bodyText);
+  return {
+    subject,
+    messageId: transport.messageId,
+    rawHash: createHash("sha256").update(raw).digest("hex"),
+    bodySource,
+    bodyText,
+    transport,
+  };
+}
+
+export function parseImmoprofessionalImportReport(rawValue, options = {}) {
+  const envelope = extractImmoprofessionalReportEnvelope(rawValue, options);
+  const fields = parseReportBody(envelope.bodyText);
   if (fields.senderSoftware !== IMMOPROFESSIONAL_IMPORT_REPORT_SENDER) throw new Error("Die Sendersoftware ist nicht freigegeben.");
   if (fields.providerId !== IMMOPROFESSIONAL_IMPORT_REPORT_PROVIDER_ID) throw new Error("Die Anbieter-ID ist nicht freigegeben.");
   if (fields.objectCount !== 1) throw new Error("Nur ein bestätigter Einzelobjekt-Import darf automatisch verarbeitet werden.");
   return {
     ...fields,
-    subject,
-    messageId: transport.messageId,
-    rawHash: createHash("sha256").update(raw).digest("hex"),
-    bodySource,
-    transport,
+    subject: envelope.subject,
+    messageId: envelope.messageId,
+    rawHash: envelope.rawHash,
+    bodySource: envelope.bodySource,
+    transport: envelope.transport,
     parserVersion: IMMOPROFESSIONAL_IMPORT_REPORT_PARSER_VERSION,
   };
 }

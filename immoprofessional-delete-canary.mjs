@@ -586,6 +586,45 @@ export function createDeleteCanaryLedger(path, options = {}) {
         return { changed: true, ledger: replaceJob(ledger, job), value: job };
       }, nowValue);
     },
+    confirm(jobId, input = {}, nowValue) {
+      return mutate((ledger, now) => {
+        const current = findJob(ledger, jobId);
+        const target = assertAuthorizedDeleteTarget(input.externalObjectNumber);
+        const messageId = clean(input.providerReportMessageId, 500);
+        const reportHash = clean(input.providerReportHash, 128).toLowerCase();
+        const providerResult = clean(input.providerResult, 80).toLowerCase();
+        if (current.externalObjectNumber !== target) {
+          throw canaryError("DELETE_CONFIRMATION_TARGET_MISMATCH", "Der Löschbericht gehört nicht zum offenen Canary-Deletejob.");
+        }
+        if (!messageId || !/^[a-f0-9]{64}$/u.test(reportHash) || providerResult !== "success") {
+          throw canaryError("DELETE_CONFIRMATION_INVALID", "Der Löschbericht erfüllt den positiven Bestätigungsvertrag nicht.");
+        }
+        if (current.status === DELETE_CANARY_STATUS.CONFIRMED) {
+          if (
+            current.providerReportMessageId === messageId
+            && current.providerReportHash === reportHash
+            && current.providerResult === providerResult
+          ) return { changed: false, ledger, value: current };
+          throw canaryError("DELETE_CONFIRMATION_AMBIGUOUS", "Der bereits bestätigte Deletejob erhielt einen abweichenden Bericht.");
+        }
+        if (current.status !== DELETE_CANARY_STATUS.PENDING_CONFIRMATION) {
+          throw canaryError("DELETE_JOB_STATUS_INVALID", "Nur ein auf Providerbestätigung wartender Deletejob darf bestätigt werden.");
+        }
+        const job = {
+          ...current,
+          status: DELETE_CANARY_STATUS.CONFIRMED,
+          confirmationReceivedAt: now,
+          updatedAt: now,
+          providerReportMessageId: messageId,
+          providerReportHash: reportHash,
+          providerResult,
+          providerProcessedAt: clean(input.providerProcessedAt, 50),
+          errorCode: "",
+          message: "Immoprofessional hat die erfolgreiche Löschung des exakten Canary-Objekts maschinell bestätigt.",
+        };
+        return { changed: true, ledger: replaceJob(ledger, job), value: job };
+      }, nowValue);
+    },
     markTransferFailed(jobId, input = {}, nowValue) {
       return mutate((ledger, now) => {
         const current = findJob(ledger, jobId);
