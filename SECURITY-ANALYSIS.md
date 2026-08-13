@@ -90,10 +90,32 @@ Mehrdeutige, widersprüchliche oder unbekannte Kennungen führen zu keiner
 automatischen Preisänderung. Der erkannte Listenpreis bleibt in der Hausmaske
 sichtbar und kann nach manuellen Änderungen gezielt wiederhergestellt werden.
 
+### Hoch: FTPS-Erfolg wurde mit externer Veröffentlichung verwechselt
+
+Ein erfolgreicher FTPS-Transfer bleibt jetzt strikt
+`transferred_pending_import`. Nur ein authentifizierter Apple-Mail-Bericht mit
+exaktem Betreff, vertrauenswürdigem Immoprofessional-Transport, `SPF=pass`,
+bekanntem Einzelobjektformat und eindeutiger Objektnummer-/Uploadjob-Zuordnung
+darf die Rotationskopie atomar auf `published` setzen. Message-ID und Raw-Hash
+werden lokal dedupliziert. Unbekannte Formate, fehlende Account-Eindeutigkeit,
+Katalogkonflikte und mehrdeutige Listings bleiben geschlossen und sichtbar im
+Posteingang.
+
+### Mittel: Mail wurde vor gesicherter Katalogmutation abgelegt
+
+Der Helper speichert Reportbeleg, Statuswechsel und Scheduler-Handover zuerst
+gemeinsam über den vorhandenen Katalog-CAS. Erst nach bestätigter Persistenz wird
+genau die validierte Mail in den direkten serverseitigen Livinghaus-Ordner
+`Inseratestudio – Importberichte` verschoben. Schlägt die Verschiebung fehl,
+wird nur diese ausstehende Ablage idempotent wiederholt. Andere Mails,
+lokale „Auf meinem Mac“-Ordner und externe Löschpfade werden nicht verwendet.
+
 ## Verbleibende Risiken und Grenzen
 
-1. Die App kann den Immoprofessional-Importbericht nicht automatisiert abrufen,
-   solange keine dokumentierte Status-API oder Rückkanal-Konfiguration vorliegt.
+1. Der automatische Parser kennt bislang ausschließlich den real beobachteten
+   erfolgreichen Einzelobjektbericht. Unbekannte Fehlerberichte, Batchberichte
+   oder ein später geändertes Mailformat erfordern einen separat geprüften
+   Parservertrag und bleiben bis dahin fail-closed.
 2. Der Klartext-FTP-Modus bleibt aus Kompatibilitätsgründen vorhanden. Er sollte
    nur verwendet werden, wenn der Anbieter nachweislich kein FTPS unterstützt.
 3. Ein vom Anbieter verlangtes Client-Zertifikat ist nicht konfiguriert. Die
@@ -123,7 +145,10 @@ sichtbar und kann nach manuellen Änderungen gezielt wiederhergestellt werden.
 10. Der FTPS-Servername wurde über DNS, Reverse-DNS und das ausgelieferte
     Zertifikat technisch bestätigt. Eine spätere Servermigration durch
     Immoprofessional erfordert eine erneute Prüfung des offiziell zugewiesenen
-    Hostnamens.
+   Hostnamens.
+11. Apple Mail benötigt auf macOS eine lokale Automationsberechtigung. Fehlt sie
+    oder ist der Accountname nicht eindeutig, bleibt der Bericht im Posteingang
+    und kein Listing wird bestätigt.
 
 ## Abhängigkeitsprüfung
 

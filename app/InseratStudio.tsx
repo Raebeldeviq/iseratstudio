@@ -868,8 +868,8 @@ export default function InseratStudio() {
           if (cancelled || !snapshot || snapshot.savedAt !== data.catalogSavedAt) return;
           knownDeviceCatalogSavedAt = snapshot.savedAt;
           const loaded = normalizeMandatoryListingStandards(normalizeProjectOwners(snapshot.state));
-          setState(loaded);
-          setSelectedPlotIds((ids) => ids.filter((id) => (loaded.plots || []).some((plot) => plot.id === id && plot.isActive !== false)));
+          const activeLoadedPlotIds = new Set((loaded.plots || []).filter((plot) => plot.isActive !== false).map((plot) => plot.id));
+          setState({ ...loaded, selectedPlotIds: (loaded.selectedPlotIds || []).filter((id) => activeLoadedPlotIds.has(id)) });
           setNotice("Der automatische Grundstücksabgleich wurde in die geöffnete App übernommen.");
         }
       } catch {
@@ -3699,6 +3699,7 @@ export default function InseratStudio() {
               <button className="secondary" onClick={prepareGlobalDailyRun}>Fälligen Tageslauf vorbereiten</button>
             </div>
             <p className="security-note">Sicherheitsgrenze: Der Helper erstellt und überträgt fällige Rotationskopien automatisch. Ein FTPS-Erfolg bleibt „Importbestätigung ausstehend“; erst ein separates bestätigtes Importereignis wird „Veröffentlicht“. Automatisches und externes Löschen bleibt vollständig deaktiviert.</p>
+            {state.mailImportReportStatus && ["review_required", "setup_required", "access_failed"].includes(state.mailImportReportStatus.status) ? <p className="validation-error"><b>Importbericht prüfen</b><br />{state.mailImportReportStatus.message}</p> : null}
           </div>
 
           <div className="content-card manager-list-card">
@@ -3713,11 +3714,11 @@ export default function InseratStudio() {
                 <article className={`manager-row${control.premiumPlacement || control.manualLock || listing.rotationArchivedAt ? " locked" : ""}`} key={`${project.id}-${listing.id}`}>
                   <div className="manager-row-main">
                     <div><span>Adresse</span><b>{projectSelectionLabel(project)}</b></div>
-                    <div><span>Objektnummer</span><b>{listing.externalId || "Noch nicht hochgeladen"}</b></div>
+                    <div><span>Objektnummer</span><b>{listing.externalId || "Noch nicht hochgeladen"}</b>{listing.importConfirmedAt ? <small>Immoprofessional: erfolgreich importiert · {localDateTime(listing.importConfirmedAt)}</small> : null}{listing.supersededByListingId ? <small>Ersetzt durch {project.listings.find((candidate) => candidate.id === listing.supersededByListingId)?.externalId || listing.supersededByListingId}</small> : null}</div>
                     <div><span>Hausvariante</span><b>{listing.templateName}</b><small>{euro(listing.price)}</small></div>
                     <div><span>Aktionsbild</span><b>{promotionLibrary.promotionImages.find((image) => image.id === listing.promotionImageId)?.name || "Normale Bildfolge"}</b><small>{listing.promotionAssignedAt ? localDateTime(listing.promotionAssignedAt) : "Noch nicht zugeordnet"}</small></div>
                     <div><span>Letzte / nächste Aktualisierung</span><b>{localDateTime(control.lastSuccessAt || control.lastUpdatedAt)}</b><small>{localDateTime(control.nextUpdatedAt)}</small></div>
-                    <div><span>Status / Health Score</span><b>{control.statusMessage || workflowStatusLabel(control.status)} · {health.score}</b><small>{control.lastError || `${Math.floor(health.daysSinceSuccess)} Tage seit Erfolg`}</small></div>
+                    <div><span>Status / Health Score</span><b>{control.statusMessage || workflowStatusLabel(control.status)} · {health.score}</b><small>{listing.externalDeletionPending ? "Externe Löschung noch ausstehend" : control.lastError || `${Math.floor(health.daysSinceSuccess)} Tage seit Erfolg`}</small></div>
                   </div>
                   <div className="manager-controls">
                     <label><input type="checkbox" checked={control.automaticUpdateEnabled} onChange={(event) => updateManagedListingControl(project.id, listing.id, { automaticUpdateEnabled: event.target.checked })} /> Automatik</label>

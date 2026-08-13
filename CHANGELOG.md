@@ -1,5 +1,70 @@
 # Änderungsprotokoll
 
+## Unreleased · Immoprofessional-Importbestätigung aus Livinghaus-Mail – 13. August 2026
+
+### Report
+
+- Einen abgegrenzten lokalen Apple-Mail-Adapter für den eindeutig aufgelösten
+  Account `Livinghaus`, dessen eindeutigen direkten Posteingang (`Posteingang`
+  oder `INBOX`) und den serverseitigen Ordner `Inseratestudio – Importberichte`
+  ergänzt. Es werden weder neue Mailzugänge noch Graph-, IMAP-, OAuth- oder
+  Cloud-Dienste eingeführt.
+- Den realen Multipart-Bericht strikt nach Headertransport, `SPF=pass`,
+  Plaintext-vor-HTML, Sendersoftware, Einzelobjektanzahl, Anbieter-ID,
+  Importzeitpunkt und exakter Erfolgszeile geparst. Unbekannte Fehler- und
+  Batchformate bleiben geschlossen.
+- Die Objektnummer gegen genau eine `transferred_pending_import`-Kopie, deren
+  Quelle, Katalogbeleg und deterministischen abgeschlossenen Uploadjob geprüft.
+  Reportbeleg, `published`-Übergang und Scheduler-Handover werden atomar über
+  den vorhandenen Katalog-CAS gespeichert.
+- Die alte Quelle bleibt tatsächlich `published`, rotiert intern nicht erneut
+  und erhält persistente Replacement-Metadaten sowie den Hinweis „Ersetzt –
+  externe Löschung ausstehend“. Kein DELETE-, Archivierungs- oder
+  Portal-Löschpfad wurde ergänzt.
+- Message-ID und SHA-256 des relevanten Raw-Inhalts deduplizieren den Vorgang.
+  Die einzelne Mail wird erst nach erfolgreicher Katalogpersistenz verschoben;
+  ein unterbrochener Mail-Move wird nach Helper-Neustart idempotent nachgeholt.
+- Den Background-Helper um einen bedingten Fünf-Minuten-Check ergänzt. Apple
+  Mail wird ausschließlich bei offenen Importen angesprochen; ohne Pending-
+  Kopie erfolgt kein Postfachscan.
+- UI-Hinweise für bestätigte Kopien, ersetzte Quellen und prüfpflichtige
+  Berichte sowie synthetische Parser-, Matching-, Mail-, CAS-, Restart-,
+  Deduplizierungs- und Scheduler-Handovertests ergänzt.
+- Explizite Scheduler-Test-/Laufzeitpunkte werden nun auch für alle internen
+  Verarbeitungsschritte verwendet. Dadurch bleibt der Tagesabstand bei
+  Wiederholungsläufen deterministisch und ein identischer Lauf erzeugt keinen
+  zweiten Upload nur wegen einer abweichenden Systemuhr.
+
+### Begründung
+
+Die externe Objektnummer ist der kollisionsgeprüfte fachliche Schlüssel zwischen
+OpenImmo-Paket, Uploadledger und Importbericht. Das katalogweite CAS ist der
+kleinste vorhandene atomare Speicherort für Reportbeleg und Zustandsübergabe.
+Apple Mail nutzt die bereits eingerichtete lokale Kontositzung, ohne zusätzliche
+Secrets zu erzeugen. Zusätzliche Replacement-Metadaten bewahren die korrekte
+Wahrheit, dass die alte Quelle extern noch veröffentlicht ist.
+
+### Hürden und Risiken
+
+- Das reale Fehler- und Batchberichtformat ist nicht bekannt und wird deshalb
+  bewusst nicht geraten.
+- Apple-Mail-Automation kann eine einmalige macOS-Berechtigung benötigen; eine
+  fehlende oder mehrdeutige Konto-/Ordnerauflösung stoppt fail-closed.
+- Eine künftige Änderung von Betreff, MIME-Struktur, Sendersoftware oder
+  Erfolgszeile verlangt eine neue reale Prüfung.
+- Die Basisrevision enthielt einen nicht aufgelösten leeren FTPS-Benutzernamen-
+  Export und eine React-Lint-Vorwärtsreferenz. Beide wurden ohne eingebettete
+  Zugangsdaten minimal bereinigt, damit TypeScript und ESLint reproduzierbar
+  laufen.
+
+### Tests
+
+- Synthetische, anonymisierte Multipart-EML; keine produktive E-Mail im
+  Repository und keine echten Zugangsdaten in Fixtures.
+- Parser-, Transport-, Matching-, Uploadledger-, Idempotenz-, Mailmove-,
+  Katalogfehler-, Helper-Restart- und Scheduler-Handoverprüfungen ohne Mail-,
+  FTPS- oder Portalzugriff.
+
 ## Unreleased · Persistente automatische Inseratrotation – 12. August 2026
 
 ### Report

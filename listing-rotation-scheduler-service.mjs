@@ -282,6 +282,7 @@ export function createListingRotationSchedulerService(options) {
 
   async function run(input = {}) {
     const startedAt = String(input.now || new Date().toISOString());
+    const stepTimestamp = () => String(input.stepNow?.() || input.now || new Date().toISOString());
     const runId = String(input.runId || idFactory());
     const trigger = String(input.trigger || "periodic");
     let lease;
@@ -455,12 +456,12 @@ export function createListingRotationSchedulerService(options) {
       ];
 
       for (const item of workItems) {
-        await lease.refresh?.({ now: String(input.stepNow?.() || new Date().toISOString()) });
+        await lease.refresh?.({ now: stepTimestamp() });
         let copyId = item.resume ? item.listingId : "";
         let sourceListingId = item.sourceListingId;
         try {
           if (!item.resume) {
-            const processingAt = String(input.stepNow?.() || new Date().toISOString());
+            const processingAt = stepTimestamp();
             await options.store.update((state) => ({
               state: updateSourceControl(state, item.projectId, sourceListingId, {
                 status: WORKFLOW_STATUS.PROCESSING,
@@ -469,7 +470,7 @@ export function createListingRotationSchedulerService(options) {
               }, processingAt),
             }), { now: processingAt });
 
-            const preparedAt = String(input.stepNow?.() || new Date().toISOString());
+            const preparedAt = stepTimestamp();
             const prepared = await options.store.update((state) => {
               const project = state.projects.find((candidate) => candidate.id === item.projectId);
               const source = project?.listings.find((candidate) => candidate.id === sourceListingId);
@@ -504,7 +505,7 @@ export function createListingRotationSchedulerService(options) {
             runId,
             trigger,
           });
-          const completedAt = String(input.stepNow?.() || new Date().toISOString());
+          const completedAt = stepTimestamp();
           await lease.refresh?.({ now: completedAt });
           await options.store.update((state) => ({
             state: updatePreparedCopyAfterUpload(state, project.id, copy.id, {
@@ -519,7 +520,7 @@ export function createListingRotationSchedulerService(options) {
           errors.push({ projectId: item.projectId, listingId: sourceListingId, copyId, message });
           failedListingIds.push(sourceListingId);
           if (copyId) {
-            const failedAt = String(input.stepNow?.() || new Date().toISOString());
+            const failedAt = stepTimestamp();
             await options.store.update((state) => ({
               state: updatePreparedCopyAfterUpload(state, item.projectId, copyId, {
                 ok: false,
@@ -529,7 +530,7 @@ export function createListingRotationSchedulerService(options) {
               }, failedAt),
             }), { now: failedAt }).catch(() => undefined);
           } else {
-            const failedAt = String(input.stepNow?.() || new Date().toISOString());
+            const failedAt = stepTimestamp();
             await options.store.update((state) => ({
               state: updateSourceControl(state, item.projectId, sourceListingId, {
                 status: WORKFLOW_STATUS.PUBLISHED,

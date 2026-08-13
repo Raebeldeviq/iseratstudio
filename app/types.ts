@@ -261,6 +261,11 @@ export type GeneratedListing = {
   status?: WorkflowStatus;
   statusMessage?: string;
   uploadError?: string;
+  importConfirmedAt?: string;
+  importReportId?: string;
+  supersededByListingId?: string;
+  replacementConfirmedAt?: string;
+  externalDeletionPending?: boolean;
 };
 
 export type ListingGroupVariantRole = "variant" | "primary" | "alternative";
@@ -452,6 +457,45 @@ export type BatchUploadLog = {
   error: string;
 };
 
+export type ImportReportRecord = {
+  reportId: string;
+  messageId: string;
+  rawHash: string;
+  receivedAt: string;
+  processedAt: string;
+  providerImportAt: string;
+  subject: string;
+  channel: "email";
+  senderSoftware: string;
+  objectCount: number;
+  providerId: string;
+  providerCompany: string;
+  providerEmail: string;
+  externalObjectNumber: string;
+  importResult: "success" | "failure" | "unknown";
+  matchedListingId: string;
+  matchedUploadJobId: string;
+  sourceListingId: string;
+  projectId: string;
+  parserVersion: string;
+  processingStatus: "confirmed_mail_move_pending" | "confirmed";
+  mailAccount: string;
+  mailTransportId: string;
+  mailFolderAfterProcessing: string;
+  mailMovedAt?: string;
+};
+
+export type ImportReportReview = {
+  reviewId: string;
+  messageId: string;
+  rawHash: string;
+  receivedAt: string;
+  externalObjectNumber: string;
+  reason: string;
+  processingStatus: "review_required";
+  updatedAt: string;
+};
+
 export type StudioState = {
   version: 1;
   dataSchemaVersion?: number;
@@ -467,6 +511,15 @@ export type StudioState = {
   promotionSettings?: PromotionSettings;
   promotionUsage?: PromotionUsage[];
   uploadHistory?: BatchUploadLog[];
+  importReports?: ImportReportRecord[];
+  importReportReviews?: ImportReportReview[];
+  mailImportReportStatus?: {
+    status: string;
+    message: string;
+    updatedAt: string;
+    externalObjectNumber?: string;
+    reportId?: string;
+  };
   scheduler?: ListingScheduler;
   houseDistribution?: HouseDistributionState;
 };

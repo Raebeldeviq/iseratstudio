@@ -329,6 +329,50 @@ node listing-rotation-mode-cli.mjs set --mode active
 Das CLI ändert ausschließlich die persistente Modusdatei. Es startet den
 Helper nicht und führt selbst weder Rotation noch FTPS-Transfer aus.
 
+### Immoprofessional-Importbestätigung aus Apple Mail
+
+Der lokale Background-Helper schließt die zweite Veröffentlichungsstufe über
+den echten Immoprofessional-Mailbericht. Stufe 1 ist ausschließlich der
+erfolgreiche FTPS-Transfer; die Rotationskopie bleibt dabei
+`transferred_pending_import`. Stufe 2 erfordert die exakt validierte Zeile
+`OK: Erfolgreich importiert` mit genau einer konkreten Objektnummer. Erst dann
+wird diese Kopie `published`.
+
+Der Zugriff verwendet ohne neue Zugangsdaten ausschließlich den vorhandenen
+Apple-Mail-Account `Livinghaus` beziehungsweise den lokalen Zuordnungsnamen aus
+`FPI_IMPORT_REPORT_MAIL_ACCOUNT`. Gesucht wird nur im eindeutig aufgelösten
+direkten Posteingang (`Posteingang` oder `INBOX`) dieses Accounts, nur nach dem
+exakten Betreff `Importbericht OpenImmo XML` und nur in einem auf offene
+Transfers begrenzten Lookback. Gibt es keine offene
+`transferred_pending_import`-Kopie, wird das Postfach nicht durchsucht. Solange
+eine Bestätigung offen ist, prüft der Helper moderat alle fünf Minuten; ein
+Helper-Neustart führt denselben idempotenten Check aus.
+
+Vertrauenswürdig ist ein Bericht nur mit dem konfigurierten
+Immoprofessional-Host in Message-ID oder SMTP-Received-Kette und vorhandenem
+`SPF=pass`. DKIM wird nicht vorausgesetzt. Der Parser bevorzugt `text/plain`,
+verwendet HTML nur als Fallback und akzeptiert aktuell ausschließlich den
+bekannten Einzelobjekt-Erfolgsvertrag: Sendersoftware
+`Fabian&Pascal Inseratestudio`, Anbieter-ID `30460`, Objektanzahl `1` und genau
+eine strukturierte Erfolgszeile. Unbekannte Erfolgs- oder Fehlerformate bleiben
+fail-closed mit dem sichtbaren Hinweis **Importbericht prüfen**.
+
+Die externe Objektnummer muss genau einer offenen Rotationskopie, deren Quelle
+und einem abgeschlossenen deterministischen Uploadjob im persistenten Ledger
+entsprechen. Reportbeleg, Kopiestatus und Scheduler-Handover werden gemeinsam
+per Katalog-CAS gespeichert. Erst danach verschiebt Apple Mail genau diese Mail
+in den serverseitigen Accountordner `Inseratestudio – Importberichte`. Bei einem
+Mailfehler bleibt die bereits atomar bestätigte Veröffentlichung erhalten und
+die einzelne Verschiebung wird idempotent nachgeholt. Message-ID und SHA-256 des
+Raw-Inhalts verhindern eine zweite fachliche Mutation.
+
+Nach der Bestätigung übernimmt die neue Kopie die automatische Rotation mit dem
+bestätigten Immoprofessional-Importzeitpunkt und dem regulär berechneten nächsten
+Termin. Die alte Quelle bleibt extern und intern `published`, gibt aber die
+Scheduler-Verantwortung ab und wird als **Ersetzt – externe Löschung
+ausstehend** gekennzeichnet. Dieser Ablauf erzeugt weder OpenImmo-`DELETE` noch
+eine Portal-Löschung oder Archivierung.
+
 ## Dynamisches Inseratsmanagement und sichere Variantenrotation
 
 Jede neue oder aus Excel importierte Adresse besitzt eine persistente

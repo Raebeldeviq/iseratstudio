@@ -1,0 +1,34 @@
+Received: from server22.immoprofessional.eu (server22.immoprofessional.eu [192.0.2.22])
+	by mail.example.invalid with ESMTPS id synthetic;
+	Thu, 13 Aug 2026 11:16:30 +0200
+Authentication-Results: mail.example.invalid; spf=pass smtp.helo=server22.immoprofessional.eu; dkim=none
+Received-SPF: pass (mail.example.invalid: domain of server22.immoprofessional.eu designates 192.0.2.22)
+Message-ID: <synthetic-report-810978@server22.immoprofessional.eu>
+Date: Thu, 13 Aug 2026 11:16:30 +0200
+Subject: Importbericht OpenImmo XML
+From: Testversand <test-sender@example.invalid>
+To: Testempfang <test-recipient@example.invalid>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="synthetic-import-boundary"
+
+--synthetic-import-boundary
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+eine Importdatei wurde am 13.08.2026 um 11:16 Uhr verarbeitet.
+
+Sendersoftware: Fabian&Pascal Inseratestudio
+Anzahl Objekte: 1
+Anbieter-ID: 30460
+Firma: Synthetische Test-Handelsvertretung
+E-Mail: import-test@example.invalid
+
+- OK: Erfolgreich importiert - Objekt-Nr.: "30460-810978"
+
+--synthetic-import-boundary
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+<html><body><p>eine Importdatei wurde am 13.08.2026 um 11:16 Uhr verarbeitet.</p><p>Sendersoftware: Fabian&amp;Pascal Inseratestudio<br>Anzahl Objekte: 1<br>Anbieter-ID: 30460<br>Firma: Synthetische Test-Handelsvertretung<br>E-Mail: import-test@example.invalid</p><p>- OK: Erfolgreich importiert - Objekt-Nr.: "30460-999999"</p></body></html>
+
+--synthetic-import-boundary--

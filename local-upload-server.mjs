@@ -42,6 +42,11 @@ import { createCatalogStateStore } from "./catalog-state-store.mjs";
 import { createListingRotationSchedulerService } from "./listing-rotation-scheduler-service.mjs";
 import { createPersistentLease } from "./persistent-lease.mjs";
 import { createListingRotationOperatingModeStore } from "./listing-rotation-operating-mode.mjs";
+import { createAppleMailImportReportAdapter } from "./apple-mail-import-report-adapter.mjs";
+import {
+  createImmoprofessionalImportReportService,
+  DEFAULT_IMPORT_REPORT_POLL_INTERVAL_MS,
+} from "./immoprofessional-import-report-service.mjs";
 
 const HOST = "127.0.0.1";
 const PORT = 43182;
@@ -54,6 +59,7 @@ const UPLOAD_JOB_LEDGER_PATH = join(APPLICATION_DATA_DIRECTORY, "upload-jobs.jso
 const LISTING_SCHEDULER_LOG_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-scheduler.log");
 const LISTING_SCHEDULER_LOCK_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-scheduler.lock");
 const LISTING_ROTATION_MODE_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-rotation-mode.json");
+const IMPORT_REPORT_LOG_PATH = join(APPLICATION_DATA_DIRECTORY, "immoprofessional-import-reports.log");
 const SESSION_TOKEN = String(process.env.FPI_SESSION_TOKEN || randomBytes(32).toString("hex"));
 const allowedOrigins = new Set([
   "http://localhost:43181",
@@ -62,11 +68,19 @@ const allowedOrigins = new Set([
 let credentialCache;
 const writeUploadLog = createStructuredFileLogger(UPLOAD_LOG_PATH, { jobType: "immoprofessional-upload" });
 const writeListingSchedulerLog = createStructuredFileLogger(LISTING_SCHEDULER_LOG_PATH, { jobType: "listing-rotation-scheduler" });
+const writeImportReportLog = createStructuredFileLogger(IMPORT_REPORT_LOG_PATH, { jobType: "immoprofessional-import-report" });
 const uploadJobLedger = createUploadJobLedger(UPLOAD_JOB_LEDGER_PATH);
 const plotSyncService = createPlotSyncService();
 const catalogStateStore = createCatalogStateStore();
 const listingSchedulerLease = createPersistentLease(LISTING_SCHEDULER_LOCK_PATH);
 const listingRotationOperatingModeStore = createListingRotationOperatingModeStore(LISTING_ROTATION_MODE_PATH);
+const importReportMailAdapter = createAppleMailImportReportAdapter();
+const importReportService = createImmoprofessionalImportReportService({
+  store: catalogStateStore,
+  uploadJobLedger,
+  mailAdapter: importReportMailAdapter,
+  writeLog: (event, details) => writeImportReportLog(event, details),
+});
 
 async function credentialVault() {
   if (!credentialCache) credentialCache = await loadCredentialVault();
@@ -831,6 +845,11 @@ async function startLocalHelper() {
     } catch (error) {
       console.error(`Grundstücksabgleich: ${error instanceof Error ? error.message : "Start fehlgeschlagen."}`);
     }
+    try {
+      await importReportService.runOnce({ trigger: "startup" });
+    } catch (error) {
+      console.error(`Immoprofessional-Importbericht: ${error instanceof Error ? error.message : "Startprüfung fehlgeschlagen."}`);
+    }
   })();
   const syncTimer = setInterval(() => {
     void plotSyncService.runIfDue().catch((error) => {
@@ -846,6 +865,12 @@ async function startLocalHelper() {
     });
   }, 60_000);
   listingSchedulerTimer.unref();
+  const importReportTimer = setInterval(() => {
+    void importReportService.runOnce({ trigger: "periodic" }).catch((error) => {
+      console.error(`Immoprofessional-Importbericht: ${error instanceof Error ? error.message : "Mailprüfung fehlgeschlagen."}`);
+    });
+  }, DEFAULT_IMPORT_REPORT_POLL_INTERVAL_MS);
+  importReportTimer.unref();
 }
 
 startLocalHelper().catch((error) => {
