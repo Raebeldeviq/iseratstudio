@@ -51,7 +51,20 @@ Eine read-only Portalprüfung war nicht möglich: Der vorhandene Browser besaß
 keine autorisierte Immoprofessional-Sitzung und führte nur auf den Plesk-Login.
 Es wurde kein Login versucht und keine Portalmutation ausgeführt. Der eindeutige
 Providerbericht ist deshalb der maschinelle Löschbeleg; es wird keine zusätzliche
-Portalbeobachtung behauptet.
+Portalbeobachtung durch den automatisierten Lauf behauptet.
+
+Nach Abschluss des automatisierten Laufs wurden zwei zusätzliche Evidenzen
+festgehalten:
+
+- Eine zeitgleiche, lokal read-only geprüfte Immowelt-Nachricht nennt
+  `Obj. gelöscht: 1`, die Referenznummer `30460-287191` und den Status
+  `gelöscht`.
+- Der Nutzer bestätigte zusätzlich einen Kleinanzeigen-Bericht mit
+  `Gelöschte Objekte: 1`, `Erfolgreich gelöschte Objekte` und der Objekt-Nr.
+  `30460-287191` sowie eine manuelle read-only Portalkontrolle, bei der das
+  Objekt in Immoprofessional nicht mehr vorhanden war. Diese beiden Angaben
+  sind ausdrücklich als nutzerbestätigte Evidenz dokumentiert und wurden nicht
+  nachträglich als autonome Portalaktion reproduziert.
 
 Ergebnis des Einzelvertrags:
 `DELETE_CONTRACT_CONFIRMED_WITH_MACHINE_CONFIRMATION`. Das bedeutet nicht,

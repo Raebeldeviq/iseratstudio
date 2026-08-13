@@ -15,6 +15,11 @@
   bei gültigem server22-Transport, `SPF=pass`, exakter Anbieter-/Senderkennung,
   Objektanzahl eins, exakter Nummer `30460-287191`, eindeutigem Status
   `Erfolgreich gelöscht` und konsistenten Börsen-Löschzeilen.
+- Eine zusätzliche Immowelt-Nachricht read-only verifiziert: ein gelöschtes
+  Objekt, Referenz `30460-287191`, Status `gelöscht`. Die vom Nutzer bestätigte
+  Kleinanzeigen-Quittung und die anschließende manuelle read-only
+  Immoprofessional-Portalkontrolle als zusätzliche, klar gekennzeichnete
+  Evidenz dokumentiert.
 - Den eigenen Delete-Job idempotent von `delete_pending_confirmation` auf
   `delete_confirmed` überführbar gemacht. Message-ID und Raw-Hash binden den
   Beleg; ein abweichender Zweitbericht stoppt als Konflikt.
