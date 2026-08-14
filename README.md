@@ -248,8 +248,12 @@ Lokale Daten liegen unter:
 
 Die automatische Rotation läuft im persistenten lokalen Background-Helper und
 nicht mehr in einem React-`useEffect`. Sie arbeitet deshalb auch ohne geöffnete
-Browserseite. Beim Helper-Start erfolgt ein Catch-up-Lauf für verpasste
-Termine; anschließend prüft der Helper den gespeicherten Zeitplan selbständig.
+Browserseite. Beim Helper-Start gilt zunächst die persistente Produktions-
+Policy: `detect-only` ermittelt Fälligkeiten ausschließlich read-only;
+`guarded` darf einen regulär fälligen Lauf nur innerhalb sämtlicher Zeit-,
+Abstands-, Tages-, Claim- und Produktionslimits starten. Einen unbeschränkten
+Startup-Catch-up gibt es nicht. Anschließend prüft der Helper den gespeicherten
+Zeitplan selbständig.
 Ein dateibasierter, während der Verarbeitung erneuerter Scheduler-Claim
 verhindert parallele oder doppelte Läufe und kann nach einem Helper-Abbruch
 sicher übernommen werden.
@@ -300,11 +304,12 @@ oder Helper-Abbruch bleibt das alte Inserat unverändert veröffentlicht; der
 idempotente Uploadauftrag wird mit derselben Job-ID fortgesetzt.
 
 Neue Rotationskopien erhalten weiterhin eine kollisionsgeprüfte eindeutige
-Objektnummer. Automatische und externe Löschung ist technisch deaktiviert:
-Der Helper erzeugt keinen `DELETE`-Auftrag, archiviert das alte Inserat nicht
-nach einem Transfer und verändert bei unklarem Importzustand keine bestehende
-Veröffentlichung. Scheduler-Protokoll und Lock liegen zusammen mit den
-übrigen lokalen Laufzeitdaten im Application-Support-Verzeichnis.
+Objektnummer. Ein `DELETE` ist ausschließlich für Kopien zulässig, die in einem
+regulären Produktionslauf eine persistente Lifecycle-Autorisierung erhielten,
+deren Import positiv und eindeutig bestätigt wurde und deren Quelle weiterhin
+exakt auf dieses Replacement verweist. Ein FTPS-Erfolg allein autorisiert keine
+Löschung. Scheduler-Protokoll und Lock liegen zusammen mit den übrigen lokalen
+Laufzeitdaten im Application-Support-Verzeichnis.
 
 ### Globaler fail-closed Betriebsmodus
 
@@ -317,7 +322,7 @@ Betriebsmodus in `listing-rotation-mode.json` im Application-Support-Verzeichnis
   Listing-IDs oder externe Objektnummern. Alle anderen fälligen Inserate
   erscheinen mit eindeutigem Skip-Grund im Schedulerprotokoll.
 - `active` aktiviert den regulären Backgroundbetrieb innerhalb der bestehenden
-  Schedulerlimits.
+  Schedulerlimits und zusätzlich nur bei gültiger Produktions-Policy.
 
 Fehlt die Konfiguration, ist sie beschädigt oder enthält sie einen unbekannten
 Wert, wird immer `off` verwendet. Diese Sperre gilt auch für Startup-Catch-up
@@ -347,6 +352,26 @@ node listing-rotation-mode-cli.mjs set --mode active
 
 Das CLI ändert ausschließlich die persistente Modusdatei. Es startet den
 Helper nicht und führt selbst weder Rotation noch FTPS-Transfer aus.
+
+### Persistentes Produktionslimit und Startup-Vertrag
+
+`listing-rotation-production-policy.json` begrenzt `active` zusätzlich auf
+höchstens drei Source-/Replacement-Lifecycles je Schedulerlauf. Fehlt diese
+Datei, ist sie beschädigt, liegt `maxRunItems` außerhalb `1..3` oder ist der
+Startup-Modus unbekannt, bleibt `active` fail-closed ohne Rotation und Upload.
+
+```bash
+node listing-rotation-production-policy-cli.mjs status
+node listing-rotation-production-policy-cli.mjs set --max-run-items 3 --startup-catchup-mode detect-only
+node listing-rotation-production-policy-cli.mjs set --max-run-items 3 --startup-catchup-mode guarded
+```
+
+`detect-only` ist der sichere Release- und Erststartmodus. `guarded` verwendet
+bei einem späteren Neustart denselben regulären Scheduler wie der Stundenlauf;
+Zeitfenster, globaler Mindestabstand, Tageslimit, maximal drei Inserate,
+unterschiedliche Grundstücke und der persistente Daily-Plot-Guard bleiben
+wirksam. `selectedPlotIds` und explizite Listing-IDs sind in `active` keine
+Scheduler-Eingabe.
 
 ### Immoprofessional-Importbestätigung aus dem serverseitigen Berichtordner
 
@@ -449,17 +474,22 @@ Nach der Bestätigung übernimmt die neue Kopie die automatische Rotation mit de
 bestätigten Immoprofessional-Importzeitpunkt und dem regulär berechneten nächsten
 Termin. Die alte Quelle bleibt extern und intern `published`, gibt aber die
 Scheduler-Verantwortung ab und wird als **Ersetzt – externe Löschung
-ausstehend** gekennzeichnet. Dieser Ablauf erzeugt weder OpenImmo-`DELETE` noch
-eine Portal-Löschung oder Archivierung.
+ausstehend** gekennzeichnet. Nur eine Kopie mit der beim Produktionslauf
+persistierten Delete-Autorisierung wird anschließend vom separaten
+Produktions-Deletedienst berücksichtigt. Historische
+`externalDeletionPending`-Quellen ohne diesen Marker werden niemals als
+Catch-up gelöscht.
 
 Die technische Delete-Discovery und der reale, ausschließlich auf
 `30460-287191` begrenzte Einzel-Canary sind separat in
 [`IMMOPROFESSIONAL_DELETE_CONTRACT.md`](IMMOPROFESSIONAL_DELETE_CONTRACT.md)
 dokumentiert. Immoprofessional hat den dort festgehaltenen Einzelpayload über
 einen eindeutigen objektbezogenen Löschbericht maschinell bestätigt. Daraus
-folgt keine allgemeine Betriebsfreigabe: Automatische Löschung bleibt
-fail-closed
-deaktiviert.
+allein folgt keine Betriebsfreigabe. Der Produktionspfad ergänzt einen
+separaten globalen Delete-Modus `off | active`, eine deterministische Job-ID,
+einen atomaren Claim und einen exakt auf die alte Objektnummer begrenzten
+Einzelobjekt-Payload. Fehlende oder beschädigte Modus-/Ledgerdaten führen
+fail-closed zu `off` beziehungsweise zum Abbruch.
 
 Für den kontrollierten 3er-Livetest existiert ein davon getrenntes,
 fest allowlistetes Testwerkzeug. Es akzeptiert ausschließlich die drei vorab
@@ -480,6 +510,26 @@ Payload-Zeitpunkt persistent. Jeder spätere Preflight- oder Transferaufruf muss
 dadurch exakt denselben Dateinamen, SHA-256 und dieselbe Paketgröße erzeugen;
 jede Abweichung stoppt vor FTPS mit
 `LIVE_CANARY_DELETE_PAYLOAD_MISMATCH` fail-closed.
+
+Der reguläre Produktions-Deletedienst wird unabhängig davon gesteuert:
+
+```bash
+node listing-rotation-production-delete-cli.mjs status
+node listing-rotation-production-delete-cli.mjs mode --mode off
+node listing-rotation-production-delete-cli.mjs mode --mode active
+```
+
+Im Modus `active` verarbeitet er ausschließlich neue, eindeutig markierte
+Produktions-Lifecycles, strikt sequenziell und höchstens bis zum identischen
+`maxRunItems`-Limit. Nach einem Transfer bleibt die alte Quelle `published` und
+`delete_pending_confirmation`. Erst ein read-only gelesener positiver
+Immoprofessional-Bericht mit Anbieter `30460`, Objektanzahl eins, exakter alter
+Objektnummer, SPF-Vertrauensnachweis und ohne Warnung/Fehler setzt sie auf
+`deleted`. Ein unklarer Transfer wird nie automatisch wiederholt; das
+Replacement wird in keinem Delete-Pfad verändert.
+Offene Löschberichte und neue Löschtransfers teilen sich dieses Dreierbudget.
+Ein unterbrochener oder unklarer Deletejob blockiert fail-closed sämtliche
+weiteren Delete-Transfers, bis der Zustand manuell geklärt wurde.
 
 ## Dynamisches Inseratsmanagement und sichere Variantenrotation
 
@@ -516,11 +566,11 @@ ausgeschlossen. Haus- und Kombinationshistorien werden lokal dauerhaft
 gespeichert. Die Gewichtungsparameter stehen zentral in
 `house-distribution.mjs`.
 
-Automatisches Löschen bleibt in Version 0.15.0 sicherheitsbedingt blockiert,
-bis Immoprofessional eine bestätigte Löschschnittstelle und einen zuverlässig
-zurücklesbaren Erfolgsstatus bereitstellt. Auswahl, Prüfung, dynamische
-Rotation, eindeutige neue Objektnummer und Entwurfserstellung sind umgesetzt;
-Dry Runs veröffentlichen und löschen grundsätzlich nichts.
+Automatisches Löschen bleibt standardmäßig `off` und wird nur als zweite,
+separat freizugebende Stufe eines neu markierten Produktions-Lifecycles
+ausgeführt. Auswahl, Prüfung, dynamische Rotation, eindeutige neue
+Objektnummer, Importbestätigung und Löschbestätigung sind getrennte persistente
+Schritte; Dry Runs veröffentlichen und löschen grundsätzlich nichts.
 
 ## Konsistenz, Idempotenz und lokale Migration
 

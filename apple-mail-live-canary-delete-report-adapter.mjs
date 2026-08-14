@@ -77,7 +77,7 @@ export function createAppleMailLiveCanaryDeleteReportAdapter(options = {}) {
     accountName,
     mailboxNames: [...mailboxNames],
     async findCandidates(input = {}) {
-      const lookbackHours = Math.max(1, Math.min(72, Math.ceil(Number(input.lookbackHours) || 2)));
+      const lookbackHours = Math.max(1, Math.min(720, Math.ceil(Number(input.lookbackHours) || 2)));
       const candidates = [];
       for (const mailboxName of mailboxNames) {
         const lines = String(await runner(LIST_SCRIPT, [accountName, mailboxName, lookbackHours]) || "")
@@ -96,3 +96,7 @@ export function createAppleMailLiveCanaryDeleteReportAdapter(options = {}) {
     },
   });
 }
+
+// Produktionsneutraler Exportname; der alte Name bleibt für die reproduzierbare
+// Live-Canary-Historie und bestehende Tests rückwärtskompatibel erhalten.
+export const createAppleMailDeleteReportAdapter = createAppleMailLiveCanaryDeleteReportAdapter;

@@ -168,6 +168,11 @@ export function confirmImportReportInState(state, parsed, mail, uploadLedger, op
 
   const report = confirmationReport(parsed, mail, match, processedAt);
   const importedAt = parsed.providerImportAt;
+  const productionLifecycle = match.listing.productionLifecycle;
+  const automaticDeleteAuthorized = productionLifecycle?.format === 1
+    && productionLifecycle.automaticDeleteAuthorized === true
+    && productionLifecycle.sourceListingId === match.source.id
+    && Boolean(productionLifecycle.schedulerRunId);
   const publishedCopy = {
     ...match.listing,
     status: WORKFLOW_STATUS.PUBLISHED,
@@ -176,6 +181,13 @@ export function confirmImportReportInState(state, parsed, mail, uploadLedger, op
     importConfirmedAt: importedAt,
     importReportId: report.reportId,
     uploadError: "",
+    ...(automaticDeleteAuthorized ? {
+      productionLifecycle: {
+        ...productionLifecycle,
+        importConfirmedAt: importedAt,
+        importReportId: report.reportId,
+      },
+    } : {}),
   };
   const replacedSource = {
     ...match.source,
@@ -184,6 +196,11 @@ export function confirmImportReportInState(state, parsed, mail, uploadLedger, op
     supersededByListingId: match.listing.id,
     replacementConfirmedAt: importedAt,
     externalDeletionPending: true,
+    ...(automaticDeleteAuthorized ? {
+      productionDeleteState: "authorized",
+      productionDeleteAuthorizedAt: processedAt,
+      productionRotationRunId: productionLifecycle.schedulerRunId,
+    } : {}),
   };
 
   let group = normalizeListingGroup(match.group, match.project.id, { now: processedAt });

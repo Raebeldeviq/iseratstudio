@@ -57,7 +57,7 @@ function parseDeleteBody(text, expectedTarget) {
     || exchangeTargets.length !== 1
     || exchangeTargets[0] !== expectedTarget
   ) {
-    throw new Error("Der Löschbericht lässt sich nicht exklusiv dem autorisierten Canary-Objekt zuordnen.");
+    throw new Error("Der Löschbericht lässt sich nicht exklusiv der erwarteten alten Objektnummer zuordnen.");
   }
   if (senderSoftware !== IMMOPROFESSIONAL_IMPORT_REPORT_SENDER) throw new Error("Die Sendersoftware ist nicht freigegeben.");
   if (providerId !== IMMOPROFESSIONAL_IMPORT_REPORT_PROVIDER_ID) throw new Error("Die Anbieter-ID ist nicht freigegeben.");
@@ -78,8 +78,8 @@ function parseDeleteBody(text, expectedTarget) {
 
 export function parseImmoprofessionalDeleteReport(rawValue, options = {}) {
   const expectedTarget = String(options.expectedTarget || DELETE_CANARY_TARGET).trim();
-  if (expectedTarget !== DELETE_CANARY_TARGET && !LIVE_CANARY_DELETE_REPORT_TARGETS.includes(expectedTarget)) {
-    throw new Error("Der Löschberichtparser ist ausschließlich für das autorisierte Canary-Objekt freigegeben.");
+  if (!/^30460-\d{6}$/u.test(expectedTarget)) {
+    throw new Error("Der Löschberichtparser benötigt eine syntaktisch gültige erwartete Immoprofessional-Objektnummer.");
   }
   const envelope = extractImmoprofessionalReportEnvelope(rawValue, options);
   if (!envelope.messageId) throw new Error("Der Löschbericht besitzt keine eindeutige Message-ID.");

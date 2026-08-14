@@ -47,11 +47,18 @@ import { createCatalogStateStore } from "./catalog-state-store.mjs";
 import { createListingRotationSchedulerService } from "./listing-rotation-scheduler-service.mjs";
 import { createPersistentLease } from "./persistent-lease.mjs";
 import { createListingRotationOperatingModeStore } from "./listing-rotation-operating-mode.mjs";
+import { createListingRotationProductionPolicyStore } from "./listing-rotation-production-policy.mjs";
 import { createAppleMailImportReportAdapter } from "./apple-mail-import-report-adapter.mjs";
+import { createAppleMailDeleteReportAdapter } from "./apple-mail-live-canary-delete-report-adapter.mjs";
 import {
   createImmoprofessionalImportReportService,
   DEFAULT_IMPORT_REPORT_POLL_INTERVAL_MS,
 } from "./immoprofessional-import-report-service.mjs";
+import {
+  createProductionDeleteLedger,
+  createProductionDeleteModeStore,
+  createProductionDeleteService,
+} from "./listing-rotation-production-delete.mjs";
 
 const HOST = "127.0.0.1";
 const PORT = 43182;
@@ -65,7 +72,11 @@ const PLOT_DAILY_UPLOAD_GUARD_PATH = join(APPLICATION_DATA_DIRECTORY, "plot-dail
 const LISTING_SCHEDULER_LOG_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-scheduler.log");
 const LISTING_SCHEDULER_LOCK_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-scheduler.lock");
 const LISTING_ROTATION_MODE_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-rotation-mode.json");
+const LISTING_ROTATION_PRODUCTION_POLICY_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-rotation-production-policy.json");
 const IMPORT_REPORT_LOG_PATH = join(APPLICATION_DATA_DIRECTORY, "immoprofessional-import-reports.log");
+const PRODUCTION_DELETE_MODE_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-rotation-production-delete-mode.json");
+const PRODUCTION_DELETE_LEDGER_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-rotation-production-delete-jobs.json");
+const PRODUCTION_DELETE_LOG_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-rotation-production-delete.log");
 const SESSION_TOKEN = String(process.env.FPI_SESSION_TOKEN || randomBytes(32).toString("hex"));
 const allowedOrigins = new Set([
   "http://localhost:43181",
@@ -75,13 +86,18 @@ let credentialCache;
 const writeUploadLog = createStructuredFileLogger(UPLOAD_LOG_PATH, { jobType: "immoprofessional-upload" });
 const writeListingSchedulerLog = createStructuredFileLogger(LISTING_SCHEDULER_LOG_PATH, { jobType: "listing-rotation-scheduler" });
 const writeImportReportLog = createStructuredFileLogger(IMPORT_REPORT_LOG_PATH, { jobType: "immoprofessional-import-report" });
+const writeProductionDeleteLog = createStructuredFileLogger(PRODUCTION_DELETE_LOG_PATH, { jobType: "listing-rotation-production-delete" });
 const uploadJobLedger = createUploadJobLedger(UPLOAD_JOB_LEDGER_PATH);
 const plotDailyUploadGuard = createPlotDailyUploadGuard(PLOT_DAILY_UPLOAD_GUARD_PATH);
 const plotSyncService = createPlotSyncService();
 const catalogStateStore = createCatalogStateStore();
 const listingSchedulerLease = createPersistentLease(LISTING_SCHEDULER_LOCK_PATH);
 const listingRotationOperatingModeStore = createListingRotationOperatingModeStore(LISTING_ROTATION_MODE_PATH);
+const listingRotationProductionPolicyStore = createListingRotationProductionPolicyStore(LISTING_ROTATION_PRODUCTION_POLICY_PATH);
+const productionDeleteModeStore = createProductionDeleteModeStore(PRODUCTION_DELETE_MODE_PATH);
+const productionDeleteLedger = createProductionDeleteLedger(PRODUCTION_DELETE_LEDGER_PATH);
 const importReportMailAdapter = createAppleMailImportReportAdapter();
+const productionDeleteMailAdapter = createAppleMailDeleteReportAdapter();
 const importReportService = createImmoprofessionalImportReportService({
   store: catalogStateStore,
   uploadJobLedger,
@@ -390,8 +406,37 @@ const listingRotationSchedulerService = createListingRotationSchedulerService({
   store: catalogStateStore,
   lease: listingSchedulerLease,
   operatingModeStore: listingRotationOperatingModeStore,
+  productionPolicyStore: listingRotationProductionPolicyStore,
   upload: automaticRotationUpload,
   writeRunLog: (event, details) => writeListingSchedulerLog(event, details),
+});
+
+async function automaticProductionDeleteUpload({ archive, filename }) {
+  const vault = await credentialVault();
+  const ftp = vault.credentials;
+  if (!ftp.ftpHost || !ftp.ftpUser || !ftp.ftpPassword) {
+    throw new Error("Der Immoprofessional-FTPS-Zugang ist unvollständig.");
+  }
+  const remotePath = String(ftp.ftpPath || "/").trim() || "/";
+  const client = new Client(300_000);
+  client.ftp.verbose = false;
+  try {
+    await client.access(ftpAccessOptions(ftp));
+    if (remotePath !== "/") await client.cd(remotePath);
+    await client.uploadFrom(Readable.from(archive), filename);
+  } finally {
+    client.close();
+  }
+}
+
+const productionDeleteService = createProductionDeleteService({
+  store: catalogStateStore,
+  modeStore: productionDeleteModeStore,
+  ledger: productionDeleteLedger,
+  productionPolicyStore: listingRotationProductionPolicyStore,
+  mailAdapter: productionDeleteMailAdapter,
+  upload: automaticProductionDeleteUpload,
+  writeLog: (event, details) => writeProductionDeleteLog(event, details),
 });
 
 async function saveToDownloads(archive, requestedFilename) {
@@ -904,25 +949,28 @@ async function startLocalHelper() {
   });
   void (async () => {
     try {
-      const result = await listingRotationSchedulerService.run({
-        trigger: "startup-catch-up",
-        ignoreTimeWindow: true,
-      });
-      if (!result.ok && result.abortReason) {
-        console.error(`Inseratrotation: ${result.abortReason}`);
+      const [productionPolicy, operatingMode] = await Promise.all([
+        listingRotationProductionPolicyStore.load(),
+        listingRotationOperatingModeStore.load(),
+      ]);
+      if (
+        productionPolicy.valid === true
+        && productionPolicy.startupCatchupMode === "guarded"
+        && operatingMode.valid === true
+        && operatingMode.mode === "active"
+      ) {
+        const result = await listingRotationSchedulerService.runIfDue({ trigger: "startup-guarded" });
+        if (result.ran && !result.ok && result.abortReason) console.error(`Inseratrotation: ${result.abortReason}`);
+      } else {
+        await listingRotationSchedulerService.inspect({ trigger: "startup-detect-only" });
       }
     } catch (error) {
-      console.error(`Inseratrotation: ${error instanceof Error ? error.message : "Start-Catch-up fehlgeschlagen."}`);
+      console.error(`Inseratrotation: ${error instanceof Error ? error.message : "Read-only Startprüfung fehlgeschlagen."}`);
     }
     try {
       await plotSyncService.runIfDue();
     } catch (error) {
       console.error(`Grundstücksabgleich: ${error instanceof Error ? error.message : "Start fehlgeschlagen."}`);
-    }
-    try {
-      await importReportService.runOnce({ trigger: "startup" });
-    } catch (error) {
-      console.error(`Immoprofessional-Importbericht: ${error instanceof Error ? error.message : "Startprüfung fehlgeschlagen."}`);
     }
   })();
   const syncTimer = setInterval(() => {
@@ -940,8 +988,11 @@ async function startLocalHelper() {
   }, 60_000);
   listingSchedulerTimer.unref();
   const importReportTimer = setInterval(() => {
-    void importReportService.runOnce({ trigger: "periodic" }).catch((error) => {
-      console.error(`Immoprofessional-Importbericht: ${error instanceof Error ? error.message : "Mailprüfung fehlgeschlagen."}`);
+    void (async () => {
+      await importReportService.runOnce({ trigger: "periodic" });
+      await productionDeleteService.runOnce({ trigger: "periodic" });
+    })().catch((error) => {
+      console.error(`Immoprofessional-Lebenszyklus: ${error instanceof Error ? error.message : "Berichts- oder Deleteprüfung fehlgeschlagen."}`);
     });
   }, DEFAULT_IMPORT_REPORT_POLL_INTERVAL_MS);
   importReportTimer.unref();

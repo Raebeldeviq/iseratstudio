@@ -286,7 +286,13 @@ export function selectSchedulerListings(state, at = nowIso(), options = {}) {
     : schedulerWindowBlockReasons(scheduler, at, { ignoreTimeWindow: options.ignoreTimeWindow === true });
   const activeProjects = state.projects.filter((project) => project.isActive !== false);
   const completedToday = activeProjects.flatMap((project) => successfulUpdatesToday(project, at));
-  const remainingGlobal = Math.max(0, scheduler.settings.maxUpdatesPerDay - completedToday.length);
+  const requestedMaximum = Number.isFinite(Number(options.maximumSelections))
+    ? Math.max(0, Math.trunc(Number(options.maximumSelections)))
+    : Number.POSITIVE_INFINITY;
+  const remainingGlobal = Math.min(
+    requestedMaximum,
+    Math.max(0, scheduler.settings.maxUpdatesPerDay - completedToday.length),
+  );
   if (windowIssues.length || remainingGlobal === 0) {
     return { scheduler, selections: [], skipped: [], issues: windowIssues.length ? windowIssues : ["Das Tageslimit ist bereits erreicht."] };
   }

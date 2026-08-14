@@ -227,6 +227,14 @@ function mutableOperatingMode(mode = "canary", canaryListingIds = []) {
   };
 }
 
+function fixedProductionPolicy(maxRunItems = 3, startupCatchupMode = "detect-only") {
+  return {
+    async load() {
+      return { format: 1, maxRunItems, startupCatchupMode, valid: true, fallbackReason: "" };
+    },
+  };
+}
+
 function sourceControls(state) {
   return state.projects.flatMap((projectValue) => {
     const source = projectValue.listings.find((item) => item.listingOrigin === "group-source");
@@ -242,6 +250,7 @@ test("background catch-up ignores selectedPlotIds and works without a browser", 
     store,
     lease: memoryLease(),
     operatingModeStore: fixedOperatingMode("active"),
+    productionPolicyStore: fixedProductionPolicy(),
     idFactory: ids("run"),
     upload: async ({ project: projectValue, listing: listingValue }) => {
       uploads.push({ projectId: projectValue.id, listingId: listingValue.id, externalId: listingValue.externalId });
@@ -288,6 +297,7 @@ test("an identical repeated scheduler run does not recreate or re-upload copies"
     store,
     lease: memoryLease(),
     operatingModeStore: fixedOperatingMode("active"),
+    productionPolicyStore: fixedProductionPolicy(),
     idFactory: ids("run"),
     upload: async ({ project: projectValue, listing: listingValue }) => {
       uploadCount += 1;
@@ -382,6 +392,7 @@ test("startup catch-up at off does not resume an already prepared rotation copy"
     store,
     lease: memoryLease(),
     operatingModeStore: fixedOperatingMode("active"),
+    productionPolicyStore: fixedProductionPolicy(),
     idFactory: ids("prepare-before-off"),
     upload: async () => { throw new Error("Vorbereiteter Test-Upload wurde unterbrochen."); },
   });
@@ -454,6 +465,7 @@ test("switching canary to active releases the remaining due scope without duplic
     store,
     lease: memoryLease(),
     operatingModeStore,
+    productionPolicyStore: fixedProductionPolicy(),
     idFactory: ids("mode-switch-run"),
     upload: async ({ project: projectValue, listing: listingValue }) => {
       uploads.push(listingValue.rotationSourceListingId);
@@ -467,6 +479,65 @@ test("switching canary to active releases the remaining due scope without duplic
   assert.equal(active.operatingMode, "active");
   assert.equal(uploads.filter((id) => id === approvedListing.id).length, 1);
   assert.ok(uploads.some((id) => id !== approvedListing.id));
+});
+
+test("active mode fails closed when the production policy is missing", async () => {
+  const store = memoryStore(studioState(2));
+  let uploads = 0;
+  const service = createListingRotationSchedulerService({
+    store,
+    lease: memoryLease(),
+    operatingModeStore: fixedOperatingMode("active"),
+    upload: async () => { uploads += 1; return { ok: true, jobId: "unexpected" }; },
+  });
+  const result = await service.runIfDue({ now: "2026-08-14T09:00:00.000Z" });
+  assert.equal(result.ran, false);
+  assert.equal(uploads, 0);
+  assert.match(result.reason, /Policy|fail-closed/iu);
+  assert.equal(store.history.length, 1);
+});
+
+test("detect-only startup inspection never creates a copy or upload", async () => {
+  const store = memoryStore(studioState(3));
+  let uploads = 0;
+  const service = createListingRotationSchedulerService({
+    store,
+    lease: memoryLease(),
+    operatingModeStore: fixedOperatingMode("off"),
+    productionPolicyStore: fixedProductionPolicy(3, "detect-only"),
+    upload: async () => { uploads += 1; return { ok: true, jobId: "unexpected" }; },
+  });
+  const inspection = await service.inspect({ trigger: "startup-detect-only", now: "2026-08-14T09:00:00.000Z" });
+  assert.equal(inspection.inspected, true);
+  assert.equal(inspection.dueCount, 12);
+  assert.equal(inspection.maxRunItems, 3);
+  assert.equal(uploads, 0);
+  assert.equal(store.history.length, 1);
+});
+
+test("active production policy limits one scheduler run to three distinct plots", async () => {
+  const store = memoryStore(studioState(5));
+  const uploads = [];
+  const service = createListingRotationSchedulerService({
+    store,
+    lease: memoryLease(),
+    operatingModeStore: fixedOperatingMode("active"),
+    productionPolicyStore: fixedProductionPolicy(3, "guarded"),
+    upload: async ({ project: projectValue, listing: listingValue }) => {
+      uploads.push({ projectId: projectValue.id, plotId: projectValue.plotId, listingId: listingValue.id });
+      return { ok: true, jobId: createUploadJobId(projectValue, listingValue) };
+    },
+  });
+  const result = await service.run({ now: "2026-08-14T09:00:00.000Z", endNow: "2026-08-14T09:01:00.000Z" });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.selectedListingIds.length, 3);
+  assert.equal(uploads.length, 3);
+  assert.equal(new Set(uploads.map((entry) => entry.plotId)).size, 3);
+  assert.ok(result.skippedListings.some((entry) => /maxRunItems=3/u.test(entry.reason)));
+  const current = (await store.load()).state;
+  const copies = current.projects.flatMap((projectValue) => projectValue.listings.filter((item) => item.listingOrigin === "rotation-copy"));
+  assert.equal(copies.length, 3);
+  assert.ok(copies.every((copy) => copy.productionLifecycle?.automaticDeleteAuthorized === true));
 });
 
 test("persistent scheduler claim blocks parallel helpers and recovers an expired crash lock", async () => {

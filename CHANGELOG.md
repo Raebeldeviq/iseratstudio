@@ -1,5 +1,55 @@
 # Änderungsprotokoll
 
+## 0.19.0 · Kontrollierter Active-Rollout – 14. August 2026
+
+### Report
+
+- Eine persistente Produktions-Policy ergänzt. `active` ist nur mit gültigem
+  `maxRunItems` von eins bis höchstens drei zulässig; fehlende, beschädigte
+  oder unbekannte Werte sperren Rotation und Upload fail-closed.
+- Startup-Catch-up in `detect-only` und `guarded` getrennt. Der sichere
+  Erststart erkennt ausschließlich Fälligkeiten. `guarded` verwendet später
+  denselben regulären Zeit-, Abstands-, Claim-, Tages- und Daily-Plot-Vertrag
+  wie ein normaler Schedulerlauf und besitzt keinen Unlimited-Catch-up.
+- Die maximale Run-Reichweite umfasst neue Selektionen und fortzusetzende
+  Kopien gemeinsam. Drei unterschiedliche Grundstücke bleiben durch
+  Adresslimit und persistenten Daily-Plot-Guard gesichert.
+- Offene Löschberichte und neue Löschtransfers teilen sich ebenfalls dasselbe
+  persistente Dreierbudget. Unterbrochene oder unklare Deletejobs sperren jeden
+  weiteren externen Löschtransfer bis zur manuellen Klärung.
+- Nur im neuen Produktionslauf markierte Rotationskopien dürfen nach einem
+  eindeutig positiven Importbericht eine Delete-Autorisierung an die alte
+  Quelle übergeben. Historische `externalDeletionPending`-Quellen werden nicht
+  nachträglich in den Deletepfad aufgenommen.
+- Einen separaten fail-closed Produktions-Delete-Modus, ein atomar gesperrtes
+  idempotentes Ledger, deterministische Job-IDs und strikt sequenzielle
+  Einzelobjekt-DELETE-Transfers ergänzt.
+- Die alte Quelle bleibt bis zu einem exakten positiven Löschbericht
+  `published`. Transferfehler oder unklare Zustände werden nie automatisch
+  wiederholt; das bestätigte Replacement bleibt unverändert.
+- Read-only Apple-Mail-Verarbeitung, strikte Anbieter-/SPF-/Objektnummer-
+  Zuordnung und Import-/Löschbericht-Deduplizierung unverändert beibehalten.
+
+### Begründung
+
+Ein globaler Modus allein begrenzt die Menge eines zulässigen `active`-Laufs
+nicht. Die zusätzliche persistente Policy schließt diese Lücke auch nach einem
+Helper-Neustart. Die Löschung wird nicht aus einem Katalogstatus abgeleitet,
+sondern aus einer beim konkreten Produktionslauf gespeicherten
+Lifecycle-Autorisierung und zwei getrennten positiven Providerberichten.
+
+### Hürden und Risiken
+
+- FTPS bestätigt nur den Dateitransfer, niemals Import oder Löschung. Beide
+  Folgezustände bleiben bis zum jeweiligen Originalbericht offen.
+- Ein Transferabbruch nach Start ist nicht sicher wiederholbar und wird daher
+  als unklarer Zustand dauerhaft blockiert.
+- Apple Mail und Immoprofessional bleiben externe asynchrone Abhängigkeiten.
+  Nicht erreichbare oder unbekannte Berichtsformate stoppen die Kette
+  fail-closed und verändern die veröffentlichte Quelle nicht.
+- Der Produktionsmodus ist standardmäßig `off`; ein Release- oder Helperstart
+  allein führt deshalb keine Portalmutation aus.
+
 ## Unreleased · Apple-Mail-Timeout und Live-Canary-Recovery – 14. August 2026
 
 ### Report

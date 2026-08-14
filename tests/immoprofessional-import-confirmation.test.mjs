@@ -41,6 +41,15 @@ function fixtureState(options = {}) {
     listingGroupVariantId: "variant-1", listingOrigin: "rotation-copy", rotationSourceListingId: source.id,
     version: 2, createdAt: "2026-08-13T09:14:00.000Z", transferredAt: "2026-08-13T09:15:00.000Z",
     status: options.copyStatus || WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT,
+    ...(options.productionLifecycle ? {
+      productionLifecycle: {
+        format: 1,
+        schedulerRunId: "production-run-1",
+        sourceListingId: source.id,
+        automaticDeleteAuthorized: true,
+        preparedAt: "2026-08-13T09:14:00.000Z",
+      },
+    } : {}),
   };
   const project = {
     id: "project-1", createdAt: "2026-06-01T08:00:00.000Z", isActive: true,
@@ -178,4 +187,19 @@ test("deduplicates by Message-ID and raw hash without a second business mutation
   const changedBody = confirmImportReportInState(first.state, parsed({ rawHash: "b".repeat(64) }), mail, ledger);
   assert.equal(changedBody.result.status, "rejected");
   assert.equal(changedBody.state, first.state);
+});
+
+test("only an active production lifecycle authorizes the confirmed source for automatic delete", () => {
+  const production = fixtureState({ productionLifecycle: true });
+  const confirmed = confirmImportReportInState(production.state, parsed(), mail, production.ledger, { now: "2026-08-13T09:17:00.000Z" });
+  const source = confirmed.state.projects[0].listings.find((listing) => listing.id === production.source.id);
+  const copy = confirmed.state.projects[0].listings.find((listing) => listing.id === production.copy.id);
+  assert.equal(source.productionDeleteState, "authorized");
+  assert.equal(source.productionRotationRunId, "production-run-1");
+  assert.equal(copy.productionLifecycle.importReportId, confirmed.result.report.reportId);
+
+  const historical = fixtureState();
+  const historicalConfirmation = confirmImportReportInState(historical.state, parsed(), mail, historical.ledger, { now: "2026-08-13T09:17:00.000Z" });
+  const historicalSource = historicalConfirmation.state.projects[0].listings.find((listing) => listing.id === historical.source.id);
+  assert.equal(historicalSource.productionDeleteState, undefined);
 });

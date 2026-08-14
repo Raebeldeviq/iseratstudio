@@ -1,6 +1,6 @@
 # Technischer Cleanup-Bericht · Version 0.15.0
 
-Stand: 25. Juli 2026  
+Stand: 25. Juli 2026
 Branch: `codex/cleanup-depth-audit`
 
 ## Ausgangslage und Sicherung

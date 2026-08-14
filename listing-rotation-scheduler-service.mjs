@@ -99,11 +99,59 @@ async function loadOperatingMode(store) {
   }
 }
 
+async function loadProductionPolicy(store) {
+  if (!store?.load) {
+    return {
+      valid: false,
+      maxRunItems: 0,
+      startupCatchupMode: "detect-only",
+      fallbackReason: "Produktions-Rollout-Policy fehlt; active ist fail-closed gesperrt.",
+    };
+  }
+  try {
+    return await store.load();
+  } catch {
+    return {
+      valid: false,
+      maxRunItems: 0,
+      startupCatchupMode: "detect-only",
+      fallbackReason: "Produktions-Rollout-Policy konnte nicht gelesen werden; active ist fail-closed gesperrt.",
+    };
+  }
+}
+
 function replaceProject(state, updatedProject) {
   return {
     ...state,
     projects: state.projects.map((project) => project.id === updatedProject.id ? updatedProject : project),
   };
+}
+
+function markProductionRotationCopy(state, projectId, copyId, sourceListingId, runId, at) {
+  const project = state.projects.find((candidate) => candidate.id === projectId);
+  const copy = project?.listings.find((candidate) => candidate.id === copyId);
+  if (!project || !copy) throw new Error("Die Produktions-Rotationskopie ist nicht eindeutig vorhanden.");
+  const markedCopy = {
+    ...copy,
+    productionLifecycle: {
+      format: 1,
+      schedulerRunId: runId,
+      sourceListingId,
+      automaticDeleteAuthorized: true,
+      preparedAt: at,
+    },
+  };
+  const group = normalizeListingGroup(project.listingGroup, project.id, { now: at });
+  return replaceProject(state, {
+    ...project,
+    listings: project.listings.map((listing) => listing.id === copyId ? markedCopy : listing),
+    listingGroup: {
+      ...group,
+      variants: group.variants.map((variant) => variant.listing?.id === copyId
+        ? { ...variant, listing: markedCopy, updatedAt: at }
+        : variant),
+    },
+  });
 }
 
 function recoverInterruptedState(state, at) {
@@ -297,6 +345,16 @@ export function createListingRotationSchedulerService(options) {
     const operatingPolicy = await loadOperatingMode(options.operatingModeStore);
     const operatingMode = operatingPolicy.mode;
     const operatingModeFallbackReason = operatingPolicy.fallbackReason || "";
+    const productionPolicy = await loadProductionPolicy(options.productionPolicyStore);
+    const productionPolicyBlocked = operatingMode === "active" && (
+      productionPolicy.valid !== true
+      || !Number.isInteger(productionPolicy.maxRunItems)
+      || productionPolicy.maxRunItems < 1
+      || productionPolicy.maxRunItems > 3
+    );
+    const activeRunLimit = operatingMode === "active" && productionPolicy.valid === true
+      ? Math.max(0, Math.trunc(Number(productionPolicy.maxRunItems)))
+      : Number.POSITIVE_INFINITY;
 
     const completedListingIds = [];
     const failedListingIds = [];
@@ -313,6 +371,10 @@ export function createListingRotationSchedulerService(options) {
       startedAt,
       operatingMode,
       operatingModeFallbackReason,
+      productionPolicyValid: productionPolicy.valid === true,
+      productionPolicyFallbackReason: productionPolicy.fallbackReason || "",
+      maxRunItems: Number.isFinite(activeRunLimit) ? activeRunLimit : null,
+      startupCatchupMode: productionPolicy.startupCatchupMode || "detect-only",
       canaryListingIds: operatingMode === "canary" ? operatingPolicy.canaryListingIds : [],
     });
     try {
@@ -350,12 +412,14 @@ export function createListingRotationSchedulerService(options) {
             .filter((item) => !pendingAllowedByCanary(state, item, allowedListingIds))
             .map((item) => skipRecord(state, item.projectId, item.listingId, reason)));
         }
+        const pendingLimitExceeded = operatingMode === "active" && pending.length > activeRunLimit;
         const blockingIssues = pending.length ? hardSchedulerIssues(windowIssues) : windowIssues;
-        const selection = operatingMode === "off" || blockingIssues.length || windowIssues.length
+        const selection = operatingMode === "off" || productionPolicyBlocked || pendingLimitExceeded || blockingIssues.length || windowIssues.length
           ? { selections: [], skipped: [], issues: windowIssues, scheduler }
           : selectSchedulerListings({ ...state, scheduler }, startedAt, {
               ignoreTimeWindow: input.ignoreTimeWindow === true,
               ...(operatingMode === "canary" ? { allowedListingIds } : {}),
+              ...(operatingMode === "active" ? { maximumSelections: Math.max(0, activeRunLimit - pending.length) } : {}),
             });
         dueCount = due.length;
         const dueListingKeys = new Set(due.map((item) => `${item.projectId}:${item.listingId}`));
@@ -368,13 +432,35 @@ export function createListingRotationSchedulerService(options) {
             return canaryMatches(listing, allowedListingIds);
           })
           .map((item) => skipRecord(state, item.projectId, item.listingId, item.reasons.join(" · ")));
-        skippedListings = uniqueSkipRecords([...policySkipped, ...selectionSkipRecords]);
+        const selectedKeys = new Set(selection.selections.map((item) => `${item.project.id}:${item.listing.id}`));
+        const productionLimitReached = operatingMode === "active"
+          && Number.isFinite(activeRunLimit)
+          && !productionPolicyBlocked
+          && !pendingLimitExceeded
+          && !blockingIssues.length
+          && !windowIssues.length
+          && selection.selections.length + pending.length >= activeRunLimit;
+        const productionLimitSkips = productionLimitReached
+          ? due
+              .filter((item) => !selectedKeys.has(`${item.projectId}:${item.listingId}`))
+              .map((item) => skipRecord(
+                state,
+                item.projectId,
+                item.listingId,
+                `Produktionslimit maxRunItems=${activeRunLimit}: in diesem Schedulerlauf nicht ausgewählt.`,
+              ))
+          : [];
+        skippedListings = uniqueSkipRecords([...policySkipped, ...selectionSkipRecords, ...productionLimitSkips]);
         skippedCount = skippedListings.length;
         selectedListingIds = selection.selections.map((item) => item.listing.id);
         resumedListingIds = pending.map((item) => item.listingId);
         if (operatingMode === "off") {
           abortReason = operatingModeFallbackReason
             || "Globaler Betriebsmodus off: keine Rotationskopie und kein FTPS-Auftrag zulässig.";
+        } else if (productionPolicyBlocked) {
+          abortReason = productionPolicy.fallbackReason || "Produktions-Rollout-Policy ist ungültig; active ist fail-closed gesperrt.";
+        } else if (pendingLimitExceeded) {
+          abortReason = `Es existieren ${pending.length} fortzusetzende Rotationen; das Produktionslimit maxRunItems=${activeRunLimit} wird fail-closed nicht überschritten.`;
         } else if (blockingIssues.length) abortReason = blockingIssues.join(" · ");
         else if (!selectedListingIds.length && !resumedListingIds.length) {
           abortReason = operatingMode === "canary" && dueCount
@@ -402,6 +488,10 @@ export function createListingRotationSchedulerService(options) {
           trigger,
           operatingMode,
           operatingModeFallbackReason,
+          productionPolicyValid: productionPolicy.valid === true,
+          productionPolicyFallbackReason: productionPolicy.fallbackReason || "",
+          maxRunItems: Number.isFinite(activeRunLimit) ? activeRunLimit : null,
+          startupCatchupMode: productionPolicy.startupCatchupMode || "detect-only",
           mode: scheduler.settings.mode,
           selectedListingIds,
           resumedListingIds,
@@ -488,7 +578,19 @@ export function createListingRotationSchedulerService(options) {
                 seed: `${project.id}:${source.id}:${deterministicCopyId}`,
               });
               if (!result.ok || !result.copy) throw new Error(result.message || "Rotationskopie konnte nicht vorbereitet werden.");
-              return { state: result.state, result: { copy: result.copy } };
+              const nextState = operatingMode === "active"
+                ? markProductionRotationCopy(
+                    result.state,
+                    project.id,
+                    result.copy.id,
+                    source.id,
+                    runId,
+                    preparedAt,
+                  )
+                : result.state;
+              const nextProject = nextState.projects.find((candidate) => candidate.id === project.id);
+              const nextCopy = nextProject?.listings.find((candidate) => candidate.id === result.copy.id);
+              return { state: nextState, result: { copy: nextCopy || result.copy } };
             }, { now: preparedAt });
             copyId = prepared.result.copy.id;
           }
@@ -619,6 +721,24 @@ export function createListingRotationSchedulerService(options) {
     const at = String(input.now || new Date().toISOString());
     const snapshot = await options.store.load();
     if (!snapshot?.stored || !snapshot.state) return { ran: false, reason: "catalog-not-stored" };
+    const operatingPolicy = await loadOperatingMode(options.operatingModeStore);
+    if (operatingPolicy.mode === "off") {
+      return {
+        ran: false,
+        reason: operatingPolicy.fallbackReason || "operating-mode-off",
+        ...(await inspect({ ...input, now: at, trigger: input.trigger || "periodic-off", writeLog: false })),
+      };
+    }
+    if (operatingPolicy.mode === "active") {
+      const productionPolicy = await loadProductionPolicy(options.productionPolicyStore);
+      if (productionPolicy.valid !== true) {
+        return {
+          ran: false,
+          reason: productionPolicy.fallbackReason || "production-policy-invalid",
+          ...(await inspect({ ...input, now: at, trigger: input.trigger || "periodic-policy-blocked", writeLog: false })),
+        };
+      }
+    }
     const scheduler = normalizeListingScheduler(snapshot.state.scheduler, { now: at });
     const windowIssues = schedulerWindowBlockReasons(scheduler, at);
     const due = schedulerDueListings({ ...snapshot.state, scheduler }, at);
@@ -629,5 +749,31 @@ export function createListingRotationSchedulerService(options) {
     return { ran: true, ...(await run({ ...input, now: at, trigger: input.trigger || "periodic" })) };
   }
 
-  return { run, runIfDue };
+  async function inspect(input = {}) {
+    const at = String(input.now || new Date().toISOString());
+    const snapshot = await options.store.load();
+    if (!snapshot?.stored || !snapshot.state) return { inspected: false, reason: "catalog-not-stored" };
+    const operatingPolicy = await loadOperatingMode(options.operatingModeStore);
+    const productionPolicy = await loadProductionPolicy(options.productionPolicyStore);
+    const scheduler = normalizeListingScheduler(snapshot.state.scheduler, { now: at });
+    const due = schedulerDueListings({ ...snapshot.state, scheduler }, at);
+    const pending = pendingRotationCopies(snapshot.state);
+    const result = {
+      inspected: true,
+      trigger: String(input.trigger || "read-only-inspection"),
+      at,
+      operatingMode: operatingPolicy.mode,
+      operatingModeValid: operatingPolicy.valid === true,
+      productionPolicyValid: productionPolicy.valid === true,
+      maxRunItems: productionPolicy.valid === true ? productionPolicy.maxRunItems : 0,
+      startupCatchupMode: productionPolicy.startupCatchupMode || "detect-only",
+      dueCount: due.length,
+      pendingCount: pending.length,
+      schedulerIssues: schedulerWindowBlockReasons(scheduler, at),
+    };
+    if (input.writeLog !== false) await writeRunLog("inspected", result);
+    return result;
+  }
+
+  return { inspect, run, runIfDue };
 }

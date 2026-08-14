@@ -112,6 +112,17 @@ test("delete report rejects a wrong OK target", () => {
   assert.throws(() => parseImmoprofessionalDeleteReport(rawDeleteReport({ target: "30460-032963" })), /nicht exklusiv/u);
 });
 
+test("production parser accepts a syntactically valid exact expected target but never a mismatch", () => {
+  const target = "30460-654321";
+  const result = parseImmoprofessionalDeleteReport(rawDeleteReport({ target }), { expectedTarget: target });
+  assert.equal(result.externalObjectNumber, target);
+  assert.throws(
+    () => parseImmoprofessionalDeleteReport(rawDeleteReport({ target }), { expectedTarget: "30460-123456" }),
+    /nicht exklusiv/u,
+  );
+  assert.throws(() => parseImmoprofessionalDeleteReport(rawDeleteReport({ target }), { expectedTarget: "invalid" }), /syntaktisch gültige/u);
+});
+
 test("delete report rejects an exchange target mismatch", () => {
   assert.throws(() => parseImmoprofessionalDeleteReport(rawDeleteReport({ exchangeTarget: "30460-810978" })), /nicht exklusiv/u);
 });
