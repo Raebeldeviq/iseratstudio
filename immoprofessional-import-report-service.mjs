@@ -44,6 +44,16 @@ function safeReason(error) {
   return (error instanceof Error ? error.message : String(error || "Unbekannter Importberichtfehler")).slice(0, 500);
 }
 
+function mailFailureStatus(error) {
+  const code = String(error?.code || "");
+  if (code === "MAIL_IMPORT_REPORT_SETUP_REQUIRED") return { status: "setup_required", setupRequired: true };
+  if (code === "MAIL_AUTOMATION_TIMEOUT") return { status: "automation_timeout", setupRequired: false };
+  if (code === "MAIL_AUTOMATION_UNAVAILABLE") return { status: "automation_unavailable", setupRequired: false };
+  if (code === "MAIL_AUTOMATION_PERMISSION_DENIED") return { status: "automation_permission_denied", setupRequired: false };
+  if (code === "MAIL_IMPORT_REPORT_PARSE_ERROR") return { status: "parse_error", setupRequired: false };
+  return { status: "access_failed", setupRequired: false };
+}
+
 async function storeMailStatus(store, status, message, now) {
   return store.update((state) => ({
     ...state,
@@ -59,13 +69,22 @@ export function createImmoprofessionalImportReportService(options) {
   }
   const writeLog = options.writeLog || (async () => undefined);
 
-  async function processCandidate(candidate, now) {
+  async function processCandidate(candidate, now, allowedExternalObjectNumbers = null) {
     let mail;
     let metadata = { rawHash: "", messageId: "", receivedAt: "" };
     try {
       mail = await options.mailAdapter.readRawMessage(candidate);
       metadata = rawMetadata(mail.rawSource);
-      const parsed = parseImmoprofessionalImportReport(mail.rawSource, options.parserOptions);
+      let parsed;
+      try {
+        parsed = parseImmoprofessionalImportReport(mail.rawSource, options.parserOptions);
+      } catch (error) {
+        if (!error.code) error.code = "MAIL_IMPORT_REPORT_PARSE_ERROR";
+        throw error;
+      }
+      if (allowedExternalObjectNumbers instanceof Set && !allowedExternalObjectNumbers.has(parsed.externalObjectNumber)) {
+        return { status: "not-canary-authorized", externalObjectNumber: parsed.externalObjectNumber, mailMutations: 0 };
+      }
       const ledger = await options.uploadJobLedger.read();
       const persisted = await options.store.update((state) => confirmImportReportInState(
         state,
@@ -77,6 +96,7 @@ export function createImmoprofessionalImportReportService(options) {
       const result = persisted.result;
       if (!new Set(["confirmed", "idempotent"]).has(result?.status)) {
         const reason = String(result?.reason || "Der Importbericht konnte nicht eindeutig zugeordnet werden.");
+        const errorCode = result?.status === "unmatched" ? "MAIL_IMPORT_REPORT_UNMATCHED" : "";
         await options.store.update((state) => ({
           state: recordImportReportReviewInState(state, {
             ...metadata,
@@ -90,10 +110,11 @@ export function createImmoprofessionalImportReportService(options) {
           externalObjectNumber: parsed.externalObjectNumber,
           processingStatus: result?.status || "rejected",
           reason,
+          errorCode,
           mailboxName: candidate.mailboxName,
           mailMutations: 0,
         });
-        return { status: result?.status || "rejected", reason, mailMutations: 0 };
+        return { status: result?.status || "rejected", reason, errorCode, mailMutations: 0 };
       }
       const report = result.report;
       await writeLog(result.status === "confirmed" ? "confirmed" : "deduplicated", {
@@ -110,6 +131,7 @@ export function createImmoprofessionalImportReportService(options) {
       };
     } catch (error) {
       const reason = safeReason(error);
+      const errorCode = String(error?.code || "MAIL_IMPORT_REPORT_PARSE_ERROR");
       if (mail) {
         await options.store.update((state) => ({
           state: recordImportReportReviewInState(state, {
@@ -123,10 +145,11 @@ export function createImmoprofessionalImportReportService(options) {
       await writeLog("rejected", {
         processingStatus: "review_required",
         reason,
+        errorCode,
         mailboxName: candidate.mailboxName,
         mailMutations: 0,
       });
-      return { status: "rejected", reason, mailMutations: 0 };
+      return { status: "rejected", reason, errorCode, mailMutations: 0 };
     }
   }
 
@@ -134,7 +157,13 @@ export function createImmoprofessionalImportReportService(options) {
     const now = String(input.now || new Date().toISOString());
     const snapshot = await options.store.load();
     if (!snapshot?.stored || !snapshot.state) return { ran: false, reason: "catalog-not-stored", processed: [], mailMutations: 0 };
-    const pending = pendingImportListings(snapshot.state);
+    const allowedExternalObjectNumbers = Array.isArray(input.allowedExternalObjectNumbers)
+      ? new Set(input.allowedExternalObjectNumbers.map(String).filter(Boolean))
+      : null;
+    const allPending = pendingImportListings(snapshot.state);
+    const pending = allowedExternalObjectNumbers
+      ? allPending.filter((listing) => allowedExternalObjectNumbers.has(String(listing.externalId || "")))
+      : allPending;
     if (!pending.length) {
       return { ran: false, reason: "no-pending-imports", pendingCount: 0, processed: [], mailMutations: 0 };
     }
@@ -143,16 +172,17 @@ export function createImmoprofessionalImportReportService(options) {
       candidates = await options.mailAdapter.findCandidates({ lookbackHours: lookbackHoursFor(pending, now) });
     } catch (error) {
       const reason = safeReason(error);
-      const setupRequired = error?.code === "MAIL_IMPORT_REPORT_SETUP_REQUIRED";
+      const failure = mailFailureStatus(error);
+      const setupRequired = failure.setupRequired;
       const message = setupRequired
         ? "Importbericht-Ordner nicht verfügbar. Livinghaus / Inseratestudio – Importberichte muss serverseitig eindeutig vorhanden sein."
         : reason;
-      await storeMailStatus(options.store, setupRequired ? "setup_required" : "access_failed", message, now).catch(() => undefined);
-      await writeLog("scan-failed", { pendingCount: pending.length, reason, setupRequired, mailMutations: 0 });
-      return { ran: true, reason, pendingCount: pending.length, setupRequired, processed: [], mailMutations: 0 };
+      await storeMailStatus(options.store, failure.status, message, now).catch(() => undefined);
+      await writeLog("scan-failed", { pendingCount: pending.length, reason, errorCode: String(error?.code || ""), setupRequired, mailMutations: 0 });
+      return { ran: true, reason, errorCode: String(error?.code || ""), pendingCount: pending.length, setupRequired, processed: [], mailMutations: 0 };
     }
     const processed = [];
-    for (const candidate of candidates) processed.push(await processCandidate(candidate, now));
+    for (const candidate of candidates) processed.push(await processCandidate(candidate, now, allowedExternalObjectNumbers));
     if (!candidates.length) {
       await storeMailStatus(
         options.store,

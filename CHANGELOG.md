@@ -1,5 +1,109 @@
 # Änderungsprotokoll
 
+## Unreleased · Apple-Mail-Timeout und Live-Canary-Recovery – 14. August 2026
+
+### Report
+
+- Die Apple-Mail-Fehlerklassifizierung auf einen strukturierten
+  `FPI_OK`-/`FPI_ERROR`-Prozessvertrag umgestellt. Setupfehler werden nur noch
+  aus der tatsächlich ausgegebenen Adapterantwort abgeleitet, nicht aus dem in
+  Node-Fehlermeldungen eingebetteten AppleScript-Quelltext.
+- Prozess-/AppleEvent-Timeout, nicht verfügbare Automation, explizite
+  macOS-Berechtigungsverweigerung, Setupfehler und Parserfehler in getrennte
+  fail-closed Fehlercodes überführt.
+- Die verschachtelte AppleScript-Auflösung der Mailbox-Account-ID explizit
+  geklammert. Damit kompiliert der read-only Account-Guard zuverlässig und
+  weist einen Ordner unter einem abweichenden Account weiterhin fail-closed ab.
+- Alle drei read-only Mail-Skripte adressieren Mail über die stabile Bundle-ID
+  `com.apple.mail`. Damit bleibt die AppleScript-Terminologie unabhängig von
+  lokalisierter oder fehlerhafter App-Namensauflösung verfügbar.
+- Recoverytests ergänzt: Ein Timeout lässt bestehende
+  `transferred_pending_import`-Kopien und Uploadjobs unverändert; ein späterer
+  positiver Bericht bestätigt denselben Job genau einmal und übergibt die
+  Scheduler-Verantwortung idempotent.
+- Den Daily-Guard-Test um den konkreten Tageswechsel 13.08. → 14.08. erweitert.
+  Der historische Transferbeleg bleibt unverändert, während ein neuer Tag
+  einen eigenen stabilen Guard-Key erhält.
+
+### Begründung
+
+Node kann bei einem `osascript`-Timeout den vollständigen Prozessaufruf samt
+Script in `error.message` einbetten. Eine freie Stringsuche verwechselte dadurch
+im Script deklarierte Sentinelwerte mit real ausgegebenen Setupfehlern. Der
+strukturierte stdout-Vertrag und die vorgelagerte Prozessklassifizierung
+trennen Transport- und Fachfehler eindeutig.
+
+### Hürden und Risiken
+
+- Ein Apple-Mail-Timeout beweist weder einen fehlenden Account noch einen
+  fehlenden Serverordner. Die Recovery bleibt deshalb ohne positiven Bericht
+  vollständig gesperrt.
+- Mail.app wird nicht automatisch beendet oder neu gestartet. Bleibt der
+  bounded Minimaltest ohne Antwort, ist ein kontrollierter Nutzerneustart
+  erforderlich.
+- Diese Korrektur erlaubt weder einen erneuten Upload der bestehenden Kopie
+  noch eine Importbestätigung aus FTPS-Erfolg oder Zeitablauf.
+
+## Unreleased · Begrenzte vollständige 3er-Inseratrotation – 13. August 2026
+
+### Report
+
+- Einen zentralen persistenten Daily-Plot-Guard für alle produktiven
+  Listing-Uploadpfade ergänzt. Pro stabiler `plotId` und
+  `Europe/Berlin`-Kalendertag ist höchstens ein erfolgreicher oder nach
+  Transferbeginn unklarer FTPS-Vorgang zulässig.
+- Die Daily-Evidenz aus Katalog, `lastUploadedAt`, Rotationshistorie,
+  bestätigten Importen und Uploadledger zusammengeführt. Rein vorbereitete,
+  sicher unübertragene Jobs geben den Tag frei; unklare Transfers blockieren
+  mit `PLOT_DAILY_UPLOAD_LIMIT_REACHED` fail-closed.
+- Eine read-only Kandidatenauswahl nach ältestem effektivem externem
+  Veröffentlichungszeitpunkt ergänzt. Sie verlangt exakt drei fällige,
+  vollständig eligible Listings auf drei unterschiedlichen, heute unbenutzten
+  Grundstücken und validiert die erwarteten Pakete ohne Upload.
+- Einen strikt einmaligen manuellen Rotationsrunner ergänzt. Er akzeptiert nur
+  eines von drei fest vorab bestimmten Source-/Replacement-Paaren, verwendet
+  den Zeitfenster-Override ausschließlich im aktuellen Prozess und setzt den
+  globalen Modus in jedem Abschluss- und Fehlerpfad wieder auf `off`.
+- Die Importberichtprüfung für den Livetest auf exakt eine neue externe
+  Objektnummer begrenzt. Andere offene Imports und ihre Mails bleiben
+  unverändert.
+- Den real bewiesenen OpenImmo-DELETE-Vertrag in einem separaten,
+  fest allowlisteten 3er-Testpfad wiederverwendet. DELETE ist erst nach
+  positiver Importbestätigung und Scheduler-Handover möglich, zielt hart auf
+  die alte Objektnummer und wird nach Transfer nie automatisch wiederholt.
+- Einen vorbereiteten Live-Canary-Deletejob an seinen persistenten
+  Payload-Zeitpunkt gebunden. Wiederholte Preflight-/Transferaufrufe müssen
+  Dateiname, SHA-256 und Paketgröße exakt reproduzieren und stoppen bei jeder
+  Abweichung vor FTPS fail-closed.
+- Eine bounded read-only Löschberichtsuche in genau
+  `Livinghaus / Inseratestudio – Importberichte` und
+  `Livinghaus / Posteingang` ergänzt. Ein eindeutiger positiver Bericht genügt;
+  zusätzliche Berichte werden nur als idempotente Evidenz gespeichert.
+- Die 30 geforderten Daily-, Import-before-delete-, Source-/Replacement-,
+  Restart-, Idempotenz- und Katalogintegritätsszenarien sowie zusätzliche
+  Modus- und Randfalltests ergänzt.
+
+### Begründung
+
+Die fachliche Grundstücksgrenze muss oberhalb einzelner Scheduler- und
+UI-Pfade liegen. Ein persistenter atomarer Guard mit stabiler `plotId` verhindert
+auch nach Neustart doppelte Tagesuploads. Die externe Löschung bleibt bewusst
+ein enges Canary-Werkzeug: Import und DELETE werden getrennt bestätigt, und
+keine Beobachtung wird aus bloßem FTPS-Erfolg oder Zeitablauf abgeleitet.
+
+### Hürden und Risiken
+
+- Ein Transferabbruch nach FTPS-Start ist nicht sicher als „nicht übertragen“
+  beweisbar und verbraucht deshalb den Tag fail-closed.
+- Apple Mail stellt Löschbestätigungen in zwei beobachteten Ordnern bereit; der
+  begrenzte Adapter liest beide, verändert aber weder Nachrichten noch Ordner.
+- Die drei Source-/Replacement-Zuordnungen sind absichtlich statisch. Jede
+  weitere Objektnummer erfordert einen neuen read-only Preflight und darf nicht
+  stillschweigend in diesen Canary aufgenommen werden.
+- Der reale 3er-Produktionsnachweis und seine Resultate werden erst nach
+  vollständig grüner lokaler Qualitätsprüfung dokumentiert. Daraus folgt auch
+  bei Erfolg keine Freigabe von `active` oder einer allgemeinen Löschautomation.
+
 ## Unreleased · Reale Immoprofessional-Delete-Bestätigung – 13. August 2026
 
 ### Report

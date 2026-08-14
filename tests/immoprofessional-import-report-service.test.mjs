@@ -225,10 +225,72 @@ test("missing or ambiguous account/folder exposes setup required and preserves t
   }
 });
 
+test("Apple Mail timeout is never setup required and preserves the existing transferred job for later recovery", async () => {
+  const setup = setupState();
+  const store = fakeStore(setup.state);
+  const before = structuredClone(store.current());
+  const timeout = Object.assign(new Error("Apple Mail hat nicht geantwortet."), {
+    code: "MAIL_AUTOMATION_TIMEOUT",
+    timedOut: true,
+    exitSignal: "SIGTERM",
+    durationMs: 10_000,
+  });
+  const timedOutMail = fakeMail({ findError: timeout, exposeMutationTraps: true });
+  const first = await createService(setup, store, timedOutMail).runOnce({ now: "2026-08-13T09:17:00.000Z" });
+
+  assert.equal(first.errorCode, "MAIL_AUTOMATION_TIMEOUT");
+  assert.equal(first.setupRequired, false);
+  assert.equal(store.current().mailImportReportStatus.status, "automation_timeout");
+  assert.deepEqual(store.current().projects, before.projects);
+  assert.equal(store.current().importReports?.length || 0, 0);
+  assert.deepEqual(timedOutMail.counts(), { scanCount: 1, readCount: 0, mutationCount: 0 });
+
+  const recoveredMail = fakeMail({ exposeMutationTraps: true });
+  const second = await createService(setup, store, recoveredMail).runOnce({ now: "2026-08-13T09:18:00.000Z" });
+  assert.equal(second.processed[0].status, "confirmed");
+  const source = store.current().projects[0].listings.find((listing) => listing.id === "source");
+  const copy = store.current().projects[0].listings.find((listing) => listing.id === "copy");
+  assert.equal(copy.status, WORKFLOW_STATUS.PUBLISHED);
+  assert.equal(copy.lastUploadedAt, "2026-08-13T09:16:00.000Z");
+  assert.equal(copy.nextUpdateAt, "2026-08-25T09:16:00.000Z");
+  assert.equal(source.supersededByListingId, copy.id);
+  assert.equal(source.externalDeletionPending, true);
+  assert.equal(store.current().importReports.length, 1);
+});
+
+test("unmatched parsed report is classified explicitly and cannot mutate the pending replacement", async () => {
+  const setup = setupState();
+  const store = fakeStore(setup.state);
+  const beforeProjects = structuredClone(store.current().projects);
+  const mail = fakeMail({ raw: rawSuccess.replaceAll("30460-810978", "30460-999999"), exposeMutationTraps: true });
+  const result = await createService(setup, store, mail).runOnce({ now: "2026-08-13T09:17:00.000Z" });
+  assert.equal(result.processed[0].status, "unmatched");
+  assert.equal(result.processed[0].errorCode, "MAIL_IMPORT_REPORT_UNMATCHED");
+  assert.deepEqual(store.current().projects, beforeProjects);
+  assert.equal(store.current().importReports?.length || 0, 0);
+});
+
 test("refuses a mail adapter that is not explicitly read-only", () => {
   const setup = setupState();
   const store = fakeStore(setup.state);
   const mail = fakeMail();
   mail.readOnly = false;
   assert.throws(() => createService(setup, store, mail), /read-only/u);
+});
+
+test("bounded live-canary scan cannot mutate another pending external object number", async () => {
+  const setup = setupState();
+  const store = fakeStore(setup.state);
+  const unrelatedRaw = rawSuccess.replaceAll("30460-810978", "30460-056361");
+  const mail = fakeMail({ raw: unrelatedRaw, exposeMutationTraps: true });
+  const before = structuredClone(store.current());
+  const result = await createService(setup, store, mail).runOnce({
+    now: "2026-08-13T09:17:00.000Z",
+    allowedExternalObjectNumbers: ["30460-810978"],
+  });
+  assert.equal(result.pendingCount, 1);
+  assert.equal(result.processed[0].status, "not-canary-authorized");
+  assert.equal(result.processed[0].externalObjectNumber, "30460-056361");
+  assert.deepEqual(store.current(), before);
+  assert.deepEqual(mail.counts(), { scanCount: 1, readCount: 1, mutationCount: 0 });
 });

@@ -134,6 +134,33 @@ positiven Löschstatus sowie Message-ID-/Raw-Hash-Idempotenz. FTPS-Erfolg,
 Zeitablauf oder fehlender Fehler bleiben unzureichend; produktive Löschung bleibt
 deaktiviert.
 
+### Hoch: Mehrere Hausuploads desselben Grundstücks am selben Tag
+
+Scheduler, manuelle Uploads und Canary-Läufe konnten bisher jeweils ihre eigene
+Reichweite prüfen, ohne eine gemeinsame dauerhafte Grundstücksgrenze zu teilen.
+Der zentrale Daily-Plot-Guard beansprucht nun atomar `plotId` plus
+`Europe/Berlin`-Kalendertag. Er wird vor jedem produktiven Listing-FTPS-Pfad
+ausgeführt und zusätzlich mit Katalog-, Uploadledger- und Importberichtevidenz
+abgeglichen. Erfolgreicher Transfer und unklarer Zustand nach Transferbeginn
+verbrauchen den Tag; sicher nicht gestartete Transfers werden freigegeben.
+Beschädigte Guarddaten, fehlende `plotId`, parallele Claims und ein bereits
+verbrauchter Tag stoppen fail-closed.
+
+### Hoch: Begrenzter 3er-Canary könnte zu allgemeiner Löschautomation werden
+
+Der Live-Testpfad ist nicht dynamisch erweiterbar: drei konkrete alte
+Objektnummern sind jeweils an feste Source-Listing-ID, erwartete
+Replacement-ID, neue Objektnummer und `plotId` gebunden. Jeder Aufruf akzeptiert
+genau ein Ziel. Rotation, Importprüfung und DELETE laufen nacheinander;
+Importbestätigung ist zwingende Delete-Voraussetzung. Der bewiesene
+Einzelobjektvertrag wird unverändert verwendet, die Replacementnummer darf im
+Payload nicht vorkommen, und ein einmal gestarteter DELETE wird nie automatisch
+wiederholt. Rotation- und Delete-Modus fallen auch bei Vorbereitungs- oder
+Transportfehlern auf `off` zurück. Ein eindeutiger positiver Löschbericht genügt
+zur Finalisierung; weitere passende Berichte werden nur idempotent als Evidenz
+gespeichert. `active`, Batch-Delete und `automaticDeletionEnabled` bleiben
+außerhalb dieses Testpfads unverändert deaktiviert.
+
 ## Verbleibende Risiken und Grenzen
 
 1. Der automatische Parser kennt bislang ausschließlich den real beobachteten

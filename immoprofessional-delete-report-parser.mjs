@@ -7,6 +7,11 @@ import {
 import { DELETE_CANARY_TARGET } from "./immoprofessional-delete-canary.mjs";
 
 export const IMMOPROFESSIONAL_DELETE_REPORT_PARSER_VERSION = "1.0.0";
+export const LIVE_CANARY_DELETE_REPORT_TARGETS = Object.freeze([
+  "30460-930980",
+  "30460-142086",
+  "30460-132376",
+]);
 
 function uniqueMatch(text, expression, label) {
   const matches = [...String(text).matchAll(expression)];
@@ -73,7 +78,7 @@ function parseDeleteBody(text, expectedTarget) {
 
 export function parseImmoprofessionalDeleteReport(rawValue, options = {}) {
   const expectedTarget = String(options.expectedTarget || DELETE_CANARY_TARGET).trim();
-  if (expectedTarget !== DELETE_CANARY_TARGET) {
+  if (expectedTarget !== DELETE_CANARY_TARGET && !LIVE_CANARY_DELETE_REPORT_TARGETS.includes(expectedTarget)) {
     throw new Error("Der Löschberichtparser ist ausschließlich für das autorisierte Canary-Objekt freigegeben.");
   }
   const envelope = extractImmoprofessionalReportEnvelope(rawValue, options);

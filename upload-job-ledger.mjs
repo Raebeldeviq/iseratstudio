@@ -57,10 +57,15 @@ function jobRecord(input, current, status, now) {
     jobId: validJobId(input.jobId),
     projectId: text(input.projectId, 160),
     listingId: text(input.listingId, 160),
+    plotId: text(input.plotId || current?.plotId, 200),
+    plotUploadDayKey: text(input.plotUploadDayKey || current?.plotUploadDayKey, 260),
     jobType: text(input.jobType || "immoprofessional-upload", 100),
     status,
     createdAt: current?.createdAt || now,
     updatedAt: now,
+    transferredAt: status === WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT
+      ? now
+      : text(current?.transferredAt, 50),
     errorCode: status === WORKFLOW_STATUS.FAILED ? text(input.errorCode, 100) : "",
     message: status === WORKFLOW_STATUS.FAILED ? safeMessage(input.message, 500) : "",
   };

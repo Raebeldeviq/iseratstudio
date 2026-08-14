@@ -266,6 +266,25 @@ und könnte einen tatsächlich veröffentlichten Zustand nur wegen Zeitablaufs
 fälliger, ausgewählter, fortgesetzter, übersprungener und fehlerhafter
 Inserate sowie Start, Ende und Abbruchgrund.
 
+### Hartes Tageslimit je Grundstück
+
+Für produktive Hausuploads gilt zentral: Pro stabiler `plotId` darf innerhalb
+eines Kalendertags in `Europe/Berlin` höchstens ein Haus per FTPS übertragen
+werden. Der persistente Schlüssel lautet `<plotId>:<YYYY-MM-DD>`. Der Guard
+liegt in `plot-daily-upload-guard.json` im Application-Support-Verzeichnis und
+wird von Background-Scheduler, manuellem Upload, explizitem Canary und
+Restart-Catch-up gleichermaßen verwendet. Eine UI-Auswahl oder ein neuer
+Helper-Prozess kann ihn nicht umgehen.
+
+Der Tag ist ab erfolgreichem FTPS-Transfer verbraucht; ein noch ausstehender
+Importbericht gibt ihn nicht wieder frei. Ein nach Transferbeginn unklarer
+Zustand blockiert fail-closed. Ein ausschließlich lokal vorbereiteter und
+nachweislich nicht gestarteter Transfer gibt seinen Claim dagegen wieder frei.
+Katalog, Uploadledger und bestätigte Importberichte werden zusätzlich als
+positive Evidenz ausgewertet. Fehlt eine stabile `plotId`, wird der produktive
+Upload blockiert. Der einheitliche Code lautet
+`PLOT_DAILY_UPLOAD_LIMIT_REACHED`.
+
 Der Ablauf des automatischen Rotationsauftrags ist:
 
 `scheduled → processing → prepared → transferred_pending_import → published`
@@ -364,6 +383,31 @@ nicht selbst an und besitzt in diesem Workflow keinerlei Mailmutation: kein
 Verschieben, Löschen, Kopieren, Gelesen-Markieren, Markieren, Kategorisieren,
 Anlegen oder Umbenennen.
 
+Der Apple-Mail-Adapter verwendet einen strukturierten Prozessvertrag:
+`FPI_OK` kennzeichnet ausschließlich eine erfolgreiche read-only Antwort;
+fachliche Setupfehler werden als `FPI_ERROR / SETUP_REQUIRED / <Grund>`
+zurückgegeben. Nur dieser tatsächlich ausgegebene Prozesswert kann
+`MAIL_IMPORT_REPORT_SETUP_REQUIRED` auslösen. Der AppleScript-Quelltext, die
+Kommandozeile und Debug-Ausgaben werden ausdrücklich nicht nach
+Sentinelwörtern durchsucht.
+
+Die serverseitige Ordnerzuordnung klammert die verschachtelte AppleScript-
+Eigenschaftsauflösung explizit. Dadurch wird die Account-ID des gefundenen
+Ordners vor jeder Abfrage parserfest mit dem eindeutig aufgelösten
+`Livinghaus`-Account verglichen; ein anderer Account bleibt fail-closed. Die
+Mail-Terminologie wird dabei über die stabile Bundle-ID `com.apple.mail`
+aufgelöst, damit lokalisierte oder nicht terminologieauflösende App-Namen den
+read-only Parser nicht beeinflussen.
+
+Prozess- und AppleEvent-Timeouts werden vorgelagert als
+`MAIL_AUTOMATION_TIMEOUT` mit `timedOut`, Exit-Signal und Laufzeit erfasst.
+Explizite macOS-Automationsverweigerungen werden davon als
+`MAIL_AUTOMATION_PERMISSION_DENIED`, eine nicht erreichbare Mail-/AppleEvent-
+Verbindung als `MAIL_AUTOMATION_UNAVAILABLE` und ungültige strukturierte
+Antworten als `MAIL_IMPORT_REPORT_PARSE_ERROR` getrennt. Alle Klassen bleiben
+fail-closed: Sie bestätigen keinen Import, verändern keine Mail und lassen die
+Rotationskopie unverändert `transferred_pending_import`.
+
 Gesucht wird nur nach dem exakten Betreff und in einem auf offene Transfers
 begrenzten Lookback. Gibt es keine offene `transferred_pending_import`-Kopie,
 wird Apple Mail nicht angesprochen. Solange eine Bestätigung offen ist, prüft
@@ -416,6 +460,26 @@ einen eindeutigen objektbezogenen Löschbericht maschinell bestätigt. Daraus
 folgt keine allgemeine Betriebsfreigabe: Automatische Löschung bleibt
 fail-closed
 deaktiviert.
+
+Für den kontrollierten 3er-Livetest existiert ein davon getrenntes,
+fest allowlistetes Testwerkzeug. Es akzeptiert ausschließlich die drei vorab
+read-only bestimmten Source-/Replacement-Paare, arbeitet strikt sequenziell
+und kennt für Rotation und Löschung nur `off` und einen einzelnen `canary`.
+Vor einem DELETE müssen das Replacement `published`, der positive
+Importbericht, das Scheduler-Handover und `externalDeletionPending` der Quelle
+eindeutig belegt sein. Das Löschziel ist hart die alte externe Objektnummer und
+darf nie die Replacementnummer sein. Nach einem erfolgreichen DELETE-Transfer
+gibt es keinen Retry. Erst mindestens ein eindeutiger realer Löschbericht mit
+alter Objektnummer und positivem Löschstatus finalisiert die Quelle; weitere
+Portalberichte sind zusätzliche Evidenz, keine zusätzliche Blockierbedingung.
+Dieses Testwerkzeug ist keine allgemeine Löschautomation und aktiviert weder
+`automaticDeletionEnabled` noch den Modus `active`.
+
+Ein einmal vorbereiteter Live-Canary-Deletejob bindet außerdem seinen
+Payload-Zeitpunkt persistent. Jeder spätere Preflight- oder Transferaufruf muss
+dadurch exakt denselben Dateinamen, SHA-256 und dieselbe Paketgröße erzeugen;
+jede Abweichung stoppt vor FTPS mit
+`LIVE_CANARY_DELETE_PAYLOAD_MISMATCH` fail-closed.
 
 ## Dynamisches Inseratsmanagement und sichere Variantenrotation
 

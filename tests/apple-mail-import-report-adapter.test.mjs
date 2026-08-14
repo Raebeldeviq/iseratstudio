@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  classifyAppleMailAutomationError,
+  createAppleMailAutomationRunner,
   createAppleMailImportReportAdapter,
   IMPORT_REPORT_MAIL_FOLDER,
 } from "../apple-mail-import-report-adapter.mjs";
@@ -80,8 +82,10 @@ test("never resolves a same-name local or wrong-account mailbox as fallback", as
   await adapter.inspectSetup();
   await adapter.findCandidates();
   const scripts = calls.map((call) => call.script).join("\n");
+  assert.equal(calls.every((call) => call.script.includes('tell application id "com.apple.mail"')), true);
+  assert.equal(calls.every((call) => !call.script.includes('tell application "Mail"')), true);
   assert.match(scripts, /every mailbox of targetAccount whose name is folderName/u);
-  assert.match(scripts, /id of account of targetBox/u);
+  assert.match(scripts, /\(\(id of \(account of targetBox\)\) as string\)/u);
   assert.doesNotMatch(scripts, /On My Mac|Auf meinem Mac|every mailbox whose name/u);
 });
 
@@ -126,5 +130,95 @@ test("rejects malformed transport ids and cross-folder message references", asyn
 
 test("rejects a response for any mailbox other than the configured target", async () => {
   const adapter = scriptedAdapter({ setup: `SETUP\t${accountId}\tunknown\tPosteingang\tmailbox` }).adapter;
-  await assert.rejects(adapter.inspectSetup(), /MAIL_IMPORT_REPORT_FOLDER_NOT_UNIQUE/u);
+  await assert.rejects(adapter.inspectSetup(), (error) => error.code === "MAIL_IMPORT_REPORT_PARSE_ERROR");
+});
+
+function processAdapter(execute, options = {}) {
+  return createAppleMailImportReportAdapter({ execute, clock: options.clock });
+}
+
+test("accepts only real structured account and mailbox setup sentinels", async () => {
+  for (const [reason, expectedSetupReason] of [
+    ["ACCOUNT_NOT_FOUND", "ACCOUNT_NOT_FOUND"],
+    ["MAILBOX_NOT_FOUND", "MAILBOX_NOT_FOUND"],
+  ]) {
+    const adapter = processAdapter(async () => ({
+      stdout: `FPI_ERROR\tSETUP_REQUIRED\t${reason}\n`,
+      stderr: "",
+    }));
+    await assert.rejects(adapter.inspectSetup(), (error) =>
+      error.code === "MAIL_IMPORT_REPORT_SETUP_REQUIRED"
+      && error.setupReason === expectedSetupReason);
+  }
+});
+
+test("sentinel strings embedded in AppleScript never reclassify a process timeout as setup required", async () => {
+  let observedScript = "";
+  const adapter = processAdapter(async (_file, args) => {
+    observedScript = args[1];
+    const error = new Error(`command failed: ${args.join(" ")}`);
+    error.killed = true;
+    error.signal = "SIGTERM";
+    error.stderr = "";
+    throw error;
+  });
+  await assert.rejects(adapter.inspectSetup(), (error) =>
+    error.code === "MAIL_AUTOMATION_TIMEOUT"
+    && error.timedOut === true
+    && error.exitSignal === "SIGTERM");
+  assert.match(observedScript, /SETUP_REQUIRED/u);
+  for (const sentinel of [
+    "MAIL_ACCOUNT_NOT_FOUND",
+    "MAIL_ACCOUNT_AMBIGUOUS",
+    "MAIL_ACCOUNT_ID_CHANGED",
+    "MAIL_IMPORT_REPORT_FOLDER_NOT_FOUND",
+    "MAIL_IMPORT_REPORT_FOLDER_AMBIGUOUS",
+    "MAIL_IMPORT_REPORT_FOLDER_WRONG_ACCOUNT",
+  ]) assert.match(observedScript, new RegExp(sentinel, "u"));
+});
+
+test("process SIGTERM due to timeout is classified before any stderr or command-text inspection", () => {
+  const error = Object.assign(new Error("SETUP_REQUIRED MAIL_ACCOUNT_NOT_FOUND"), {
+    killed: true,
+    signal: "SIGTERM",
+    stderr: "MAIL_IMPORT_REPORT_FOLDER_NOT_FOUND",
+  });
+  const classified = classifyAppleMailAutomationError(error, { durationMs: 10_000 });
+  assert.equal(classified.code, "MAIL_AUTOMATION_TIMEOUT");
+  assert.equal(classified.timedOut, true);
+  assert.equal(classified.durationMs, 10_000);
+});
+
+test("explicit macOS automation denial is classified separately", async () => {
+  const adapter = processAdapter(async () => {
+    const error = new Error("osascript failed");
+    error.stderr = "Not authorized to send Apple events to Mail. (-1743)";
+    throw error;
+  });
+  await assert.rejects(adapter.inspectSetup(), (error) => error.code === "MAIL_AUTOMATION_PERMISSION_DENIED");
+});
+
+test("successful structured setup is not misclassified and remains read-only", async () => {
+  const adapter = processAdapter(async (_file, args) => {
+    assert.match(args[1], /FPI_OK/u);
+    return { stdout: `FPI_OK\tSETUP\t${accountId}\tunknown\t${IMPORT_REPORT_MAIL_FOLDER}\tmailbox\n`, stderr: "" };
+  });
+  const setup = await adapter.inspectSetup();
+  assert.equal(setup.accountId, accountId);
+  assert.equal(setup.mailboxName, IMPORT_REPORT_MAIL_FOLDER);
+  assert.equal(setup.readOnly, true);
+});
+
+test("reachable mailbox with no report is a successful empty scan, not setup required", async () => {
+  const adapter = processAdapter(async () => ({
+    stdout: `FPI_OK\tMAILBOX\t${accountId}\tunknown\t${IMPORT_REPORT_MAIL_FOLDER}\tmailbox\n`,
+    stderr: "",
+  }));
+  assert.deepEqual(await adapter.findCandidates(), []);
+});
+
+test("unknown or unstructured Apple Mail output is a parse error", async () => {
+  const runner = createAppleMailAutomationRunner({ execute: async () => ({ stdout: "SETUP_REQUIRED", stderr: "" }) });
+  await assert.rejects(runner("script containing MAIL_ACCOUNT_NOT_FOUND", []), (error) =>
+    error.code === "MAIL_IMPORT_REPORT_PARSE_ERROR");
 });

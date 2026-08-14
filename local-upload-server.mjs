@@ -27,6 +27,11 @@ import {
 import { getMediaLibraryItem, queryMediaLibrary, recommendedMediaSequence } from "./media-library.mjs";
 import { createStructuredFileLogger } from "./structured-log.mjs";
 import { createUploadJobLedger } from "./upload-job-ledger.mjs";
+import {
+  collectPlotUploadEvidence,
+  createPlotDailyUploadGuard,
+  plotUploadDayKey,
+} from "./plot-daily-upload-guard.mjs";
 import { WORKFLOW_STATUS } from "./workflow-status.mjs";
 import {
   analyzePlotExpose,
@@ -56,6 +61,7 @@ const MAX_IMAGE_BYTES = 100 * 1024 * 1024;
 const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
 const UPLOAD_LOG_PATH = join(APPLICATION_DATA_DIRECTORY, "upload.log");
 const UPLOAD_JOB_LEDGER_PATH = join(APPLICATION_DATA_DIRECTORY, "upload-jobs.json");
+const PLOT_DAILY_UPLOAD_GUARD_PATH = join(APPLICATION_DATA_DIRECTORY, "plot-daily-upload-guard.json");
 const LISTING_SCHEDULER_LOG_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-scheduler.log");
 const LISTING_SCHEDULER_LOCK_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-scheduler.lock");
 const LISTING_ROTATION_MODE_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-rotation-mode.json");
@@ -70,6 +76,7 @@ const writeUploadLog = createStructuredFileLogger(UPLOAD_LOG_PATH, { jobType: "i
 const writeListingSchedulerLog = createStructuredFileLogger(LISTING_SCHEDULER_LOG_PATH, { jobType: "listing-rotation-scheduler" });
 const writeImportReportLog = createStructuredFileLogger(IMPORT_REPORT_LOG_PATH, { jobType: "immoprofessional-import-report" });
 const uploadJobLedger = createUploadJobLedger(UPLOAD_JOB_LEDGER_PATH);
+const plotDailyUploadGuard = createPlotDailyUploadGuard(PLOT_DAILY_UPLOAD_GUARD_PATH);
 const plotSyncService = createPlotSyncService();
 const catalogStateStore = createCatalogStateStore();
 const listingSchedulerLease = createPersistentLease(LISTING_SCHEDULER_LOCK_PATH);
@@ -231,12 +238,48 @@ async function hydratedCatalogImage(image) {
   };
 }
 
+async function claimPlotDailyUpload({ state, project, uploadJob, now = new Date().toISOString() }) {
+  if (!project?.plotId) {
+    const error = new Error("Der produktive Listing-Upload besitzt keine stabile plotId und wird fail-closed blockiert.");
+    error.code = "PLOT_DAILY_UPLOAD_PLOT_ID_REQUIRED";
+    throw error;
+  }
+  const ledger = await uploadJobLedger.read();
+  const evidence = collectPlotUploadEvidence(state, ledger, now);
+  const context = {
+    ...uploadJob,
+    plotId: String(project.plotId),
+    plotUploadDayKey: plotUploadDayKey(project.plotId, now),
+  };
+  const result = await plotDailyUploadGuard.claim(context, { now, evidence });
+  return { ...context, claimToken: result.record.claimToken };
+}
+
+async function persistedUploadContext(projectId, listingId) {
+  const snapshot = await catalogStateStore.load();
+  if (!snapshot?.stored || !snapshot.state) {
+    const error = new Error("Der persistente Katalog ist für den produktiven Upload nicht verfügbar.");
+    error.code = "PLOT_DAILY_UPLOAD_CATALOG_UNAVAILABLE";
+    throw error;
+  }
+  const project = snapshot.state.projects.find((candidate) => candidate.id === projectId);
+  const listing = project?.listings?.find((candidate) => candidate.id === listingId);
+  if (!project || !listing) {
+    const error = new Error("Der produktive Upload kann keinem eindeutigen Kataloginserat zugeordnet werden.");
+    error.code = "PLOT_DAILY_UPLOAD_CONTEXT_INCOMPLETE";
+    throw error;
+  }
+  return { state: snapshot.state, project, listing };
+}
+
 async function automaticRotationUpload({ state, project, listing, runId }) {
   const jobId = createUploadJobId(project, listing);
   const uploadJob = {
     jobId,
     projectId: project.id,
     listingId: listing.id,
+    plotId: String(project.plotId || ""),
+    plotUploadDayKey: project.plotId ? plotUploadDayKey(project.plotId) : "",
     jobType: "automatic-listing-rotation",
   };
   const claim = await uploadJobLedger.claim(uploadJob);
@@ -252,7 +295,9 @@ async function automaticRotationUpload({ state, project, listing, runId }) {
   }
 
   let client;
+  let dailyClaim;
   try {
+    dailyClaim = await claimPlotDailyUpload({ state, project, listing, uploadJob });
     const vault = await credentialVault();
     const ftp = vault.credentials;
     if (!ftp.ftpHost || !ftp.ftpUser || !ftp.ftpPassword) {
@@ -298,7 +343,9 @@ async function automaticRotationUpload({ state, project, listing, runId }) {
       transport: ftp.ftpSecure,
       status: WORKFLOW_STATUS.PROCESSING,
     });
+    await plotDailyUploadGuard.markTransferStarted(dailyClaim);
     await client.uploadFrom(Readable.from(archive), packageResult.filename);
+    await plotDailyUploadGuard.complete(dailyClaim);
     await uploadJobLedger.complete(uploadJob);
     await logUpload("transferred", {
       ...uploadJob,
@@ -314,6 +361,12 @@ async function automaticRotationUpload({ state, project, listing, runId }) {
     });
     return { ok: true, idempotent: false, jobId, filename: packageResult.filename };
   } catch (error) {
+    if (dailyClaim) {
+      await plotDailyUploadGuard.fail({
+        ...dailyClaim,
+        reason: error instanceof Error ? error.message : "Automatischer Rotationsupload fehlgeschlagen.",
+      }).catch(() => undefined);
+    }
     await uploadJobLedger.fail({
       ...uploadJob,
       errorCode: String(error?.code || "AUTOMATIC_ROTATION_UPLOAD_FAILED"),
@@ -431,6 +484,7 @@ const server = createServer(async (request, response) => {
   let uploadJob = null;
   let uploadJobClaimed = false;
   let uploadJobCompleted = false;
+  let plotDailyUploadClaim = null;
   const uploadLog = (event, details = {}) => logUpload(event, { ...(uploadJob || {}), ...details });
   try {
     if (isMediaLibrarySequence) {
@@ -592,6 +646,11 @@ const server = createServer(async (request, response) => {
         return;
       }
       uploadJobClaimed = true;
+      {
+        const context = await persistedUploadContext(uploadJob.projectId, uploadJob.listingId);
+        plotDailyUploadClaim = await claimPlotDailyUpload({ ...context, uploadJob });
+        uploadJob = { ...uploadJob, plotId: plotDailyUploadClaim.plotId, plotUploadDayKey: plotDailyUploadClaim.plotUploadDayKey };
+      }
       const vault = await credentialVault();
       const ftp = vault.credentials;
       if (!ftp.ftpHost || !ftp.ftpUser || !ftp.ftpPassword) {
@@ -635,7 +694,9 @@ const server = createServer(async (request, response) => {
       });
       if (ftp.ftpPath && ftp.ftpPath !== "/") await client.cd(ftp.ftpPath);
       await uploadLog("connected", { filename, host: ftp.ftpHost, remotePath: ftp.ftpPath, transport: ftp.ftpSecure });
+      await plotDailyUploadGuard.markTransferStarted(plotDailyUploadClaim);
       await client.uploadFrom(temporaryUploadPath, filename);
+      await plotDailyUploadGuard.complete(plotDailyUploadClaim);
       await uploadJobLedger.complete(uploadJob);
       uploadJobCompleted = true;
       await uploadLog("transferred", { filename, archiveBytes, host: ftp.ftpHost, remotePath: ftp.ftpPath, transport: ftp.ftpSecure });
@@ -771,6 +832,11 @@ const server = createServer(async (request, response) => {
       return;
     }
     uploadJobClaimed = true;
+    {
+      const context = await persistedUploadContext(uploadJob.projectId, uploadJob.listingId);
+      plotDailyUploadClaim = await claimPlotDailyUpload({ ...context, uploadJob });
+      uploadJob = { ...uploadJob, plotId: plotDailyUploadClaim.plotId, plotUploadDayKey: plotDailyUploadClaim.plotUploadDayKey };
+    }
     const remotePath = String(ftp.ftpPath || "/").trim();
     await uploadLog("started", {
       filename,
@@ -785,7 +851,9 @@ const server = createServer(async (request, response) => {
 
     if (remotePath && remotePath !== "/") await client.cd(remotePath);
     await uploadLog("connected", { filename, host: String(ftp.ftpHost), remotePath, transport: ftp.ftpSecure });
+    await plotDailyUploadGuard.markTransferStarted(plotDailyUploadClaim);
     await client.uploadFrom(Readable.from(archive), filename);
+    await plotDailyUploadGuard.complete(plotDailyUploadClaim);
     await uploadJobLedger.complete(uploadJob);
     uploadJobCompleted = true;
     await uploadLog("transferred", { filename, archiveBytes: archive.length, host: String(ftp.ftpHost), remotePath, transport: ftp.ftpSecure });
@@ -802,6 +870,12 @@ const server = createServer(async (request, response) => {
         ...uploadJob,
         errorCode: String(error?.code || "UPLOAD_FAILED"),
         message: error instanceof Error ? error.message : "Upload fehlgeschlagen.",
+      }).catch(() => undefined);
+    }
+    if (plotDailyUploadClaim && !uploadJobCompleted) {
+      await plotDailyUploadGuard.fail({
+        ...plotDailyUploadClaim,
+        reason: error instanceof Error ? error.message : "Upload fehlgeschlagen.",
       }).catch(() => undefined);
     }
     if (isUpload || isBinaryUpload) {
