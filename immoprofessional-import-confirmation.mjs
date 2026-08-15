@@ -106,6 +106,7 @@ function confirmationReport(parsed, mail, match, processedAt) {
     projectId: match.project.id,
     parserVersion: parsed.parserVersion,
     processingStatus: IMPORT_REPORT_PROCESSING_STATUS.CONFIRMED,
+    confirmationSource: "import_report",
     mailAccount: text(mail.accountName),
     mailAccountId: text(mail.accountId),
     mailTransportId: text(mail.transportId),
@@ -180,6 +181,7 @@ export function confirmImportReportInState(state, parsed, mail, uploadLedger, op
     lastUploadedAt: importedAt,
     importConfirmedAt: importedAt,
     importReportId: report.reportId,
+    confirmationSource: "import_report",
     uploadError: "",
     ...(automaticDeleteAuthorized ? {
       productionLifecycle: {

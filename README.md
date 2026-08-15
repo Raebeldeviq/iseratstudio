@@ -480,6 +480,45 @@ Produktions-Deletedienst berücksichtigt. Historische
 `externalDeletionPending`-Quellen ohne diesen Marker werden niemals als
 Catch-up gelöscht.
 
+### Einmalige Legacy-Reconciliation zweier Pre-Report-Canarys
+
+Die normale Importbestätigung bleibt ausnahmslos reportbasiert:
+`transferred_pending_import` wird weder durch FTPS-Erfolg, Zeitablauf,
+fehlende Fehlermail noch eine allgemeine Portal-Sichtbarkeit zu `published`.
+Für die zwei vor Einführung des maschinenlesbaren Berichtvertrags übertragenen
+Replacements `30460-652921` und `30460-056361` existiert ein separater,
+hart begrenzter Reconciliation-Pfad. Er ist zusätzlich an die bereits
+persistierten Projekt-, Source-, Replacement- und Uploadjob-IDs gebunden und
+akzeptiert keine weitere Objektnummer.
+
+Vor jeder Mutation verlangt dieser Pfad einen höchstens 15 Minuten alten,
+vom Benutzer unmittelbar vor der Ausführung anhand der exakten externen
+Objektnummer erhobenen Nachweis, dass genau die Replacement-Objektnummer aktuell
+im Immoprofessional-Bestand vorhanden ist. Der Beleg wird ausdrücklich mit
+`verificationMethod: manual_immoprofessional_exact_object_number` und
+`verifiedBy: user_confirmed_provider_presence` sowie als
+`legacy_provider_presence_verification` gespeichert und enthält weder eine
+erfundene Message-ID noch einen Report-Hash oder Provider-Importzeitpunkt.
+`lastUploadedAt` stammt aus dem vorhandenen historischen FTPS-Transfer und wird
+mit `historical_ftps_transfer_for_legacy_reconciliation` gekennzeichnet. Neue
+und nicht allowlistete Pending-Imports können diesen Pfad nicht verwenden.
+
+Die einmalige CLI verlangt für mutierende Befehle zusätzlich
+`--legacy-mode one-time`; der globale Rotationsmodus und der reguläre
+Produktions-Delete-Modus müssen dabei beide explizit gültig auf `off` stehen.
+Ein Legacy-DELETE verwendet den unveränderten, bereits geprüften
+Einzelobjektvertrag, ein eigenes Ledger und ausschließlich die alte
+Quellobjektnummer. Nach einem begonnenen Transfer gibt es keinen Retry. Nur ein
+exakter positiver Löschbericht finalisiert die Quelle. Dies ist keine normale
+Produktionsfunktion und keine allgemeine „force publish“-Schnittstelle.
+
+Nach einer erfolgreichen Reconciliation ist jeder der beiden Einträge durch
+seinen persistenten Evidence-Eintrag und den deterministischen bestätigten
+Deletejob verbraucht. Wiederholte CLI-Aufrufe bleiben idempotent und erzeugen
+weder einen weiteren Upload noch einen zweiten DELETE. Der Legacy-Pfad wird
+nicht vom Background-Scheduler aufgerufen und kann nicht auf andere externe
+Objektnummern erweitert werden, ohne den kompilierten Vertrag zu ändern.
+
 Die technische Delete-Discovery und der reale, ausschließlich auf
 `30460-287191` begrenzte Einzel-Canary sind separat in
 [`IMMOPROFESSIONAL_DELETE_CONTRACT.md`](IMMOPROFESSIONAL_DELETE_CONTRACT.md)
@@ -491,9 +530,9 @@ einen atomaren Claim und einen exakt auf die alte Objektnummer begrenzten
 Einzelobjekt-Payload. Fehlende oder beschädigte Modus-/Ledgerdaten führen
 fail-closed zu `off` beziehungsweise zum Abbruch.
 
-Für den kontrollierten 3er-Livetest existiert ein davon getrenntes,
-fest allowlistetes Testwerkzeug. Es akzeptiert ausschließlich die drei vorab
-read-only bestimmten Source-/Replacement-Paare, arbeitet strikt sequenziell
+Für kontrollierte, ausdrücklich freigegebene Einzel-Deletes existiert ein davon
+getrenntes, fest kompiliertes Testwerkzeug. Es akzeptiert ausschließlich die
+vorab read-only bestimmten Source-/Replacement-Paare, arbeitet strikt sequenziell
 und kennt für Rotation und Löschung nur `off` und einen einzelnen `canary`.
 Vor einem DELETE müssen das Replacement `published`, der positive
 Importbericht, das Scheduler-Handover und `externalDeletionPending` der Quelle
@@ -506,8 +545,9 @@ Dieses Testwerkzeug ist keine allgemeine Löschautomation und aktiviert weder
 `automaticDeletionEnabled` noch den Modus `active`.
 
 Ein einmal vorbereiteter Live-Canary-Deletejob bindet außerdem seinen
-Payload-Zeitpunkt persistent. Jeder spätere Preflight- oder Transferaufruf muss
-dadurch exakt denselben Dateinamen, SHA-256 und dieselbe Paketgröße erzeugen;
+Payload-Zeitpunkt und sein FTPS-Ziel persistent. Jeder spätere Preflight- oder
+Transferaufruf muss dadurch exakt denselben Dateinamen, SHA-256 und dieselbe
+Paketgröße erzeugen;
 jede Abweichung stoppt vor FTPS mit
 `LIVE_CANARY_DELETE_PAYLOAD_MISMATCH` fail-closed.
 

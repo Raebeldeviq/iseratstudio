@@ -132,6 +132,15 @@ test("15 replacement import-confirmed is required before delete", () => {
   assert.equal(resolveLiveCanaryDeleteEligibility(valid.state, TARGET).replacement.id, CONTRACT.expectedReplacementListingId);
 });
 
+test("final blocker target is bound to the exact protected source and replacement", () => {
+  assert.deepEqual(LIVE_CANARY_DELETE_TARGETS["30460-032963"], {
+    sourceListingId: "36d2eed9-74ef-4f35-92e9-c3592a2314cc",
+    expectedReplacementListingId: "rotation-508018eb-b7865083-0e05e84c-copy",
+    expectedReplacementExternalId: "30460-810978",
+    plotId: "plot-03f61a50-e793-4014-8b2c-51dc5613be8a",
+  });
+});
+
 test("16 import pending blocks delete", () => {
   const pending = fixture({ importConfirmedAt: false, importReport: false, replacementStatus: WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT });
   assert.throws(() => resolveLiveCanaryDeleteEligibility(pending.state, TARGET), { code: "LIVE_CANARY_DELETE_NOT_ELIGIBLE" });
@@ -140,6 +149,19 @@ test("16 import pending blocks delete", () => {
 test("17 failed import blocks delete", () => {
   const failed = fixture({ importFailed: true });
   assert.throws(() => resolveLiveCanaryDeleteEligibility(failed.state, TARGET), { code: "LIVE_CANARY_DELETE_NOT_ELIGIBLE" });
+});
+
+test("eligibility blocks duplicate identities, leases, reservations and pending rotations", () => {
+  for (const patch of [
+    (value) => value.state.projects[0].listings.push({ ...value.source, id: "duplicate-source" }),
+    (value) => { value.state.projects[0].listingGroup.listingControls[0].processLease = { token: "busy" }; },
+    (value) => { value.state.projects[0].listingGroup.listingControls[0].schedulerSelectionId = "reserved"; },
+    (value) => { value.state.projects[0].listingGroup.listingControls[0].pendingRotationListingId = value.replacement.id; },
+  ]) {
+    const value = fixture();
+    patch(value);
+    assert.throws(() => resolveLiveCanaryDeleteEligibility(value.state, TARGET), { code: "LIVE_CANARY_DELETE_NOT_ELIGIBLE" });
+  }
 });
 
 test("18 delete target equals source and 19 replacement target hard-stops", async () => {
@@ -158,6 +180,8 @@ test("20 delete job is idempotent and 21 restart after transfer never creates a 
     const restarted = createLiveCanaryDeleteLedger(join(active.directory, "jobs.json"));
     const again = await restarted.prepare({ ...pending.prepared.identity, projectId: "project-a", sourceListingId: CONTRACT.sourceListingId, replacementListingId: CONTRACT.expectedReplacementListingId, externalObjectNumber: TARGET, replacementExternalObjectNumber: CONTRACT.expectedReplacementExternalId, payloadFilename: pending.prepared.payload.payloadFilename, payloadSha256: pending.prepared.payload.payloadSha256, payloadSize: pending.prepared.payload.payloadSize }, NOW);
     assert.equal(again.deleteJobId, pending.job.deleteJobId);
+    assert.equal(again.createdAt, NOW);
+    assert.equal(again.transportTarget, "/");
     await assert.rejects(restarted.claim(again.deleteJobId), { code: "LIVE_CANARY_DELETE_ALREADY_ATTEMPTED" });
     assert.equal((await restarted.read()).jobs[0].attempt, 1);
   } finally { await active.cleanup(); }
@@ -205,6 +229,38 @@ test("a persisted prepared preflight job is the only resumable job and pre-trans
     );
     assert.equal((await active.modeStore.load()).mode, "off");
     assert.equal((await active.ledger.read()).jobs[0].status, LIVE_CANARY_DELETE_STATUS.PREPARED);
+  } finally { await active.cleanup(); }
+});
+
+test("a changed FTPS target after preflight is blocked before transfer", async () => {
+  const active = await runtime();
+  try {
+    const state = fixture().state;
+    await active.modeStore.save({ mode: "canary", externalObjectNumbers: [TARGET] });
+    await prepareLiveCanaryDelete({
+      target: TARGET,
+      state,
+      modeStore: active.modeStore,
+      ledger: active.ledger,
+      schemaPath: "synthetic.xsd",
+      schemaValidator: async () => ({ ok: true }),
+      transportTarget: "/first",
+      now: () => NOW,
+    });
+    await assert.rejects(
+      prepareLiveCanaryDelete({
+        target: TARGET,
+        state,
+        modeStore: active.modeStore,
+        ledger: active.ledger,
+        schemaPath: "synthetic.xsd",
+        schemaValidator: async () => ({ ok: true }),
+        transportTarget: "/changed",
+        now: () => NOW,
+      }),
+      { code: "LIVE_CANARY_DELETE_PAYLOAD_MISMATCH" },
+    );
+    assert.equal((await active.ledger.read()).jobs[0].attempt, 0);
   } finally { await active.cleanup(); }
 });
 
@@ -275,7 +331,7 @@ test("28 source final deleted leaves replacement unchanged, 29 nextUpdateAt unch
   } finally { await active.cleanup(); }
 });
 
-test("mode is fail-closed and canary accepts exactly one of the three fixed targets", async () => {
+test("mode is fail-closed and canary accepts exactly one fixed target", async () => {
   const active = await runtime();
   try {
     assert.equal((await active.modeStore.load()).mode, "off");

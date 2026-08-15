@@ -1,5 +1,70 @@
 # Änderungsprotokoll
 
+## Unreleased · Einmalige Legacy-Import-Reconciliation – 15. August 2026
+
+### Report
+
+- Einen separaten, hart auf `30460-652921` und `30460-056361` sowie deren
+  konkrete Projekt-, Source-, Replacement- und Uploadjob-IDs begrenzten
+  Reconciliation-Vertrag ergänzt.
+- Aktuelle, manuell anhand der exakten externen Objektnummer bestätigte
+  Providerexistenz, historisch eindeutiger FTPS-Transfer,
+  konsistente Source-Replacement-Beziehung, fehlende Normalberichte und freie
+  Claims werden vor jeder Katalogmutation gemeinsam geprüft.
+- Die Provenance `legacy_provider_presence_verification` strikt vom normalen
+  `import_report` getrennt. Es werden keine Message-ID, kein Report-Hash und
+  kein Provider-Importzeitpunkt synthetisiert; der historische Transferzeitpunkt
+  ist ausdrücklich als solcher gekennzeichnet.
+- Die Benutzerbestätigung wird ausschließlich als
+  `manual_immoprofessional_exact_object_number` durch
+  `user_confirmed_provider_presence` protokolliert.
+- Scheduler-Handover und Folgetermin verwenden dieselbe Logik wie eine normal
+  bestätigte Kopie. Ein eigenes deterministisches Legacy-Deleteledger verhindert
+  Überschneidungen mit dem regulären Active-Deletepfad und sperrt jeden Retry
+  nach Transferbeginn.
+- Tests für die 36 geforderten Eligibility-, Provenance-, Handover-, Delete-
+  und Nicht-Aufweichungsbedingungen ergänzt. Normale Importberichte speichern
+  künftig explizit `confirmationSource: import_report`; Altdaten ohne das Feld
+  bleiben lesbar.
+- Den letzten historischen Produktions-Delete `30460-032963` strikt an das
+  bestätigte Replacement `30460-810978` im isolierten Einzel-Delete-Pfad
+  gebunden. Deterministische Jobs protokollieren zusätzlich `createdAt` und das
+  persistente `transportTarget`; Payload, Zielpfad und Jobidentität müssen vor
+  FTPS byte- und feldgenau übereinstimmen.
+
+### Begründung
+
+Die zwei historischen Canarys entstanden vor dem maschinenlesbaren
+Importberichtvertrag. Eine generalisierte Zeit- oder FTPS-Ausnahme würde die
+heutige Sicherheitsgrenze aufweichen. Die explizite Identitäts-Allowlist und
+der aktuelle Providerbestand schließen ausschließlich diese bekannte Altlast,
+ohne einen wiederverwendbaren Bestätigungspfad für neue Uploads zu schaffen.
+
+### Hürden und Risiken
+
+- Die Reconciliation darf erst nach einer neuen exakten Providerprüfung real
+  ausgeführt werden. Ohne sicheren read-only Zugriff bleibt sie gesperrt.
+- Historisch nicht persistierte Bildanzahl- oder Hashwerte werden nicht
+  nachträglich erfunden.
+- Ein Delete-Transfer bestätigt keine Löschung. Die alte Quelle bleibt bis zum
+  positiven exakten Löschbericht veröffentlicht und wird nicht erneut gesendet.
+
+### Kontrollierte Produktionsdurchführung
+
+- Am 15. August 2026 wurden die beiden allowlisteten Fälle strikt sequenziell
+  reconciliiert. Die Replacements `30460-652921` und `30460-056361` sind
+  `published`; die Quellen `30460-095107` und `30460-028212` wurden jeweils
+  nach genau einem DELETE-Transfer und einem eindeutigen positiven Bericht als
+  `deleted` finalisiert.
+- Es erfolgte kein erneuter Replacement-Upload, kein Rotationslauf und keine
+  Mailmutation. Rotations- und Produktions-Delete-Modus blieben durchgehend
+  gültig `off`.
+- Der letzte vorher vorhandene Readiness-Blocker `30460-032963` wurde danach
+  mit genau einem fest gebundenen DELETE-Paket übertragen und erst nach dem
+  eindeutigen positiven Providerbericht als `deleted` finalisiert. Das
+  Replacement `30460-810978` blieb bytegleich `published`; es gab keinen
+  Replacement-Upload, keine Rotation und keine Mailmutation.
+
 ## 0.19.0 · Kontrollierter Active-Rollout – 14. August 2026
 
 ### Report

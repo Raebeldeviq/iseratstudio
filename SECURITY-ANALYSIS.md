@@ -101,6 +101,34 @@ werden lokal dedupliziert. Unbekannte Formate, fehlende Account-Eindeutigkeit,
 Katalogkonflikte und mehrdeutige Listings bleiben geschlossen und sichtbar im
 Posteingang.
 
+### Hoch: Historische Pre-Report-Transfers könnten den Reportvertrag umgehen
+
+Zwei frühe Canarys wurden vor der heutigen maschinenlesbaren
+Importberichtkette übertragen. Eine allgemeine Regel „FTPS plus Portalbestand
+gleich veröffentlicht“ würde daraus eine dauerhafte Escape-Hatch für jeden
+neuen Upload machen. Der Legacy-Pfad ist deshalb ausschließlich auf die zwei
+externen Objektnummern `30460-652921` und `30460-056361` sowie deren persistente
+Projekt-, Source-, Replacement- und Uploadjob-Identitäten kompiliert. Jede
+andere Nummer stoppt mit `LEGACY_RECONCILIATION_NOT_AUTHORIZED`.
+
+Zusätzlich sind ein frischer, vom Benutzer anhand der exakten externen
+Objektnummer bestätigter Provider-Präsenznachweis mit der Methode
+`manual_immoprofessional_exact_object_number`, exakt ein
+historisch erfolgreiches Transferledger, konsistente Pending-Beziehung, keine
+positive/negative/mehrdeutige normale Reportevidenz und keine konkurrierenden
+Claims erforderlich. Die gespeicherte Provenance lautet
+`legacy_provider_presence_verification`, nicht `import_report`; Report-
+Message-ID, Raw-Hash und Provider-Importzeit werden niemals synthetisiert. Der
+historische FTPS-Zeitpunkt wird nur mit dem separaten Zeitquellenmarker
+`historical_ftps_transfer_for_legacy_reconciliation` übernommen.
+
+Auch die anschließende Löschung ist getrennt: eigenes Ledger, deterministische
+Job-ID, unveränderter OpenImmo-Einzelobjektvertrag und harter Guard auf die alte
+Quelle. Nach Transferbeginn ist jeder Retry gesperrt. Ohne exakten positiven
+Löschbericht bleibt die Quelle veröffentlicht. Rotations- und regulärer
+Delete-Modus müssen während der einmaligen Reconciliation gültig `off` sein;
+der Active-Scheduler ruft diesen Legacy-Code nicht auf.
+
 ### Niedrig: Mailmutation war für die Importbestätigung unnötig privilegiert
 
 Die Ablage erfolgt jetzt vor dem Inseratestudio serverseitig über eine
@@ -146,10 +174,10 @@ verbrauchen den Tag; sicher nicht gestartete Transfers werden freigegeben.
 Beschädigte Guarddaten, fehlende `plotId`, parallele Claims und ein bereits
 verbrauchter Tag stoppen fail-closed.
 
-### Hoch: Begrenzter 3er-Canary könnte zu allgemeiner Löschautomation werden
+### Hoch: Begrenzter Einzel-Delete-Pfad könnte zu allgemeiner Löschautomation werden
 
-Der Live-Testpfad ist nicht dynamisch erweiterbar: drei konkrete alte
-Objektnummern sind jeweils an feste Source-Listing-ID, erwartete
+Der Live-Testpfad ist nicht dynamisch erweiterbar: jede konkrete alte
+Objektnummer ist jeweils an feste Source-Listing-ID, erwartete
 Replacement-ID, neue Objektnummer und `plotId` gebunden. Jeder Aufruf akzeptiert
 genau ein Ziel. Rotation, Importprüfung und DELETE laufen nacheinander;
 Importbestätigung ist zwingende Delete-Voraussetzung. Der bewiesene

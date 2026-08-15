@@ -137,8 +137,12 @@ export async function runLiveCanaryDeleteCli(argv, options = {}) {
   if (parsed.command === "preflight") {
     const snapshot = await store.load();
     if (!snapshot?.stored || !snapshot.state) throw new Error("Der persistente Katalog ist nicht verfügbar.");
-    const prepared = await prepareLiveCanaryDelete({ target: parsed.target, state: snapshot.state, modeStore, ledger, schemaPath: parsed.schemaPath, schemaValidator: options.schemaValidator || runXmllint, now: options.now });
-    return { ok: true, target: prepared.target, sourceListingId: prepared.eligibility.source.id, replacementListingId: prepared.eligibility.replacement.id, replacementExternalId: prepared.eligibility.replacement.externalId, deleteJobId: prepared.identity.deleteJobId, payloadFilename: prepared.payload.payloadFilename, payloadSha256: prepared.payload.payloadSha256, payloadSize: prepared.payload.payloadSize };
+    const vault = options.vault || await loadCredentialVault();
+    const credentials = vault.credentials || {};
+    if (!credentials.ftpHost || !credentials.ftpUser || !credentials.ftpPassword) throw new Error("Der Immoprofessional-FTPS-Zugang ist unvollständig.");
+    const transportTarget = String(credentials.ftpPath || "/").trim() || "/";
+    const prepared = await prepareLiveCanaryDelete({ target: parsed.target, state: snapshot.state, modeStore, ledger, schemaPath: parsed.schemaPath, schemaValidator: options.schemaValidator || runXmllint, transportTarget, now: options.now });
+    return { ok: true, target: prepared.target, sourceListingId: prepared.eligibility.source.id, replacementListingId: prepared.eligibility.replacement.id, replacementExternalId: prepared.eligibility.replacement.externalId, deleteJobId: prepared.identity.deleteJobId, payloadFilename: prepared.payload.payloadFilename, payloadSha256: prepared.payload.payloadSha256, payloadSize: prepared.payload.payloadSize, transportTarget: prepared.job.transportTarget };
   }
   let client;
   let claimed;
@@ -146,15 +150,15 @@ export async function runLiveCanaryDeleteCli(argv, options = {}) {
   try {
     const snapshot = await store.load();
     if (!snapshot?.stored || !snapshot.state) throw new Error("Der persistente Katalog ist nicht verfügbar.");
-    prepared = await prepareLiveCanaryDelete({ target: parsed.target, state: snapshot.state, modeStore, ledger, schemaPath: parsed.schemaPath, schemaValidator: options.schemaValidator || runXmllint, now: options.now });
     const vault = options.vault || await loadCredentialVault();
     const credentials = vault.credentials || {};
     if (!credentials.ftpHost || !credentials.ftpUser || !credentials.ftpPassword) throw new Error("Der Immoprofessional-FTPS-Zugang ist unvollständig.");
+    const remotePath = String(credentials.ftpPath || "/").trim() || "/";
+    prepared = await prepareLiveCanaryDelete({ target: parsed.target, state: snapshot.state, modeStore, ledger, schemaPath: parsed.schemaPath, schemaValidator: options.schemaValidator || runXmllint, transportTarget: remotePath, now: options.now });
     const modeNow = await modeStore.load();
     if (modeNow.mode !== "canary" || modeNow.externalObjectNumbers[0] !== parsed.target) throw new Error("Der Delete-Modus ist unmittelbar vor dem Transfer nicht exakt freigegeben.");
     claimed = await ledger.claim(prepared.identity.deleteJobId, options.now?.());
     const startedAt = new Date().toISOString();
-    const remotePath = String(credentials.ftpPath || "/").trim() || "/";
     if (options.upload) await options.upload({ archive: prepared.payload.archive, filename: prepared.payload.payloadFilename });
     else {
       client = new Client(300_000);

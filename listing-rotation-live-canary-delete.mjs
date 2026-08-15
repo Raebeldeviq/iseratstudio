@@ -13,6 +13,12 @@ export const LIVE_CANARY_DELETE_MODE_FORMAT = 1;
 export const LIVE_CANARY_DELETE_LEDGER_FORMAT = 1;
 export const LIVE_CANARY_DELETE_PROVIDER_ID = "30460";
 export const LIVE_CANARY_DELETE_TARGETS = Object.freeze({
+  "30460-032963": Object.freeze({
+    sourceListingId: "36d2eed9-74ef-4f35-92e9-c3592a2314cc",
+    expectedReplacementListingId: "rotation-508018eb-b7865083-0e05e84c-copy",
+    expectedReplacementExternalId: "30460-810978",
+    plotId: "plot-03f61a50-e793-4014-8b2c-51dc5613be8a",
+  }),
   "30460-930980": Object.freeze({
     sourceListingId: "066b7b16-6ce0-4142-9cce-891e1eb8382b",
     expectedReplacementListingId: "rotation-3017faee-ea3dfce4-75f2914d-copy",
@@ -68,7 +74,7 @@ export function assertLiveCanaryDeleteTarget(value) {
   const target = clean(value, 40);
   const contract = LIVE_CANARY_DELETE_TARGETS[target];
   if (!contract) {
-    throw liveError("LIVE_CANARY_DELETE_TARGET_NOT_AUTHORIZED", "Der 3er-Live-Canary darf ausschließlich eine der drei vorab ausgewählten alten Objektnummern löschen.");
+    throw liveError("LIVE_CANARY_DELETE_TARGET_NOT_AUTHORIZED", "Der kontrollierte Einzel-Delete darf ausschließlich eine fest kompilierte alte Objektnummer löschen.");
   }
   return { target, contract };
 }
@@ -152,6 +158,10 @@ function assertMode(mode, target) {
 
 export function resolveLiveCanaryDeleteEligibility(state, sourceTarget, deleteLedger = { jobs: [] }) {
   const { target, contract } = assertLiveCanaryDeleteTarget(sourceTarget);
+  const sourceExternalMatches = (state.projects || []).flatMap((project) => (project.listings || [])
+    .filter((listing) => listing.externalId === target));
+  const replacementExternalMatches = (state.projects || []).flatMap((project) => (project.listings || [])
+    .filter((listing) => listing.externalId === contract.expectedReplacementExternalId));
   const matches = (state.projects || []).flatMap((project) => (project.listings || [])
     .filter((listing) => listing.id === contract.sourceListingId && listing.externalId === target)
     .map((source) => ({ project, source })));
@@ -161,6 +171,9 @@ export function resolveLiveCanaryDeleteEligibility(state, sourceTarget, deleteLe
   const group = normalizeListingGroup(project.listingGroup, project.id);
   const sourceControl = listingControl(group, source);
   const replacementControl = replacement ? listingControl(group, replacement) : null;
+  const activeReplacementRelations = project.listings.filter((listing) =>
+    listing.rotationSourceListingId === source.id
+    && ![WORKFLOW_STATUS.ARCHIVED, WORKFLOW_STATUS.DELETED].includes(listing.status));
   const report = (state.importReports || []).find((item) =>
     item.reportId === replacement?.importReportId
     && item.externalObjectNumber === contract.expectedReplacementExternalId
@@ -168,14 +181,21 @@ export function resolveLiveCanaryDeleteEligibility(state, sourceTarget, deleteLe
     && item.sourceListingId === source.id
     && item.matchedListingId === replacement.id);
   const reasons = [];
+  if (sourceExternalMatches.length !== 1) reasons.push("source_external_id_not_unique");
+  if (replacementExternalMatches.length !== 1) reasons.push("replacement_external_id_not_unique");
   if (project.plotId !== contract.plotId) reasons.push("plot_id_changed");
   if (!replacement || replacement.externalId !== contract.expectedReplacementExternalId) reasons.push("expected_replacement_missing");
   if (replacement?.rotationSourceListingId !== source.id || source.supersededByListingId !== replacement?.id) reasons.push("source_replacement_relation_mismatch");
+  if (activeReplacementRelations.length !== 1 || activeReplacementRelations[0]?.id !== replacement?.id) reasons.push("active_replacement_relation_not_unique");
   if (replacement?.status !== WORKFLOW_STATUS.PUBLISHED || replacementControl?.status !== WORKFLOW_STATUS.PUBLISHED) reasons.push("replacement_not_published");
   if (!replacement?.importConfirmedAt || !source.replacementConfirmedAt || !report) reasons.push("positive_import_confirmation_missing");
   if (source.externalDeletionPending !== true) reasons.push("source_not_external_deletion_pending");
   if (sourceControl.automaticUpdateEnabled) reasons.push("source_still_scheduler_owner");
   if (!replacementControl?.automaticUpdateEnabled) reasons.push("replacement_not_scheduler_owner");
+  if (sourceControl.processLease || replacementControl?.processLease) reasons.push("process_lease_active");
+  if (sourceControl.schedulerSelectionId || replacementControl?.schedulerSelectionId) reasons.push("scheduler_reservation_active");
+  if (sourceControl.pendingRotationListingId || sourceControl.pendingRotationJobId || replacementControl?.pendingRotationListingId || replacementControl?.pendingRotationJobId) reasons.push("pending_rotation_active");
+  if ((state.deleteReports || []).some((item) => item.externalObjectNumber === target && item.result === "success")) reasons.push("positive_delete_confirmation_already_exists");
   const existingDeleteJobs = (deleteLedger.jobs || []).filter((job) => job.externalObjectNumber === target);
   const resumablePreparedJob = existingDeleteJobs.length === 1
     && existingDeleteJobs[0].status === LIVE_CANARY_DELETE_STATUS.PREPARED
@@ -239,7 +259,9 @@ export function liveCanaryDeleteIdentity(source, replacement) {
     throw liveError("LIVE_CANARY_DELETE_REPLACEMENT_GUARD", "Die Source-Replacement-Identität weicht vom read-only Vorabplan ab.");
   }
   const canonical = [
-    "contract=live-canary-3-observed-delete-v1",
+    "contract=controlled-observed-delete-v2",
+    `provider=${LIVE_CANARY_DELETE_PROVIDER_ID}`,
+    "operation=DELETE",
     `sourceListingId=${source.id}`,
     `sourceExternalId=${target}`,
     `replacementListingId=${replacement.id}`,
@@ -282,6 +304,8 @@ export function createLiveCanaryDeleteLedger(path) {
           payloadFilename: clean(input.payloadFilename, 240),
           payloadSha256: clean(input.payloadSha256, 128),
           payloadSize: Number(input.payloadSize) || 0,
+          transportTarget: clean(input.transportTarget || "/", 500) || "/",
+          createdAt: now,
           preparedAt: now,
           transferStartedAt: "",
           transferCompletedAt: "",
@@ -431,11 +455,13 @@ export async function prepareLiveCanaryDelete(input) {
     payloadFilename: payload.payloadFilename,
     payloadSha256: payload.payloadSha256,
     payloadSize: payload.payloadSize,
+    transportTarget: input.transportTarget,
   }, payload.preparedAt);
   if (
     job.payloadFilename !== payload.payloadFilename
     || job.payloadSha256 !== payload.payloadSha256
     || job.payloadSize !== payload.payloadSize
+    || job.transportTarget !== (clean(input.transportTarget || "/", 500) || "/")
   ) {
     throw liveError(
       "LIVE_CANARY_DELETE_PAYLOAD_MISMATCH",
