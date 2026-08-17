@@ -49,6 +49,7 @@ import { createPersistentLease } from "./persistent-lease.mjs";
 import { createListingRotationOperatingModeStore } from "./listing-rotation-operating-mode.mjs";
 import { createListingRotationProductionPolicyStore } from "./listing-rotation-production-policy.mjs";
 import { createAppleMailImportReportAdapter } from "./apple-mail-import-report-adapter.mjs";
+import { runMailRuntimeProbe } from "./mail-runtime-probe.mjs";
 import { createAppleMailDeleteReportAdapter } from "./apple-mail-live-canary-delete-report-adapter.mjs";
 import {
   createImmoprofessionalImportReportService,
@@ -74,6 +75,7 @@ const LISTING_SCHEDULER_LOCK_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-sc
 const LISTING_ROTATION_MODE_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-rotation-mode.json");
 const LISTING_ROTATION_PRODUCTION_POLICY_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-rotation-production-policy.json");
 const IMPORT_REPORT_LOG_PATH = join(APPLICATION_DATA_DIRECTORY, "immoprofessional-import-reports.log");
+const MAIL_RUNTIME_LOG_PATH = join(APPLICATION_DATA_DIRECTORY, "mail-runtime.log");
 const PRODUCTION_DELETE_MODE_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-rotation-production-delete-mode.json");
 const PRODUCTION_DELETE_LEDGER_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-rotation-production-delete-jobs.json");
 const PRODUCTION_DELETE_LOG_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-rotation-production-delete.log");
@@ -86,6 +88,7 @@ let credentialCache;
 const writeUploadLog = createStructuredFileLogger(UPLOAD_LOG_PATH, { jobType: "immoprofessional-upload" });
 const writeListingSchedulerLog = createStructuredFileLogger(LISTING_SCHEDULER_LOG_PATH, { jobType: "listing-rotation-scheduler" });
 const writeImportReportLog = createStructuredFileLogger(IMPORT_REPORT_LOG_PATH, { jobType: "immoprofessional-import-report" });
+const writeMailRuntimeLog = createStructuredFileLogger(MAIL_RUNTIME_LOG_PATH, { jobType: "mail-runtime-probe" });
 const writeProductionDeleteLog = createStructuredFileLogger(PRODUCTION_DELETE_LOG_PATH, { jobType: "listing-rotation-production-delete" });
 const uploadJobLedger = createUploadJobLedger(UPLOAD_JOB_LEDGER_PATH);
 const plotDailyUploadGuard = createPlotDailyUploadGuard(PLOT_DAILY_UPLOAD_GUARD_PATH);
@@ -501,7 +504,8 @@ const server = createServer(async (request, response) => {
   const isPlotSyncStatus = request.method === "GET" && pathname === "/plot-sync/status";
   const isPlotSyncRun = request.method === "POST" && pathname === "/plot-sync/run";
   const isPlotSyncLog = request.method === "GET" && pathname === "/plot-sync/log";
-  if (!isHealth && !isUpload && !isBinaryUpload && !isLocalSave && !isTextGeneration && !isImageCaptionGeneration && !isOpenAiKeyValidation && !isCredentialLoad && !isCredentialSave && !isCatalogLoad && !isCatalogSave && !isCatalogV2Start && !isCatalogV2ImageSave && !isCatalogV2Commit && !isCatalogV2ManifestLoad && !isCatalogV2ImageLoad && !isMediaLibraryList && !isMediaLibrarySequence && !isMediaLibraryImage && !isPlotExposeAnalyze && !isPlotExposeCommit && !isPlotExposeLoad && !isPlotExposeArchive && !isPlotSyncStatus && !isPlotSyncRun && !isPlotSyncLog) {
+  const isMailRuntimeProbe = request.method === "POST" && pathname === "/mail-runtime/probe";
+  if (!isHealth && !isUpload && !isBinaryUpload && !isLocalSave && !isTextGeneration && !isImageCaptionGeneration && !isOpenAiKeyValidation && !isCredentialLoad && !isCredentialSave && !isCatalogLoad && !isCatalogSave && !isCatalogV2Start && !isCatalogV2ImageSave && !isCatalogV2Commit && !isCatalogV2ManifestLoad && !isCatalogV2ImageLoad && !isMediaLibraryList && !isMediaLibrarySequence && !isMediaLibraryImage && !isPlotExposeAnalyze && !isPlotExposeCommit && !isPlotExposeLoad && !isPlotExposeArchive && !isPlotSyncStatus && !isPlotSyncRun && !isPlotSyncLog && !isMailRuntimeProbe) {
     send(response, 404, { ok: false, message: "Nicht gefunden." }, origin);
     return;
   }
@@ -636,6 +640,13 @@ const server = createServer(async (request, response) => {
 
     if (isPlotSyncLog) {
       send(response, 200, { ok: true, log: await plotSyncService.lastLog() }, origin);
+      return;
+    }
+
+    if (isMailRuntimeProbe) {
+      const result = await runMailRuntimeProbe({ mailAdapter: importReportMailAdapter });
+      await writeMailRuntimeLog(result.ok ? "probe-completed" : "probe-failed", result);
+      send(response, 200, result, origin);
       return;
     }
 

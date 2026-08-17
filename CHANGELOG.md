@@ -1,5 +1,42 @@
 # Änderungsprotokoll
 
+## Unreleased · Persistente Apple-Mail-Helper-Runtime – 17. August 2026
+
+### Report
+
+- Den lokalen Helper als einzelnen, persistenten Aqua-/Interactive-LaunchAgent
+  mit isolierter, fingerprintierter Runtime bereitgestellt. Secrets, Tests,
+  Arbeitsdaten und Git-Metadaten werden nicht in die Runtime kopiert.
+- Die Apple-Mail-Ausführung von `execFile` auf einen kontrollierten
+  `spawn`-Lebenszyklus mit begrenztem Buffer, `SIGTERM`, anschließendem
+  `SIGKILL` und Warten auf das tatsächliche Prozessende umgestellt.
+- Die read-only Ordnerabfrage auf höchstens 500 Nachrichten begrenzt und die
+  Metadaten sequenziell gefiltert. Überschreitungen stoppen fail-closed.
+- Adapter und Importberichtdienst gegen überlappende Mailabfragen mit
+  Single-Flight abgesichert und Laufzeit, Timeoutklasse und Exit-Signal
+  strukturiert protokolliert.
+- Einen sessiongeschützten, ausdrücklich read-only Mail-Runtime-Probe ergänzt.
+  Der reale Nachweis vor und nach einem kontrollierten Helper-Neustart ergab
+  15 von 15 erfolgreiche Läufe bei null Mailmutationen.
+
+### Begründung
+
+macOS bindet die Automationserlaubnis an den konkreten Prozesskontext. Ein
+persistenter Aqua-LaunchAgent mit stabiler Node-Runtime stellt diesen Kontext
+reproduzierbar her. Begrenzte Abfragen, eindeutige Fehlerklassen und ein
+vollständig kontrollierter Child-Prozess verhindern, dass Mail-Timeouts einen
+weiteren Lauf blockieren oder fälschlich als Setupfehler erscheinen.
+
+### Hürden und Risiken
+
+- Die Freigabe `node → Mail` muss für die tatsächlich verwendete Node-Runtime
+  bestehen. Fehlt sie, bleibt der Importpfad ohne Status- oder Mailmutation
+  fail-closed.
+- Der dedizierte Berichtordner darf höchstens 500 Nachrichten enthalten;
+  größere Bestände müssen administrativ serverseitig bereinigt werden.
+- Der Runtime-Probe prüft nur Erreichbarkeit und Kandidatenmetadaten. Er
+  bestätigt keinen Import und liest keine Nachrichtentexte.
+
 ## Unreleased · Einmalige Legacy-Import-Reconciliation – 15. August 2026
 
 ### Report

@@ -68,6 +68,8 @@ export function createImmoprofessionalImportReportService(options) {
     throw new Error("Dem Importberichtdienst fehlt der read-only Apple-Mail-Adapter.");
   }
   const writeLog = options.writeLog || (async () => undefined);
+  const clock = options.clock || (() => Date.now());
+  let activeRun = null;
 
   async function processCandidate(candidate, now, allowedExternalObjectNumbers = null) {
     let mail;
@@ -153,7 +155,7 @@ export function createImmoprofessionalImportReportService(options) {
     }
   }
 
-  async function runOnce(input = {}) {
+  async function executeRunOnce(input = {}) {
     const now = String(input.now || new Date().toISOString());
     const snapshot = await options.store.load();
     if (!snapshot?.stored || !snapshot.state) return { ran: false, reason: "catalog-not-stored", processed: [], mailMutations: 0 };
@@ -168,8 +170,16 @@ export function createImmoprofessionalImportReportService(options) {
       return { ran: false, reason: "no-pending-imports", pendingCount: 0, processed: [], mailMutations: 0 };
     }
     let candidates;
+    const scanStartedAt = clock();
     try {
       candidates = await options.mailAdapter.findCandidates({ lookbackHours: lookbackHoursFor(pending, now) });
+      await writeLog("scan-completed", {
+        pendingCount: pending.length,
+        candidateCount: candidates.length,
+        durationMs: Math.max(0, clock() - scanStartedAt),
+        mailboxName: options.mailAdapter.mailboxName,
+        mailMutations: 0,
+      });
     } catch (error) {
       const reason = safeReason(error);
       const failure = mailFailureStatus(error);
@@ -178,7 +188,16 @@ export function createImmoprofessionalImportReportService(options) {
         ? "Importbericht-Ordner nicht verfügbar. Livinghaus / Inseratestudio – Importberichte muss serverseitig eindeutig vorhanden sein."
         : reason;
       await storeMailStatus(options.store, failure.status, message, now).catch(() => undefined);
-      await writeLog("scan-failed", { pendingCount: pending.length, reason, errorCode: String(error?.code || ""), setupRequired, mailMutations: 0 });
+      await writeLog("scan-failed", {
+        pendingCount: pending.length,
+        reason,
+        errorCode: String(error?.code || ""),
+        setupRequired,
+        durationMs: Math.max(0, Number(error?.durationMs) || clock() - scanStartedAt),
+        timedOut: error?.timedOut === true,
+        exitSignal: String(error?.exitSignal || ""),
+        mailMutations: 0,
+      });
       return { ran: true, reason, errorCode: String(error?.code || ""), pendingCount: pending.length, setupRequired, processed: [], mailMutations: 0 };
     }
     const processed = [];
@@ -198,6 +217,25 @@ export function createImmoprofessionalImportReportService(options) {
       processed,
       mailMutations: 0,
     };
+  }
+
+  async function runOnce(input = {}) {
+    if (activeRun) {
+      return {
+        ran: false,
+        reason: "mail-poll-in-flight",
+        inFlight: true,
+        processed: [],
+        mailMutations: 0,
+      };
+    }
+    const currentRun = executeRunOnce(input);
+    activeRun = currentRun;
+    try {
+      return await currentRun;
+    } finally {
+      if (activeRun === currentRun) activeRun = null;
+    }
   }
 
   return { runOnce };

@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import test from "node:test";
 
 import {
   classifyAppleMailAutomationError,
   createAppleMailAutomationRunner,
   createAppleMailImportReportAdapter,
+  createAppleMailProcessExecutor,
+  IMPORT_REPORT_FOLDER_MESSAGE_LIMIT,
   IMPORT_REPORT_MAIL_FOLDER,
 } from "../apple-mail-import-report-adapter.mjs";
 
@@ -221,4 +225,73 @@ test("unknown or unstructured Apple Mail output is a parse error", async () => {
   const runner = createAppleMailAutomationRunner({ execute: async () => ({ stdout: "SETUP_REQUIRED", stderr: "" }) });
   await assert.rejects(runner("script containing MAIL_ACCOUNT_NOT_FOUND", []), (error) =>
     error.code === "MAIL_IMPORT_REPORT_PARSE_ERROR");
+});
+
+test("bounded folder traversal filters only metadata and never asks Mail for a compound whose query", async () => {
+  const { adapter, calls } = scriptedAdapter();
+  await adapter.findCandidates({ lookbackHours: 48 });
+  const call = calls.find((item) => item.operation === "LIST_IMPORT_REPORTS");
+  assert.equal(call.args[4], String(IMPORT_REPORT_FOLDER_MESSAGE_LIMIT));
+  assert.match(call.script, /set targetMessages to messages of targetBox/u);
+  assert.match(call.script, /subject of currentMessage/u);
+  assert.match(call.script, /date received of currentMessage/u);
+  assert.doesNotMatch(call.script, /every message of targetBox whose/u);
+  assert.doesNotMatch(call.script, /source of currentMessage|content of currentMessage/u);
+});
+
+test("folder traversal limit is classified fail-closed", async () => {
+  const adapter = processAdapter(async () => ({
+    stdout: "FPI_ERROR\tACCESS_FAILED\tMAILBOX_MESSAGE_LIMIT_EXCEEDED\n",
+    stderr: "",
+  }));
+  await assert.rejects(adapter.findCandidates(), (error) =>
+    error.code === "MAIL_IMPORT_REPORT_SCAN_LIMIT_EXCEEDED");
+});
+
+test("adapter rejects overlapping Apple Mail operations and releases single-flight after completion", async () => {
+  let release;
+  const runner = async (script) => {
+    if (operation(script) === "INSPECT_IMPORT_REPORT_FOLDER") {
+      await new Promise((resolve) => { release = resolve; });
+      return `SETUP\t${accountId}\tunknown\t${IMPORT_REPORT_MAIL_FOLDER}\tmailbox`;
+    }
+    return `MAILBOX\t${accountId}\tunknown\t${IMPORT_REPORT_MAIL_FOLDER}\tmailbox\n`;
+  };
+  const adapter = createAppleMailImportReportAdapter({ runner });
+  const first = adapter.inspectSetup();
+  await new Promise((resolve) => setImmediate(resolve));
+  await assert.rejects(adapter.findCandidates(), (error) =>
+    error.code === "MAIL_AUTOMATION_BUSY" && error.activeOperation === "inspect-setup");
+  release();
+  await first;
+  assert.deepEqual(await adapter.findCandidates(), []);
+});
+
+test("timeout escalates from SIGTERM to SIGKILL and waits for the owned child to close", async () => {
+  const child = new EventEmitter();
+  child.pid = 4242;
+  child.exitCode = null;
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  const signals = [];
+  child.kill = (signal) => {
+    signals.push(signal);
+    if (signal === "SIGKILL") {
+      child.exitCode = 137;
+      queueMicrotask(() => child.emit("close", null, "SIGKILL"));
+    }
+    return true;
+  };
+  const execute = createAppleMailProcessExecutor({
+    spawnProcess: () => child,
+    terminationGraceMs: 5,
+  });
+  await assert.rejects(
+    execute("osascript", [], { timeout: 5 }),
+    (error) => error.code === "ETIMEDOUT"
+      && error.timedOut === true
+      && error.processId === 4242
+      && error.signal === "SIGKILL",
+  );
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
 });

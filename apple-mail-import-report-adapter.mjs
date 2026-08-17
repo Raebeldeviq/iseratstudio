@@ -1,14 +1,13 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { spawn } from "node:child_process";
 
 import { IMMOPROFESSIONAL_IMPORT_REPORT_SUBJECT } from "./immoprofessional-import-report-parser.mjs";
 
 export const IMPORT_REPORT_MAIL_FOLDER = "Inseratestudio – Importberichte";
 export const DEFAULT_IMPORT_REPORT_MAIL_ACCOUNT = "Livinghaus";
 
-const execFileAsync = promisify(execFile);
-
 const PROCESS_TIMEOUT_MS = 45_000;
+const PROCESS_TERMINATION_GRACE_MS = 1_000;
+export const IMPORT_REPORT_FOLDER_MESSAGE_LIMIT = 500;
 const FPI_OK_PREFIX = "FPI_OK\t";
 const FPI_ERROR_PREFIX = "FPI_ERROR\t";
 
@@ -20,6 +19,7 @@ on fpiStructuredError(errorMessage)
   if errorMessage is "MAIL_IMPORT_REPORT_FOLDER_NOT_FOUND" then return "FPI_ERROR" & tab & "SETUP_REQUIRED" & tab & "MAILBOX_NOT_FOUND"
   if errorMessage is "MAIL_IMPORT_REPORT_FOLDER_AMBIGUOUS" then return "FPI_ERROR" & tab & "SETUP_REQUIRED" & tab & "MAILBOX_AMBIGUOUS"
   if errorMessage is "MAIL_IMPORT_REPORT_FOLDER_WRONG_ACCOUNT" then return "FPI_ERROR" & tab & "SETUP_REQUIRED" & tab & "MAILBOX_WRONG_ACCOUNT"
+  if errorMessage is "MAIL_IMPORT_REPORT_FOLDER_LIMIT_EXCEEDED" then return "FPI_ERROR" & tab & "ACCESS_FAILED" & tab & "MAILBOX_MESSAGE_LIMIT_EXCEEDED"
   return ""
 end fpiStructuredError`;
 
@@ -62,13 +62,19 @@ on run argv
     set folderName to item 2 of argv
     set expectedSubject to item 3 of argv
     set lookbackHours to (item 4 of argv) as integer
+    set messageLimit to (item 5 of argv) as integer
     tell application id "com.apple.mail"
 ${RESOLVE_TARGET_PREAMBLE}
       set cutoffDate to (current date) - (lookbackHours * hours)
-      set matches to every message of targetBox whose subject is expectedSubject and date received is greater than cutoffDate
-      set outputText to "MAILBOX" & tab & accountIdentifier & tab & (account type of targetAccount as string) & tab & (name of targetBox as string) & linefeed
-      repeat with currentMessage in matches
-        set outputText to outputText & "MESSAGE" & tab & ((id of currentMessage) as string) & linefeed
+      set targetMessages to messages of targetBox
+      if (count of targetMessages) is greater than messageLimit then error "MAIL_IMPORT_REPORT_FOLDER_LIMIT_EXCEEDED"
+      set outputText to "MAILBOX" & tab & accountIdentifier & tab & (account type of targetAccount as string) & tab & (name of targetBox as string) & tab & (class of targetBox as string) & linefeed
+      repeat with currentMessage in targetMessages
+        set currentSubject to subject of currentMessage as string
+        set currentReceivedAt to date received of currentMessage
+        if currentSubject is expectedSubject and currentReceivedAt is greater than cutoffDate then
+          set outputText to outputText & "MESSAGE" & tab & ((id of currentMessage) as string) & linefeed
+        end if
       end repeat
       return "FPI_OK" & tab & outputText
     end tell
@@ -134,6 +140,12 @@ function parseStructuredOutput(stdout) {
         { setupReason: reason },
       );
     }
+    if (kind === "ACCESS_FAILED" && reason === "MAILBOX_MESSAGE_LIMIT_EXCEEDED") {
+      throw adapterError(
+        "MAIL_IMPORT_REPORT_SCAN_LIMIT_EXCEEDED",
+        `Der dedizierte Importberichtordner enthält mehr als ${IMPORT_REPORT_FOLDER_MESSAGE_LIMIT} Nachrichten und wird fail-closed nicht vollständig traversiert.`,
+      );
+    }
     throw adapterError("MAIL_IMPORT_REPORT_PARSE_ERROR", "Apple Mail lieferte einen unbekannten strukturierten Fehler.");
   }
   throw adapterError("MAIL_IMPORT_REPORT_PARSE_ERROR", "Apple Mail lieferte keine strukturierte Adapterantwort.");
@@ -176,8 +188,120 @@ export function classifyAppleMailAutomationError(error, context = {}) {
   );
 }
 
+function processError(message, details = {}) {
+  const error = new Error(message);
+  Object.assign(error, details);
+  return error;
+}
+
+export function createAppleMailProcessExecutor(options = {}) {
+  const spawnProcess = options.spawnProcess || spawn;
+  const terminationGraceMs = Math.max(1, Number(options.terminationGraceMs) || PROCESS_TERMINATION_GRACE_MS);
+  return async function execute(file, args, executionOptions = {}) {
+    const timeout = Math.max(1, Number(executionOptions.timeout) || PROCESS_TIMEOUT_MS);
+    const maxBuffer = Math.max(1024, Number(executionOptions.maxBuffer) || 10 * 1024 * 1024);
+    return new Promise((resolve, reject) => {
+      const child = spawnProcess(file, args, {
+        stdio: ["ignore", "pipe", "pipe"],
+        env: executionOptions.env || process.env,
+      });
+      const stdout = [];
+      const stderr = [];
+      let stdoutBytes = 0;
+      let stderrBytes = 0;
+      let timedOut = false;
+      let bufferExceeded = false;
+      let requestedSignal = "";
+      let spawnFailure = null;
+      let timeoutTimer;
+      let hardKillTimer;
+
+      const terminate = (reason) => {
+        if (requestedSignal || child.exitCode !== null) return;
+        requestedSignal = "SIGTERM";
+        if (reason === "timeout") timedOut = true;
+        if (reason === "buffer") bufferExceeded = true;
+        child.kill("SIGTERM");
+        hardKillTimer = setTimeout(() => {
+          if (child.exitCode === null) {
+            requestedSignal = "SIGKILL";
+            child.kill("SIGKILL");
+          }
+        }, terminationGraceMs);
+      };
+
+      const collect = (target, chunk, stream) => {
+        const data = Buffer.from(chunk);
+        if (stream === "stdout") stdoutBytes += data.length;
+        else stderrBytes += data.length;
+        if (stdoutBytes > maxBuffer || stderrBytes > maxBuffer) {
+          terminate("buffer");
+          return;
+        }
+        target.push(data);
+      };
+
+      child.stdout?.on("data", (chunk) => collect(stdout, chunk, "stdout"));
+      child.stderr?.on("data", (chunk) => collect(stderr, chunk, "stderr"));
+      child.once("error", (error) => {
+        spawnFailure = error;
+      });
+      timeoutTimer = setTimeout(() => terminate("timeout"), timeout);
+      child.once("close", (code, signal) => {
+        clearTimeout(timeoutTimer);
+        clearTimeout(hardKillTimer);
+        const stdoutText = Buffer.concat(stdout).toString(executionOptions.encoding || "utf8");
+        const stderrText = Buffer.concat(stderr).toString(executionOptions.encoding || "utf8");
+        if (spawnFailure) {
+          Object.assign(spawnFailure, { stdout: stdoutText, stderr: stderrText, processId: child.pid });
+          reject(spawnFailure);
+          return;
+        }
+        if (timedOut) {
+          reject(processError("osascript timed out", {
+            code: "ETIMEDOUT",
+            killed: true,
+            timedOut: true,
+            signal: signal || requestedSignal || "SIGTERM",
+            stdout: stdoutText,
+            stderr: stderrText,
+            processId: child.pid,
+          }));
+          return;
+        }
+        if (bufferExceeded) {
+          reject(processError("osascript output exceeded the bounded buffer", {
+            code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
+            killed: true,
+            signal: signal || requestedSignal,
+            stdout: stdoutText,
+            stderr: stderrText,
+            processId: child.pid,
+          }));
+          return;
+        }
+        if (code !== 0) {
+          reject(processError(`osascript exited with code ${code}`, {
+            code,
+            killed: Boolean(signal),
+            signal: signal || "",
+            stdout: stdoutText,
+            stderr: stderrText,
+            processId: child.pid,
+          }));
+          return;
+        }
+        resolve({ stdout: stdoutText, stderr: stderrText, processId: child.pid });
+      });
+    });
+  };
+}
+
 export function createAppleMailAutomationRunner(options = {}) {
-  const execute = options.execute || execFileAsync;
+  const execute = options.execute || createAppleMailProcessExecutor({
+    spawnProcess: options.spawnProcess,
+    terminationGraceMs: options.terminationGraceMs,
+  });
   const clock = options.clock || (() => Date.now());
   return async function runAppleScript(script, args, runnerOptions = {}) {
     const timeout = Math.max(1, Number(runnerOptions.timeout) || PROCESS_TIMEOUT_MS);
@@ -227,6 +351,23 @@ export function createAppleMailImportReportAdapter(options = {}) {
   ).trim();
   if (!accountName) throw new Error("Der Apple-Mail-Accountname fehlt.");
   if (!mailboxName) throw new Error("Der Apple-Mail-Importberichtordner fehlt.");
+  let activeOperation = "";
+
+  async function singleFlight(operation, callback) {
+    if (activeOperation) {
+      throw adapterError(
+        "MAIL_AUTOMATION_BUSY",
+        `Eine read-only Apple-Mail-Abfrage (${activeOperation}) läuft bereits.`,
+        { activeOperation },
+      );
+    }
+    activeOperation = operation;
+    try {
+      return await callback();
+    } finally {
+      activeOperation = "";
+    }
+  }
 
   return Object.freeze({
     accountName,
@@ -234,54 +375,61 @@ export function createAppleMailImportReportAdapter(options = {}) {
     targetFolder: mailboxName,
     readOnly: true,
     async inspectSetup() {
-      const output = await runner(INSPECT_SETUP_SCRIPT, [accountName, mailboxName]);
-      const setup = validMailboxHeader(output, "SETUP", mailboxName);
-      return {
-        accountName,
-        accountId: setup.accountId,
-        accountType: setup.accountType,
-        mailboxName,
-        mailboxClass: setup.mailboxClass,
-        targetFolder: mailboxName,
-        targetFolderExists: true,
-        readOnly: true,
-      };
-    },
-    async findCandidates(input = {}) {
-      const lookbackHours = Math.max(1, Math.min(720, Math.ceil(Number(input.lookbackHours) || 72)));
-      const output = String(await runner(LIST_MESSAGES_SCRIPT, [
-        accountName,
-        mailboxName,
-        IMMOPROFESSIONAL_IMPORT_REPORT_SUBJECT,
-        String(lookbackHours),
-      ]) || "");
-      const lines = output.split(/\r?\n/gu).map((line) => line.trim()).filter(Boolean);
-      const header = validMailboxHeader(lines.shift(), "MAILBOX", mailboxName);
-      return lines.map((line) => {
-        const [kind, transportId] = line.split("\t");
-        if (kind !== "MESSAGE") throw adapterError("MAIL_IMPORT_REPORT_PARSE_ERROR", "Apple Mail hat eine ungültige Nachrichtenreferenz geliefert.");
+      return singleFlight("inspect-setup", async () => {
+        const output = await runner(INSPECT_SETUP_SCRIPT, [accountName, mailboxName]);
+        const setup = validMailboxHeader(output, "SETUP", mailboxName);
         return {
-          transportId: validTransportId(transportId),
           accountName,
-          accountId: header.accountId,
-          accountType: header.accountType,
+          accountId: setup.accountId,
+          accountType: setup.accountType,
           mailboxName,
+          mailboxClass: setup.mailboxClass,
+          targetFolder: mailboxName,
+          targetFolderExists: true,
+          readOnly: true,
         };
       });
     },
+    async findCandidates(input = {}) {
+      return singleFlight("find-candidates", async () => {
+        const lookbackHours = Math.max(1, Math.min(720, Math.ceil(Number(input.lookbackHours) || 72)));
+        const output = String(await runner(LIST_MESSAGES_SCRIPT, [
+          accountName,
+          mailboxName,
+          IMMOPROFESSIONAL_IMPORT_REPORT_SUBJECT,
+          String(lookbackHours),
+          String(IMPORT_REPORT_FOLDER_MESSAGE_LIMIT),
+        ]) || "");
+        const lines = output.split(/\r?\n/gu).map((line) => line.trim()).filter(Boolean);
+        const header = validMailboxHeader(lines.shift(), "MAILBOX", mailboxName);
+        return lines.map((line) => {
+          const [kind, transportId] = line.split("\t");
+          if (kind !== "MESSAGE") throw adapterError("MAIL_IMPORT_REPORT_PARSE_ERROR", "Apple Mail hat eine ungültige Nachrichtenreferenz geliefert.");
+          return {
+            transportId: validTransportId(transportId),
+            accountName,
+            accountId: header.accountId,
+            accountType: header.accountType,
+            mailboxName,
+          };
+        });
+      });
+    },
     async readRawMessage(candidate) {
-      const transportId = validTransportId(candidate?.transportId);
-      const accountId = validAccountId(candidate?.accountId);
-      if (candidate?.accountName !== accountName || candidate?.mailboxName !== mailboxName) {
-        throw new Error("Die Apple-Mail-Nachrichtenreferenz gehört nicht zum konfigurierten Importberichtordner.");
-      }
-      const rawSource = await runner(
-        READ_MESSAGE_SCRIPT,
-        [accountName, mailboxName, accountId, transportId],
-        { maxBuffer: 20 * 1024 * 1024 },
-      );
-      if (!String(rawSource || "").trim()) throw adapterError("MAIL_IMPORT_REPORT_PARSE_ERROR", "Apple Mail lieferte eine leere Raw-Mail.");
-      return { ...candidate, accountName, accountId, mailboxName, rawSource: String(rawSource) };
+      return singleFlight("read-message", async () => {
+        const transportId = validTransportId(candidate?.transportId);
+        const accountId = validAccountId(candidate?.accountId);
+        if (candidate?.accountName !== accountName || candidate?.mailboxName !== mailboxName) {
+          throw new Error("Die Apple-Mail-Nachrichtenreferenz gehört nicht zum konfigurierten Importberichtordner.");
+        }
+        const rawSource = await runner(
+          READ_MESSAGE_SCRIPT,
+          [accountName, mailboxName, accountId, transportId],
+          { maxBuffer: 20 * 1024 * 1024 },
+        );
+        if (!String(rawSource || "").trim()) throw adapterError("MAIL_IMPORT_REPORT_PARSE_ERROR", "Apple Mail lieferte eine leere Raw-Mail.");
+        return { ...candidate, accountName, accountId, mailboxName, rawSource: String(rawSource) };
+      });
     },
   });
 }

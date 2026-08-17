@@ -433,6 +433,41 @@ Antworten als `MAIL_IMPORT_REPORT_PARSE_ERROR` getrennt. Alle Klassen bleiben
 fail-closed: Sie bestätigen keinen Import, verändern keine Mail und lassen die
 Rotationskopie unverändert `transferred_pending_import`.
 
+### Persistenter macOS-Helper und read-only Runtime-Probe
+
+Der Helper läuft als einzelner Benutzer-LaunchAgent im Aqua-Kontext und mit
+`ProcessType=Interactive`. Die installierte Runtime ist eine isolierte,
+fingerprintierte Kopie des geprüften Quellstands. Sie enthält die erforderlichen
+Runtime-Abhängigkeiten und Medien, aber keine Secrets, Tests, Arbeitsdaten,
+Git-Metadaten oder Build-Artefakte. Der geschützte lokale Sitzungsschlüssel wird
+erst beim Start aus dem Application-Support-Verzeichnis gelesen und niemals in
+die Runtime kopiert.
+
+Installation beziehungsweise kontrollierte Aktualisierung erfolgen aus einem
+sauberen, vollständig geprüften Feature-Stand:
+
+```bash
+node helper-launch-agent-cli.mjs install
+```
+
+Der Apple-Mail-Kindprozess besitzt einen begrenzten Buffer und eine feste
+Laufzeit. Bei Timeout wird ausschließlich der zugehörige `osascript`-Prozess
+zunächst mit `SIGTERM` und nach Ablauf der Grace Period mit `SIGKILL` beendet;
+der Helper wartet auf dessen tatsächliches Ende. Adapter und Importdienst
+erlauben jeweils nur eine aktive Mailoperation. Die Ordnertraversierung ist auf
+500 Nachrichten begrenzt und liest für die Kandidatensuche nur Betreff,
+Empfangszeitpunkt und lokale Nachrichten-ID.
+
+Der sessiongeschützte Runtime-Probe prüft den exakt laufenden Helperpfad, ohne
+Nachrichtentexte oder Anhänge zu lesen und ohne eine Mail- oder Katalogmutation:
+
+```bash
+node mail-runtime-probe-cli.mjs probe --runs 10 --interval-ms 250
+```
+
+Jeder Lauf protokolliert Prozess-ID, Start, Ende, Dauer, Mailboxklasse,
+Kandidatenanzahl sowie ausdrücklich `readOnly: true` und `mailMutations: 0`.
+
 Gesucht wird nur nach dem exakten Betreff und in einem auf offene Transfers
 begrenzten Lookback. Gibt es keine offene `transferred_pending_import`-Kopie,
 wird Apple Mail nicht angesprochen. Solange eine Bestätigung offen ist, prüft

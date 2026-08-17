@@ -294,3 +294,54 @@ test("bounded live-canary scan cannot mutate another pending external object num
   assert.deepEqual(store.current(), before);
   assert.deepEqual(mail.counts(), { scanCount: 1, readCount: 1, mutationCount: 0 });
 });
+
+test("permission denied and unavailable remain distinct fail-closed runtime classes", async () => {
+  for (const [code, expectedStatus] of [
+    ["MAIL_AUTOMATION_PERMISSION_DENIED", "automation_permission_denied"],
+    ["MAIL_AUTOMATION_UNAVAILABLE", "automation_unavailable"],
+  ]) {
+    const setup = setupState();
+    const store = fakeStore(setup.state);
+    const error = Object.assign(new Error(code), { code });
+    const mail = fakeMail({ findError: error, exposeMutationTraps: true });
+    const result = await createService(setup, store, mail).runOnce();
+    assert.equal(result.errorCode, code);
+    assert.equal(result.setupRequired, false);
+    assert.equal(store.current().mailImportReportStatus.status, expectedStatus);
+    assert.equal(store.current().projects[0].listings.find((listing) => listing.id === "copy").status, WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT);
+    assert.equal(mail.counts().mutationCount, 0);
+  }
+});
+
+test("mail polling is single-flight and releases cleanly after completion", async () => {
+  const setup = setupState();
+  const store = fakeStore(setup.state);
+  let releaseScan;
+  let scanCount = 0;
+  const mail = {
+    readOnly: true,
+    mailboxName: IMPORT_REPORT_MAIL_FOLDER,
+    async findCandidates() {
+      scanCount += 1;
+      if (scanCount === 1) await new Promise((resolve) => { releaseScan = resolve; });
+      return [];
+    },
+    async readRawMessage() { throw new Error("unexpected read"); },
+  };
+  const service = createService(setup, store, mail);
+  const first = service.runOnce({ now: "2026-08-13T09:17:00.000Z" });
+  await new Promise((resolve) => setImmediate(resolve));
+  const overlapping = await service.runOnce({ now: "2026-08-13T09:17:01.000Z" });
+  assert.deepEqual(overlapping, {
+    ran: false,
+    reason: "mail-poll-in-flight",
+    inFlight: true,
+    processed: [],
+    mailMutations: 0,
+  });
+  releaseScan();
+  await first;
+  const afterRelease = await service.runOnce({ now: "2026-08-13T09:18:00.000Z" });
+  assert.equal(afterRelease.ran, true);
+  assert.equal(scanCount, 2);
+});
