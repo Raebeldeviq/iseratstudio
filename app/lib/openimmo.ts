@@ -27,6 +27,7 @@ export type PackageInput = {
   promotionImage?: HouseImage | null;
   promotionImageEnabled?: boolean;
   promotionImagesByListingId?: Record<string, HouseImage>;
+  heroImageIdsByListingId?: Record<string, string>;
 };
 
 const SUPPORTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
@@ -34,12 +35,22 @@ const MAX_EXPORTED_IMAGES = 14;
 
 function listingImages(input: PackageInput, house: HouseTemplate, listing?: GeneratedListing): HouseImage[] {
   const orderedImages = orderHouseImages(house.images);
+  const assignedHeroId = listing ? input.heroImageIdsByListingId?.[listing.id] : undefined;
+  const assignedHero = assignedHeroId
+    ? orderedImages.find((image) =>
+        image.id === assignedHeroId
+        && !image.isFloorplan
+        && (image.role === "cover" || image.eligibleForListingHero === true))
+    : undefined;
+  const houseImages = assignedHero
+    ? [assignedHero, ...orderedImages.filter((image) => image.id !== assignedHero.id)]
+    : orderedImages;
   const assignedPromotion = listing ? input.promotionImagesByListingId?.[listing.id] : undefined;
   const promotionImage = assignedPromotion || (input.promotionImageEnabled ? input.promotionImage : null);
-  if (!promotionImage) return orderedImages;
+  if (!promotionImage) return houseImages;
   return [
     { ...promotionImage, role: "promotion" },
-    ...orderedImages.filter((image) => image.id !== promotionImage.id),
+    ...houseImages.filter((image) => image.id !== promotionImage.id),
   ];
 }
 
@@ -73,11 +84,19 @@ export function validateImportPackage(input: PackageInput): string[] {
       errors.push(`${label}: zugehöriger Haustyp fehlt.`);
       continue;
     }
+    const assignedHeroId = input.heroImageIdsByListingId?.[listing.id];
+    if (assignedHeroId && !house.images.some((image) =>
+      image.id === assignedHeroId
+      && !image.isFloorplan
+      && (image.role === "cover" || image.eligibleForListingHero === true))) {
+      errors.push(`${label}: persistiertes Hero-Bild ist nicht mehr ausdrücklich als Portal-Hero freigegeben.`);
+    }
     const images = listingImages(input, house, listing);
     if (images.length < 4 || images.length > MAX_EXPORTED_IMAGES) {
       errors.push(`${label}: benötigt 4 bis 14 Bilder.`);
     }
-    for (const issue of imageSequenceIssues(images, {
+    const sequenceImages = assignedHeroId ? orderHouseImages(house.images) : images;
+    for (const issue of imageSequenceIssues(sequenceImages, {
       requiresUpperFloor: house.floors > 1,
       requiresThirdFloor: house.floors > 2,
       maximumImages: MAX_EXPORTED_IMAGES,

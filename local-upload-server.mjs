@@ -43,6 +43,7 @@ import {
 import { createPlotSyncService } from "./plot-sync-service.mjs";
 import { buildImportPackage } from "./app/lib/openimmo.ts";
 import { createUploadJobId } from "./batch-upload.mjs";
+import { eligiblePromotionHeroImages } from "./listing-creative-selection.mjs";
 import { createCatalogStateStore } from "./catalog-state-store.mjs";
 import { createListingRotationSchedulerService } from "./listing-rotation-scheduler-service.mjs";
 import { createPersistentLease } from "./persistent-lease.mjs";
@@ -328,13 +329,28 @@ async function automaticRotationUpload({ state, project, listing, runId }) {
       ...sourceHouse,
       images: await Promise.all((sourceHouse.images || []).map(hydratedCatalogImage)),
     };
+    const promotionImageId = String(listing.promotionImageId || "");
+    const promotionImage = promotionImageId
+      ? eligiblePromotionHeroImages(state).find((image) => image.id === promotionImageId)
+      : null;
+    if (promotionImageId && !promotionImage) {
+      const error = new Error("Das persistierte Aktionsbild ist nicht mehr für automatische Portalinserate freigegeben.");
+      error.code = "AUTOMATIC_ROTATION_PROMOTION_NOT_ELIGIBLE";
+      throw error;
+    }
+    const hydratedPromotionImage = promotionImage ? await hydratedCatalogImage(promotionImage) : null;
     const packageResult = await buildImportPackage({
       project,
       listings: [listing],
       houses: [hydratedHouse],
       provider: state.provider,
       promotionImageEnabled: false,
-      promotionImagesByListingId: {},
+      promotionImagesByListingId: hydratedPromotionImage
+        ? { [listing.id]: hydratedPromotionImage }
+        : {},
+      heroImageIdsByListingId: listing.heroCreativeType !== "action" && listing.heroImageId
+        ? { [listing.id]: listing.heroImageId }
+        : {},
     });
     const archive = Buffer.from(await packageResult.blob.arrayBuffer());
     const remotePath = String(ftp.ftpPath || "/").trim();

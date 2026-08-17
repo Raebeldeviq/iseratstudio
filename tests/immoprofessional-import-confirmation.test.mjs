@@ -203,3 +203,78 @@ test("only an active production lifecycle authorizes the confirmed source for au
   const historicalSource = historicalConfirmation.state.projects[0].listings.find((listing) => listing.id === historical.source.id);
   assert.equal(historicalSource.productionDeleteState, undefined);
 });
+
+test("positive import confirmation records house and action usage exactly once", () => {
+  const fixture = fixtureState();
+  fixture.copy.rotationRemovedHouseId = "house-a";
+  fixture.copy.rotationAddedHouseId = "house-b";
+  fixture.copy.promotionImageId = "promo-1";
+  fixture.copy.creativeSelection = {
+    format: 1,
+    houseId: "house-b",
+    heroType: "action",
+    heroImageId: "promo-1",
+    promotionImageId: "promo-1",
+    selectedAt: "2026-08-13T09:14:00.000Z",
+  };
+  fixture.state.houses = ["a", "b", "c", "d", "e"].map((id) => ({
+    id: `house-${id}`,
+    name: `Haus ${id}`,
+    approved: true,
+  }));
+  fixture.state.houseDistribution = {
+    poolHouseIds: fixture.state.houses.map((item) => item.id),
+    projects: [{
+      projectId: fixture.project.id,
+      activeHouseIds: ["house-a", "house-c", "house-d", "house-e"],
+      previewHouseIds: ["house-a", "house-c", "house-d", "house-e"],
+      excludedHouseIds: [],
+      pinnedHouseIds: [],
+    }],
+  };
+  fixture.state.promotionImages = [{
+    id: "promo-1",
+    name: "aktion.jpg",
+    mimeType: "image/jpeg",
+    active: true,
+    role: "promotion",
+  }];
+  fixture.state.promotionSettings = { enabled: true, automaticRotation: true };
+  fixture.state.promotionUsage = [];
+  fixture.jobId = createUploadJobId(fixture.project, fixture.copy);
+  fixture.project.listingGroup.listingControls[0].pendingRotationJobId = fixture.jobId;
+  fixture.state.uploadHistory = [{
+    id: "upload-log-creative",
+    jobId: fixture.jobId,
+    projectId: fixture.project.id,
+    listingId: fixture.copy.id,
+    status: WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT,
+  }];
+  fixture.ledger = {
+    format: 1,
+    jobs: [{
+      jobId: fixture.jobId,
+      projectId: fixture.project.id,
+      listingId: fixture.copy.id,
+      status: WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT,
+    }],
+  };
+
+  const first = confirmImportReportInState(fixture.state, parsed(), mail, fixture.ledger, {
+    now: "2026-08-13T09:17:00.000Z",
+  });
+  assert.equal(first.result.status, "confirmed");
+  const distribution = first.state.houseDistribution.projects.find((item) => item.projectId === fixture.project.id);
+  assert.equal(distribution.activeHouseIds.includes("house-a"), false);
+  assert.equal(distribution.activeHouseIds.includes("house-b"), true);
+  assert.equal(first.state.houseDistribution.houseUsage.find((item) => item.houseId === "house-b").totalUses, 1);
+  assert.equal(first.state.promotionUsage.length, 1);
+  assert.equal(first.state.promotionUsage[0].imageId, "promo-1");
+
+  const repeated = confirmImportReportInState(first.state, parsed(), mail, fixture.ledger, {
+    now: "2026-08-13T09:18:00.000Z",
+  });
+  assert.equal(repeated.result.status, "idempotent");
+  assert.equal(repeated.state.promotionUsage.length, 1);
+  assert.equal(repeated.state.houseDistribution.houseUsage.find((item) => item.houseId === "house-b").totalUses, 1);
+});

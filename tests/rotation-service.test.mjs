@@ -75,9 +75,10 @@ function buildState(poolSize) {
 
 test("central rotation handles pools with 4, 10 and 20 houses consistently", () => {
   const exact = buildState(4);
-  const blocked = planListingRotation(exact, "project-1", "listing-1", { now: "2026-07-25T09:00:00.000Z" });
-  assert.equal(blocked.ok, false);
-  assert.match(blocked.issues.join(" "), /kein zulässiges Ersatzhaus/);
+  const fallback = planListingRotation(exact, "project-1", "listing-1", { now: "2026-07-25T09:00:00.000Z" });
+  assert.equal(fallback.ok, true);
+  assert.equal(fallback.houseId, "house-1");
+  assert.equal(fallback.creativeHouseSelection.variationExhausted, true);
 
   for (const poolSize of [10, 20]) {
     const state = buildState(poolSize);

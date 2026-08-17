@@ -270,6 +270,49 @@ und könnte einen tatsächlich veröffentlichten Zustand nur wegen Zeitablaufs
 fälliger, ausgewählter, fortgesetzter, übersprungener und fehlerhafter
 Inserate sowie Start, Ende und Abbruchgrund.
 
+### Deterministische Creative-Diversifizierung
+
+Die Auswahl des nächsten Grundstücks bleibt Aufgabe des Schedulers. Erst nach
+dieser Auswahl bestimmt eine getrennte, rein zustandsbasierte Creative-Stufe
+das nächste Haus und anschließend das Hero-Bild. Die Hauswahl verwendet eine
+deterministische LRU-/Score-Reihenfolge aus der Historie des konkreten
+Grundstücks und der globalen Rotationshistorie. Direkte Wiederholungen,
+kurzfristig häufig genutzte Häuser und eine unnötige globale Serie werden
+benachteiligt; bei mehreren zulässigen Häusern wird das bisherige Haus nicht
+erneut gewählt. Ist fachlich nur ein Haus verfügbar, bleibt die Rotation mit
+dem Diagnosecode `CREATIVE_VARIATION_EXHAUSTED` produktiv statt zu blockieren.
+
+Die zweite Stufe wählt unabhängig davon das Hero. Normale Haus-Titelbilder mit
+Rolle `cover` sind automatisch zulässig; andere Hausperspektiven nur mit der
+expliziten Metadatenfreigabe `eligibleForListingHero: true`. Zentral verwaltete
+Aktionsbilder gelten nur dann als freigegeben, wenn die Aktionsbildfunktion und
+ihre automatische Rotation aktiviert sind, das konkrete Motiv aktiv ist, die
+Rolle `promotion` trägt und nicht mit `eligibleForListingHero: false` gesperrt
+ist. Ein freigegebenes Aktionsbild erscheint deterministisch ungefähr bei jeder
+vierten geeigneten Rotation. Innerhalb beider Bildpools gilt erneut LRU; ohne
+geeignetes Aktionsbild wird immer der normale Hausbildpfad verwendet.
+
+Haus-ID, Hausname, Preis, vollständige Texte, Hero-Typ, Hero-ID und optionale
+Aktionsbild-ID werden gemeinsam an der neuen Rotationskopie gespeichert. Der
+Upload liest ausschließlich diese persistierte Auswahl. Ein Helper-Neustart
+kann deshalb weder Haus noch Hero neu würfeln. Erst der eindeutig positive
+Importbericht schreibt Haus- und Aktionsbildnutzung genau einmal in die
+bestehenden Statistiken zurück. Ältere Rotationskopien bleiben ohne Migration
+als Historie auswertbar.
+
+Die nächsten zehn oder zwanzig fälligen Kandidaten lassen sich ohne
+Katalogmutation, Helperstart oder Upload prüfen:
+
+```bash
+node listing-creative-preview-cli.mjs preview --limit 10
+node listing-creative-preview-cli.mjs preview --limit 20 --at 2026-08-17T10:00:00+02:00
+```
+
+Die Vorschau zeigt Grundstück, Quelle, bisheriges und vorgeschlagenes Haus,
+Hero-Typ, konkretes Creative, Begründung sowie letzte Verwendung. Daily-Plot-
+Guard, Dreierlimit, Zeitfenster, Claims, Leases, Importbestätigung und das
+separate DELETE-Sicherheitsmodell werden von der Creative-Stufe nicht verändert.
+
 ### Hartes Tageslimit je Grundstück
 
 Für produktive Hausuploads gilt zentral: Pro stabiler `plotId` darf innerhalb
@@ -660,13 +703,15 @@ Entwurfserstellung, Priorisierung, Pause, Premium-Sperre, Löschsperre, Modus
 und ein gezielt ausgewähltes Ersatzhaus aus dem zentralen Pool. Fehler eines
 Inserats werden isoliert protokolliert und stoppen den übrigen Tageslauf nicht.
 
-Die Hausauswahl ist gewichtet. Selten verwendete Häuser, lange nicht genutzte
-Häuser und Häuser, die auf dem konkreten Grundstück noch nie vorkamen, werden
-bevorzugt. Hohe parallele Nutzung, häufige Vierer-Kombinationen, die unmittelbar
-vorherige Kombination und das zuletzt entfernte Haus werden benachteiligt oder
-ausgeschlossen. Haus- und Kombinationshistorien werden lokal dauerhaft
-gespeichert. Die Gewichtungsparameter stehen zentral in
-`house-distribution.mjs`.
+Die Hausauswahl ist deterministisch gewichtet. Selten verwendete Häuser, lange
+nicht genutzte Häuser und Häuser, die auf dem konkreten Grundstück noch nie
+vorkamen, werden bevorzugt. Hohe parallele Nutzung, unmittelbare Grundstücks-
+oder globale Wiederholungen und häufige Vierer-Kombinationen werden
+benachteiligt oder ausgeschlossen. Haus-, Kombinations- und Creative-Historien
+werden aus dem persistenten Katalog abgeleitet und nach der positiven
+Importbestätigung fortgeschrieben. Die Verteilungsparameter liegen in
+`house-distribution.mjs`, die zusätzliche Anti-Monotonie in
+`listing-creative-selection.mjs`.
 
 Automatisches Löschen bleibt standardmäßig `off` und wird nur als zweite,
 separat freizugebende Stufe eines neu markierten Produktions-Lifecycles

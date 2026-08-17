@@ -2,9 +2,9 @@ import {
   houseDataIssues,
   HOUSES_PER_PROJECT,
   normalizeHouseDistribution,
-  planWeightedHouseRotation,
   validateHousePool,
 } from "./house-distribution.mjs";
+import { planCreativeHouseSelection } from "./listing-creative-selection.mjs";
 import { listingControl, normalizeListingGroup } from "./listing-groups.mjs";
 import { PROCESS_LEASE_MS } from "./listing-rules.mjs";
 import { WORKFLOW_STATUS } from "./workflow-status.mjs";
@@ -72,8 +72,7 @@ export function listingRotationPoolBlockReasons(
   if (projectDistribution && distributionValidation.ok) {
     const remaining = projectDistribution.activeHouseIds.filter((id) => id !== listing.templateId);
     const hasCandidate = distributionValidation.eligibleHouseIds.some((id) =>
-      id !== listing.templateId
-      && !remaining.includes(id)
+      !remaining.includes(id)
       && !projectDistribution.excludedHouseIds.includes(id));
     if (!hasCandidate) issues.push("Im Hauspool ist kein zulässiges Ersatzhaus verfügbar.");
   }
@@ -104,6 +103,7 @@ export function planListingRotation(state, projectId, listingId, options = {}) {
 
   let houseId = String(options.explicitHouseId || "");
   let combination = [];
+  let creativeHouseSelection = null;
   if (!issues.length && houseId) {
     const remaining = (projectDistribution?.activeHouseIds || [])
       .filter((id) => id !== listing.templateId);
@@ -115,23 +115,22 @@ export function planListingRotation(state, projectId, listingId, options = {}) {
     }
     combination = [...remaining, houseId];
   } else if (!issues.length) {
-    const planned = planWeightedHouseRotation(
+    const remaining = (projectDistribution?.activeHouseIds || [])
+      .filter((id) => id !== listing.templateId)
+      .slice(0, HOUSES_PER_PROJECT - 1);
+    const candidateHouseIds = distributionValidation.eligibleHouseIds.filter((id) =>
+      !remaining.includes(id)
+      && !projectDistribution?.excludedHouseIds.includes(id));
+    creativeHouseSelection = planCreativeHouseSelection(state, {
+      projectId: project.id,
+      sourceHouseId: listing.templateId,
+      candidateHouseIds,
       distribution,
-      state.houses || [],
-      state.projects || [],
-      project.id,
-      listing.templateId,
-      {
-        now: at,
-        random: options.random,
-        seed: options.seed,
-        normalized: true,
-        validation: distributionValidation,
-      },
-    );
-    if (!planned.ok) issues.push(...planned.issues);
-    houseId = planned.houseId;
-    combination = planned.combination;
+      now: at,
+    });
+    if (!creativeHouseSelection.ok) issues.push(creativeHouseSelection.reason);
+    houseId = creativeHouseSelection.houseId;
+    combination = houseId ? [...remaining, houseId] : remaining;
   }
 
   const house = (state.houses || []).find((item) => item.id === houseId) || null;
@@ -152,5 +151,6 @@ export function planListingRotation(state, projectId, listingId, options = {}) {
     houseId,
     house,
     combination,
+    creativeHouseSelection,
   };
 }

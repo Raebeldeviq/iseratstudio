@@ -18,7 +18,7 @@ function projectAddress(project) {
   return [street, place].filter(Boolean).join(", ") || project.name;
 }
 
-export function createUploadJobId(project, listing, promotionImageId = "") {
+export function createUploadJobId(project, listing, promotionImageId = listing?.promotionImageId || "") {
   return [
     "upload",
     String(project?.id || ""),

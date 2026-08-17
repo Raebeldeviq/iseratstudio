@@ -9,6 +9,10 @@ import {
 } from "./listing-groups.mjs";
 import { fillMissingProjectingDefaults } from "./listing-copy.mjs";
 import { objectNumberForListing } from "./listing-object-number.mjs";
+import {
+  CREATIVE_SELECTION_FORMAT,
+  planCreativeHeroSelection,
+} from "./listing-creative-selection.mjs";
 import { planListingRotation } from "./rotation-service.mjs";
 import { WORKFLOW_STATUS } from "./workflow-status.mjs";
 import {
@@ -72,6 +76,21 @@ export function prepareListingRotationInState(state, projectId, listingId, optio
   const externalId = objectNumberForListing(null, copyId, reservedObjectNumbers);
   const version = Math.max(1, Number(sourceListing.version) || 1) + 1;
   const variedTexts = generateListingTexts(house, project, state.provider, version);
+  const heroSelection = planCreativeHeroSelection(state, {
+    project,
+    projectId: project.id,
+    sourceListing,
+    house,
+    now: timestamp,
+  });
+  if (!heroSelection.ok) {
+    const issues = [heroSelection.reason];
+    return { state, ok: false, message: issues[0], issues, copy: null };
+  }
+  const creativeDiagnostics = [...new Set([
+    ...(rotationPlan.creativeHouseSelection?.diagnostics || []),
+    ...(heroSelection.diagnostics || []),
+  ])];
   const copy = {
     ...sourceListing,
     id: copyId,
@@ -93,6 +112,27 @@ export function prepareListingRotationInState(state, projectId, listingId, optio
     rotationSourceListingId: sourceListing.id,
     rotationRemovedHouseId: sourceListing.templateId,
     rotationAddedHouseId: house.id,
+    heroImageId: heroSelection.heroImageId,
+    heroCreativeType: heroSelection.heroType,
+    promotionImageId: heroSelection.promotionImageId,
+    promotionAssignedAt: heroSelection.promotionImageId ? timestamp : "",
+    creativeSelection: {
+      format: CREATIVE_SELECTION_FORMAT,
+      rotationId: copyId,
+      projectId: project.id,
+      plotId: String(project.plotId || ""),
+      sourceListingId: sourceListing.id,
+      houseId: house.id,
+      heroType: heroSelection.heroType,
+      heroImageId: heroSelection.heroImageId,
+      promotionImageId: heroSelection.promotionImageId,
+      selectedAt: timestamp,
+      houseReason: rotationPlan.creativeHouseSelection?.reason || "Manuell festgelegtes Ersatzhaus.",
+      heroReason: heroSelection.reason,
+      houseLastUsedAt: rotationPlan.creativeHouseSelection?.globalLastUsedAt || "",
+      heroLastUsedAt: heroSelection.globalLastUsedAt || "",
+      diagnostics: creativeDiagnostics,
+    },
     createdAt: timestamp,
     lastUploadedAt: "",
     nextUpdateAt: "",
@@ -138,7 +178,7 @@ export function prepareListingRotationInState(state, projectId, listingId, optio
     sourceListing,
     sourceListingId: sourceListing.id,
     pendingRotationJobId: uploadJobId,
-    variation: "Überschrift und Einleitung variiert; Preis, Fläche, Zimmer, Energieangaben, Grundrisse und Bilder vollständig aus der Zielvariante übernommen.",
+    variation: `Creative-Auswahl: ${house.name} · ${heroSelection.heroType === "action" ? "Aktionsbild" : "Haus-Hero"} · Preis, Fläche, Zimmer, Energieangaben, Grundrisse und Bilder vollständig aus der Zielvariante übernommen.${creativeDiagnostics.length ? ` · ${creativeDiagnostics.join(", ")}` : ""}`,
   }).group;
   group = releaseListingOperation(group, sourceListing, operationToken, { idFactory, now: timestamp });
   group = updateListingControl(group, sourceListing, {

@@ -1,4 +1,5 @@
 import { createUploadJobId } from "./batch-upload.mjs";
+import { recordHouseRotation } from "./house-distribution.mjs";
 import {
   listingControl,
   normalizeListingGroup,
@@ -6,6 +7,7 @@ import {
 } from "./listing-groups.mjs";
 import { normalizeListingScheduler, listingDueAt } from "./listing-scheduler.mjs";
 import { MAX_LISTING_GROUP_LOGS } from "./listing-rules.mjs";
+import { recordPromotionUsage } from "./promotion-images.mjs";
 import { normalizeWorkflowStatus, WORKFLOW_STATUS } from "./workflow-status.mjs";
 
 export const IMPORT_REPORT_PROCESSING_STATUS = Object.freeze({
@@ -256,7 +258,7 @@ export function confirmImportReportInState(state, parsed, mail, uploadLedger, op
     }),
     listingGroup: group,
   };
-  const nextState = updateProject({
+  let nextState = updateProject({
     ...state,
     importReports: [...(state.importReports || []), report].slice(-1000),
     mailImportReportStatus: {
@@ -267,6 +269,36 @@ export function confirmImportReportInState(state, parsed, mail, uploadLedger, op
       reportId: report.reportId,
     },
   }, project);
+  if (publishedCopy.rotationRemovedHouseId && publishedCopy.rotationAddedHouseId) {
+    nextState = {
+      ...nextState,
+      houseDistribution: recordHouseRotation(
+        nextState.houseDistribution,
+        nextState.houses || [],
+        nextState.projects || [],
+        project.id,
+        publishedCopy.rotationRemovedHouseId,
+        publishedCopy.rotationAddedHouseId,
+        { now: importedAt },
+      ),
+    };
+  }
+  if (publishedCopy.promotionImageId) {
+    nextState = {
+      ...nextState,
+      ...recordPromotionUsage(nextState, {
+        projectId: project.id,
+        listingId: publishedCopy.id,
+        externalId: publishedCopy.externalId,
+        houseId: publishedCopy.templateId,
+        imageId: publishedCopy.promotionImageId,
+        mode: "create",
+      }, {
+        id: `promotion-usage-${report.reportId}`,
+        now: importedAt,
+      }),
+    };
+  }
   return {
     state: nextState,
     result: {

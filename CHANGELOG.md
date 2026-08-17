@@ -87,6 +87,52 @@ weiteren Lauf blockieren oder fälschlich als Setupfehler erscheinen.
 - Der Runtime-Probe prüft nur Erreichbarkeit und Kandidatenmetadaten. Er
   bestätigt keinen Import und liest keine Nachrichtentexte.
 
+## Unreleased · Creative-Diversifizierung der Background-Rotation – 17. August 2026
+
+### Report
+
+- Die Haus- und Hero-Auswahl als getrennte deterministische Creative-Stufe in
+  den bestehenden Rotationspfad integriert. Grundstücks- und globale LRU-
+  Historien verhindern direkte Haus- und Bildserien, ohne Schedulerumfang oder
+  Produktionsguards zu verändern.
+- Jede vorbereitete Rotationskopie speichert Haus, Hero-Typ, Hero-ID,
+  Aktionsbild-ID, Auswahlzeitpunkt, Begründungen und Diagnosen. Ein Restart
+  übernimmt damit exakt dieselbe Creative-Entscheidung.
+- Freigegebene zentrale Aktionsbilder werden in einem festen, nicht zufälligen
+  Vierer-Takt gelegentlich als Hero verwendet. Inaktive, gesperrte,
+  ungeeignete oder nicht automatisch freigegebene Motive bleiben ausgeschlossen.
+- Der Background-Upload übernimmt das persistierte Hero und Aktionsbild in den
+  OpenImmo-Export. Die deterministische Upload-Job-ID enthält die persistierte
+  Aktionsbild-ID und bleibt damit deduplizierbar.
+- Positive Importberichte schreiben die Haus- und Aktionsbildnutzung atomar und
+  idempotent zurück. Eine doppelte Mail erzeugt weder einen zweiten fachlichen
+  Nutzungsdatensatz noch einen neuen Rotationsentscheid.
+- Eine rein lesende Vorschau-CLI für die nächsten zehn oder zwanzig fälligen
+  Kandidaten ergänzt. Sie lädt den Katalog einmalig, simuliert ausschließlich
+  im Speicher und besitzt keinen Store-Update- oder Uploadpfad.
+
+### Begründung
+
+Der Background-Pfad bestätigte neue Kopien bislang ohne den im manuellen
+UI-Pfad vorhandenen Aufruf von `recordHouseRotation`. Dadurch blieb insbesondere
+`SOL 242 V4` in der zentralen Statistik künstlich selten und gewann die
+gewichtete Auswahl wiederholt. Zusätzlich deaktivierte der automatische Upload
+Aktionsbilder hart. Die neue Stufe nutzt die bereits persistenten Listings als
+kompatible Historie, fixiert die Entscheidung vor dem Upload und ergänzt die
+fehlende Rückschreibung erst bei der positiven Importbestätigung.
+
+### Hürden und Risiken
+
+- Bestehende Häuser besitzen jeweils nur ein als `cover` markiertes Standard-
+  Hero. Sichtbare Bildvariation entsteht deshalb aktuell überwiegend durch die
+  Hausvariation und die sechs zentral freigegebenen Aktionsbilder. Weitere
+  Hausperspektiven benötigen eine explizite Hero-Freigabe.
+- Die Aktionsbildquote ist bewusst deterministisch und nicht zufällig. Sie ist
+  eine nachvollziehbare Anti-Monotonie-Regel, keine garantierte Marketingquote.
+- Während der Implementierung wurden weder Helper noch Scheduler gestartet und
+  weder FTPS-, Mail-, Portal- noch DELETE-Aktionen ausgeführt. Die produktiven
+  Betriebsmodi blieben `off`.
+
 ## Unreleased · Einmalige Legacy-Import-Reconciliation – 15. August 2026
 
 ### Report

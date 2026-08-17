@@ -38,6 +38,7 @@ export type HouseImage = {
   isFloorplan: boolean;
   role?: ImageRole;
   captionLocked?: boolean;
+  eligibleForListingHero?: boolean;
 };
 
 export type PromotionImageAsset = HouseImage & {
@@ -255,6 +256,25 @@ export type GeneratedListing = {
   createdAt?: string;
   promotionImageId?: string;
   promotionAssignedAt?: string;
+  heroImageId?: string;
+  heroCreativeType?: "house" | "action";
+  creativeSelection?: {
+    format: 1;
+    rotationId: string;
+    projectId: string;
+    plotId: string;
+    sourceListingId: string;
+    houseId: string;
+    heroType: "house" | "action";
+    heroImageId: string;
+    promotionImageId: string;
+    selectedAt: string;
+    houseReason: string;
+    heroReason: string;
+    houseLastUsedAt: string;
+    heroLastUsedAt: string;
+    diagnostics: string[];
+  };
   lastUploadedAt?: string;
   transferredAt?: string;
   nextUpdateAt?: string;
