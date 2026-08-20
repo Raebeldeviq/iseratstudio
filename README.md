@@ -438,10 +438,15 @@ Rotationskopie unverändert `transferred_pending_import`.
 Der Helper läuft als einzelner Benutzer-LaunchAgent im Aqua-Kontext und mit
 `ProcessType=Interactive`. Die installierte Runtime ist eine isolierte,
 fingerprintierte Kopie des geprüften Quellstands. Sie enthält die erforderlichen
-Runtime-Abhängigkeiten und Medien, aber keine Secrets, Tests, Arbeitsdaten,
+Runtime-Abhängigkeiten, Medien und die fest allowlistete macOS-Keychain-Sidecar
+`macos-keychain.swift`, aber keine Secrets, Tests, Arbeitsdaten,
 Git-Metadaten oder Build-Artefakte. Der geschützte lokale Sitzungsschlüssel wird
 erst beim Start aus dem Application-Support-Verzeichnis gelesen und niemals in
 die Runtime kopiert.
+
+Der Stager nimmt diese dynamisch gestartete Supportdatei in den
+Runtime-Fingerprint auf und prüft sie vor der Installation. Fehlt die Sidecar,
+stoppt das Staging fail-closed, bevor ein Helper auf den Stand zeigen kann.
 
 Installation beziehungsweise kontrollierte Aktualisierung erfolgen aus einem
 sauberen, vollständig geprüften Feature-Stand:

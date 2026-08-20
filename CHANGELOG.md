@@ -1,5 +1,27 @@
 # Änderungsprotokoll
 
+## Unreleased · Keychain-Sidecar in isolierter Helper-Runtime – 20. August 2026
+
+### Report
+
+- `macos-keychain.swift` als explizit allowlistete und zwingend erforderliche
+  Supportdatei in die isolierte Helper-Runtime aufgenommen.
+- Die Datei fließt in den Runtime-Fingerprint ein; ihr Fehlen stoppt das
+  Staging fail-closed. Tests prüfen Kopie, Manifest und fehlende Sidecar.
+
+### Begründung
+
+`credential-vault.mjs` startet die Swift-Datei dynamisch und importiert sie
+nicht als JavaScript-Modul. Die bisherige Modul-Sammlung konnte diese
+Laufzeitabhängigkeit daher nicht erkennen. Ohne Sidecar konnte der Helper den
+Keychain-Tresor bereits vor Aufbau einer FTPS-Verbindung nicht öffnen.
+
+### Hürden und Risiken
+
+- Die Supportdatei wird bewusst nicht über eine breite Dateiendungsregel
+  eingesammelt, sondern exakt allowlistet. Dadurch gelangen keine fremden
+  Skripte oder Arbeitsartefakte in die Runtime.
+
 ## Unreleased · Historische Delete-State-Reconciliation – 20. August 2026
 
 ### Report

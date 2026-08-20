@@ -26,7 +26,11 @@ const RUNTIME_DEPENDENCIES = Object.freeze([
 const REQUIRED_RUNTIME_FILES = Object.freeze([
   "local-helper-launcher.mjs",
   "local-upload-server.mjs",
+  "macos-keychain.swift",
   "package.json",
+]);
+const RUNTIME_SUPPORT_FILES = Object.freeze([
+  "macos-keychain.swift",
 ]);
 const COPY_MODE = constants.COPYFILE_FICLONE;
 
@@ -162,7 +166,9 @@ export async function stageHelperRuntime(options = {}) {
     .filter((entry) => entry.isFile() && (extname(entry.name) === ".mjs" || entry.name === "package.json"))
     .map((entry) => join(sourceRoot, entry.name))
     .sort((left, right) => left.localeCompare(right, "en"));
-  for (const source of rootFiles) {
+  const supportFiles = RUNTIME_SUPPORT_FILES.map((name) => join(sourceRoot, name));
+  for (const source of [...rootFiles, ...supportFiles]) {
+    await access(source, constants.R_OK);
     await cp(source, join(staging, basename(source)), { force: false, errorOnExist: true, mode: COPY_MODE });
   }
   for (const name of RUNTIME_RESOURCE_DIRECTORIES) {
@@ -176,8 +182,9 @@ export async function stageHelperRuntime(options = {}) {
   const manifest = {
     format: 1,
     createdAt: (options.now || new Date()).toISOString(),
-    codeSha256: await codeFingerprint(sourceRoot, rootFiles),
+    codeSha256: await codeFingerprint(sourceRoot, [...rootFiles, ...supportFiles]),
     rootModuleCount: rootFiles.length,
+    runtimeSupportFileCount: supportFiles.length,
     runtimeDependencyCount: dependencyCount,
     includesBundledMedia: true,
     includesDependencies: true,
