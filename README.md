@@ -676,6 +676,38 @@ node historical-delete-state-reconciliation-cli.mjs reconcile \
   --reconciliation-mode one-time
 ```
 
+### Einmalige Reconciliation des lokalen Pre-FTPS-Abbruchs
+
+Der Vorgang `30460-462061` → `30460-131712` besitzt einen separaten, fest
+kompilierten Ausnahmevertrag für genau den Production-Deletejob
+`production-delete:338e05d2…`. Die damalige isolierte Runtime scheiterte beim
+Laden von `macos-keychain.swift`; im betroffenen Uploadadapter liegt dieser
+Schritt nach dem lokalen Claim-Marker, aber vor FTPS-Client, Verbindung und
+Upload. Der allgemeine Schutz gegen Wiederholungen unklarer Transfers bleibt
+unverändert.
+
+Vor einer Mutation werden der alte Runtimecode, die fehlende Sidecar, das
+strukturierte Delete-Auditlog, der unveränderte Payload, der leere
+Transferabschluss, leere Berichtfelder und beide Livinghaus-Berichtsordner
+read-only geprüft. Source, Replacement, Projekt, Listing-IDs, vollständige
+Job-ID, Payloadname, SHA-256 und Größe sind exakt gebunden. Rotation und
+Production-DELETE müssen `off` sein und der Scheduler-Lock muss frei sein.
+
+```bash
+node delete-pre-ftps-reconciliation-30460-462061-cli.mjs status
+node delete-pre-ftps-reconciliation-30460-462061-cli.mjs reconcile \
+  --external-id 30460-462061 \
+  --replacement-external-id 30460-131712 \
+  --delete-job-id production-delete:338e05d2aac17d3947aabd12f73f00a417e6faa33616dea207f96fdf19f55352 \
+  --reconciliation-mode one-time-pre-ftps
+```
+
+Die Reconciliation setzt ausschließlich diesen Ledgerjob auditierbar auf
+`delete_prepared` und die Source zurück auf den normalen autorisierten
+Deletezustand. Sie erzeugt selbst keinen FTPS-Verkehr, keinen DELETE und keine
+Mailmutation. Ledger-first-Teilzustände sind idempotent wiederaufnehmbar; der
+Pfad wird weder vom Helper noch vom Scheduler automatisch aufgerufen.
+
 ## Dynamisches Inseratsmanagement und sichere Variantenrotation
 
 Jede neue oder aus Excel importierte Adresse besitzt eine persistente

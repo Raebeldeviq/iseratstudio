@@ -1,5 +1,34 @@
 # Änderungsprotokoll
 
+## Unreleased · Einmalige Pre-FTPS-Delete-Reconciliation – 20. August 2026
+
+### Report
+
+- Einen einmaligen Reconciliation-Pfad ergänzt, der ausschließlich das fest
+  gebundene Triple `30460-462061` → `30460-131712` →
+  `production-delete:338e05d2…` wieder auf genau einen normalen
+  Production-DELETE-Versuch vorbereitet.
+- Die Freigabe verlangt fehlende Transfer- und Berichtsbelege, den exakten
+  lokalen Sidecar-Fehler, die nachgewiesene Code-Reihenfolge vor
+  FTPS-Client-Erzeugung, einen read-only Mailgegencheck und beide globalen Modi
+  auf `off`. Ledger- und Katalogmutation bleiben idempotent und auditierbar.
+
+### Begründung
+
+Der persistente Claim-Marker wurde vor dem Aufruf des Uploadadapters gesetzt.
+Der Adapter scheiterte anschließend beim Laden des Keychain-Sidecars, bevor ein
+FTPS-Client entstehen konnte. Nur dieser technisch belegte Pre-Transfer-Fall
+darf deshalb eng reconciliiert werden; der allgemeine Unsicherheitsvertrag
+bleibt unverändert fail-closed.
+
+### Hürden und Risiken
+
+- Source, Replacement, Projekt, Listing-IDs, Job-ID, Payloadname, SHA-256,
+  Größe und alte Runtime sind fest kompiliert. Jede Abweichung stoppt.
+- Der Pfad führt selbst weder FTPS noch DELETE aus und ist an keinen Scheduler
+  angeschlossen. Ein späterer Transfer erfolgt ausschließlich über den normalen
+  Production-DELETE-Dienst.
+
 ## Unreleased · Keychain-Sidecar in isolierter Helper-Runtime – 20. August 2026
 
 ### Report
