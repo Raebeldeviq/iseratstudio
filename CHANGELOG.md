@@ -1,5 +1,33 @@
 # Änderungsprotokoll
 
+## Unreleased · Historische Delete-State-Reconciliation – 20. August 2026
+
+### Report
+
+- Einen fail-closed, exakt auf `30460-287191` begrenzten internen
+  Reconciliation-Vertrag ergänzt. Er verwendet ausschließlich den bereits
+  positiv bestätigten deterministischen Delete-Canary-Beleg und führt keine
+  externe Aktion aus.
+- Die Mutation verlangt Rotation und Production-DELETE auf `off`, einen freien
+  Scheduler-Lock sowie das Fehlen von Reservations, Leases, Pending-Rotationen
+  und offenen Upload-/Deletejobs. Danach sind Listing und Control konsistent
+  `deleted` und automatische Aktualisierungen deaktiviert.
+
+### Begründung
+
+Der historische externe Delete-Canary war beim Provider bestätigt, sein alter
+lokaler Veröffentlichungsstatus blieb jedoch schedulerfähig. Die enge
+Reconciliation überträgt ausschließlich diesen vorhandenen Beleg in das
+bestehende finale Statusmodell, ohne einen zweiten DELETE zu riskieren.
+
+### Hürden und Risiken
+
+- Objekt-, Projekt-, Listing-, Job- und Berichtidentität müssen gemeinsam
+  stimmen; jede Abweichung stoppt fail-closed.
+- Tests decken Zielbindung, Belegprüfung, Idempotenz, Scheduler-Ausschluss und
+  alle relevanten Sperren ab. Der CLI-Pfad ist nicht an Helper oder Scheduler
+  angeschlossen.
+
 ## Unreleased · Persistente Apple-Mail-Helper-Runtime – 17. August 2026
 
 ### Report

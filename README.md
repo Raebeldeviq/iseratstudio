@@ -606,6 +606,28 @@ Offene Löschberichte und neue Löschtransfers teilen sich dieses Dreierbudget.
 Ein unterbrochener oder unklarer Deletejob blockiert fail-closed sämtliche
 weiteren Delete-Transfers, bis der Zustand manuell geklärt wurde.
 
+### Einmalige Katalog-Reconciliation des bestätigten Delete-Canarys
+
+Der historisch bestätigte Einzel-Canary `30460-287191` besitzt einen eigenen,
+fest kompilierten internen Reconciliation-Vertrag. Er darf ausschließlich den
+bereits vorhandenen positiven Delete-Canary-Bericht in den lokalen finalen
+Status `deleted` überführen. Der Pfad sendet weder FTPS noch eine Portalaktion
+und wird von keinem Scheduler aufgerufen.
+
+Vor der Mutation müssen Rotation und Production-DELETE gültig auf `off`
+stehen. Zusätzlich müssen der Scheduler-Lock, Reservations, Process-Leases,
+Pending-Rotationen und offene Upload-/Deletejobs fehlen. Projekt-, Listing-,
+Objekt- und deterministische Canary-Job-ID sind exakt gebunden. Anschließend
+ist `automaticUpdateEnabled=false`, weshalb der Datensatz nicht mehr als
+Schedulerkandidat erscheinen kann. Wiederholungen sind idempotent.
+
+```bash
+node historical-delete-state-reconciliation-cli.mjs status
+node historical-delete-state-reconciliation-cli.mjs reconcile \
+  --external-id 30460-287191 \
+  --reconciliation-mode one-time
+```
+
 ## Dynamisches Inseratsmanagement und sichere Variantenrotation
 
 Jede neue oder aus Excel importierte Adresse besitzt eine persistente
