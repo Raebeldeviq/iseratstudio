@@ -409,13 +409,27 @@ export function createProductionDeleteService(options) {
   const writeLog = options.writeLog || (async () => undefined);
   const now = options.now || (() => new Date().toISOString());
 
-  async function transferEligibleSources(maxRunItems) {
+  async function transferEligibleSources(maxRunItems, targetExternalObjectNumber = "") {
     if (!Number.isInteger(maxRunItems) || maxRunItems < 0 || maxRunItems > 3) {
       throw productionError("PRODUCTION_DELETE_TRANSFER_BUDGET_INVALID", "Das verbleibende Produktions-Deletebudget ist ungültig.");
     }
     const snapshot = await options.store.load();
     const candidates = productionDeleteCandidates(snapshot.state);
-    const selected = candidates.slice(0, maxRunItems);
+    let eligibleCandidates = candidates;
+    if (targetExternalObjectNumber) {
+      eligibleCandidates = candidates.filter((candidate) => {
+        const project = snapshot.state.projects.find((entry) => entry.id === candidate.projectId);
+        const listing = project?.listings.find((entry) => entry.id === candidate.sourceListingId);
+        return listing?.externalId === targetExternalObjectNumber;
+      });
+      if (eligibleCandidates.length !== 1) {
+        throw productionError(
+          "PRODUCTION_DELETE_EXACT_TARGET_NOT_ELIGIBLE",
+          "Das exakt angeforderte Produktions-Deleteziel ist nicht eindeutig löschberechtigt.",
+        );
+      }
+    }
+    const selected = eligibleCandidates.slice(0, maxRunItems);
     const transferred = [];
     const errors = [];
     for (const candidate of selected) {
@@ -508,12 +522,29 @@ export function createProductionDeleteService(options) {
     return { pendingCount: pending.length, candidateCount: candidates.length, confirmed, mailMutations: 0 };
   }
 
-  async function runOnce(input = {}) {
+  let runInProgress = false;
+
+  async function runOnceUnlocked(input = {}) {
     const mode = await options.modeStore.load();
     if (mode.valid !== true || mode.mode !== "active") return { ran: false, reason: mode.fallbackReason || "delete-mode-off", transferred: [], confirmed: [], mailMutations: 0 };
     const policy = await options.productionPolicyStore.load();
     if (policy.valid !== true || !Number.isInteger(policy.maxRunItems) || policy.maxRunItems < 1 || policy.maxRunItems > 3) {
       return { ran: false, reason: policy.fallbackReason || "production-policy-invalid", transferred: [], confirmed: [], mailMutations: 0 };
+    }
+    const trigger = clean(input.trigger || "periodic", 100);
+    const targetExternalObjectNumber = clean(input.targetExternalObjectNumber, 40);
+    const manualExact = trigger === "manual-exact";
+    if (manualExact !== Boolean(targetExternalObjectNumber)) {
+      throw productionError(
+        "PRODUCTION_DELETE_EXACT_CONTRACT_INVALID",
+        "Ein exakter Produktions-DELETE verlangt gemeinsam trigger=manual-exact und eine konkrete Objektnummer.",
+      );
+    }
+    if (manualExact && (!/^30460-\d{6}$/u.test(targetExternalObjectNumber) || policy.maxRunItems !== 1)) {
+      throw productionError(
+        "PRODUCTION_DELETE_EXACT_POLICY_REQUIRED",
+        "Ein exakter Produktions-DELETE verlangt eine gültige Anbieter-Objektnummer und das Produktionslimit 1.",
+      );
     }
     const ledgerBefore = await options.ledger.read();
     const unresolved = ledgerBefore.jobs.filter((job) => [
@@ -539,10 +570,11 @@ export function createProductionDeleteService(options) {
     const ledgerAfterConfirmation = await options.ledger.read();
     const pendingAfterConfirmation = ledgerAfterConfirmation.jobs.filter((job) => job.status === PRODUCTION_DELETE_STATUS.PENDING_CONFIRMATION);
     const remainingTransferBudget = policy.maxRunItems - pendingAfterConfirmation.length;
-    const transfer = await transferEligibleSources(remainingTransferBudget);
+    const transfer = await transferEligibleSources(remainingTransferBudget, targetExternalObjectNumber);
     return {
       ran: true,
-      trigger: clean(input.trigger || "periodic", 100),
+      trigger,
+      targetExternalObjectNumber,
       maxRunItems: policy.maxRunItems,
       ...transfer,
       pendingConfirmationCount: pendingAfterConfirmation.length + transfer.transferred.length,
@@ -551,6 +583,24 @@ export function createProductionDeleteService(options) {
       mailMutations: 0,
       ok: transfer.errors.length === 0,
     };
+  }
+
+  async function runOnce(input = {}) {
+    if (runInProgress) {
+      return {
+        ran: false,
+        reason: "production-delete-run-in-progress",
+        transferred: [],
+        confirmed: [],
+        mailMutations: 0,
+      };
+    }
+    runInProgress = true;
+    try {
+      return await runOnceUnlocked(input);
+    } finally {
+      runInProgress = false;
+    }
   }
 
   return { runOnce };

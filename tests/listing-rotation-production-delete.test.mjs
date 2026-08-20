@@ -121,6 +121,26 @@ function fixedPolicy() {
   return { async load() { return { format: 1, maxRunItems: 3, startupCatchupMode: "guarded", valid: true, fallbackReason: "" }; } };
 }
 
+function fixedSingleItemPolicy() {
+  return { async load() { return { format: 1, maxRunItems: 1, startupCatchupMode: "detect-only", valid: true, fallbackReason: "" }; } };
+}
+
+function productionStateWithSecondPair() {
+  const state = productionState();
+  const secondState = JSON.parse(JSON.stringify(productionState())
+    .replaceAll("project-1", "project-2")
+    .replaceAll("plot-1", "plot-2")
+    .replaceAll("source-listing", "source-listing-2")
+    .replaceAll("replacement-listing", "replacement-listing-2")
+    .replaceAll("report-1", "report-2")
+    .replaceAll("scheduler-run-1", "scheduler-run-2")
+    .replaceAll(SOURCE_EXTERNAL_ID, "30460-574320")
+    .replaceAll(REPLACEMENT_EXTERNAL_ID, "30460-259307"));
+  state.projects.push(secondState.projects[0]);
+  state.importReports.push(secondState.importReports[0]);
+  return state;
+}
+
 function rawDeleteReport(target = SOURCE_EXTERNAL_ID) {
   return [
     "Received: from server22.immoprofessional.eu by mail.example.invalid",
@@ -196,6 +216,48 @@ test("production service transfers serially, waits for a report and finalizes id
   const repeated = await service.runOnce({ trigger: "test-repeat" });
   assert.equal(repeated.transferred.length, 0);
   assert.equal(uploads, 1);
+});
+
+test("manual exact production run selects only its authorized target and remains single-flight", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fpi-production-delete-exact-"));
+  const store = memoryStore(productionStateWithSecondPair());
+  const ledger = createProductionDeleteLedger(join(directory, "jobs.json"));
+  let releaseUpload;
+  const uploadGate = new Promise((resolve) => { releaseUpload = resolve; });
+  const uploads = [];
+  const service = createProductionDeleteService({
+    store,
+    modeStore: fixedMode("active"),
+    ledger,
+    productionPolicyStore: fixedSingleItemPolicy(),
+    mailAdapter: { readOnly: true, async findCandidates() { return []; }, async readRawMessage() { throw new Error("unexpected"); } },
+    upload: async ({ eligibility }) => {
+      uploads.push(eligibility.source.externalId);
+      await uploadGate;
+    },
+    now: () => NOW,
+  });
+  const first = service.runOnce({
+    trigger: "manual-exact",
+    targetExternalObjectNumber: "30460-574320",
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const overlapping = await service.runOnce({
+    trigger: "manual-exact",
+    targetExternalObjectNumber: "30460-574320",
+  });
+  assert.equal(overlapping.ran, false);
+  assert.equal(overlapping.reason, "production-delete-run-in-progress");
+  releaseUpload();
+  const result = await first;
+  assert.deepEqual(result.transferred, ["30460-574320"]);
+  assert.deepEqual(uploads, ["30460-574320"]);
+  assert.equal((await ledger.read()).jobs.length, 1);
+
+  await assert.rejects(
+    service.runOnce({ trigger: "periodic", targetExternalObjectNumber: SOURCE_EXTERNAL_ID }),
+    (error) => error.code === "PRODUCTION_DELETE_EXACT_CONTRACT_INVALID",
+  );
 });
 
 test("off mode and an upload failure remain fail closed", async () => {

@@ -12,6 +12,11 @@
   lokalen Sidecar-Fehler, die nachgewiesene Code-Reihenfolge vor
   FTPS-Client-Erzeugung, einen read-only Mailgegencheck und beide globalen Modi
   auf `off`. Ledger- und Katalogmutation bleiben idempotent und auditierbar.
+- Einen sessiongeschützten exakten Operatorlauf ergänzt, der ausschließlich die
+  ausdrücklich freigegebenen Sources `30460-574320` und `30460-268065` über
+  den unveränderten Production-DELETE-Service sequenziell verarbeiten kann.
+  Rotation `off`, Delete-Modus `active`, freier Scheduler-Lock,
+  `maxRunItems=1` und In-Process-Single-Flight sind zwingend.
 
 ### Begründung
 
@@ -21,6 +26,10 @@ FTPS-Client entstehen konnte. Nur dieser technisch belegte Pre-Transfer-Fall
 darf deshalb eng reconciliiert werden; der allgemeine Unsicherheitsvertrag
 bleibt unverändert fail-closed.
 
+Die zwei verbleibenden Sources besitzen denselben Autorisierungszeitpunkt. Ein
+exakter Operatorlauf hält die gewünschte Reihenfolge ein, ohne fachliche
+Zeitstempel umzuschreiben oder den allgemeinen Kandidatensortierer zu ändern.
+
 ### Hürden und Risiken
 
 - Source, Replacement, Projekt, Listing-IDs, Job-ID, Payloadname, SHA-256,
@@ -28,6 +37,9 @@ bleibt unverändert fail-closed.
 - Der Pfad führt selbst weder FTPS noch DELETE aus und ist an keinen Scheduler
   angeschlossen. Ein späterer Transfer erfolgt ausschließlich über den normalen
   Production-DELETE-Dienst.
+- Der Operatorpfad erteilt keine neue Löschberechtigung und akzeptiert keine
+  freie Objektnummer. Ohne alle bestehenden Produktionsguards oder bei einem
+  parallelen Dienstlauf stoppt er fail-closed.
 
 ## Unreleased · Keychain-Sidecar in isolierter Helper-Runtime – 20. August 2026
 

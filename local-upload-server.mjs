@@ -61,6 +61,10 @@ import {
   createProductionDeleteModeStore,
   createProductionDeleteService,
 } from "./listing-rotation-production-delete.mjs";
+import {
+  EXACT_PRODUCTION_DELETE_PATH,
+  requireExactProductionDeleteTarget,
+} from "./listing-rotation-production-delete-exact-contract.mjs";
 
 const HOST = "127.0.0.1";
 const PORT = 43182;
@@ -521,7 +525,8 @@ const server = createServer(async (request, response) => {
   const isPlotSyncRun = request.method === "POST" && pathname === "/plot-sync/run";
   const isPlotSyncLog = request.method === "GET" && pathname === "/plot-sync/log";
   const isMailRuntimeProbe = request.method === "POST" && pathname === "/mail-runtime/probe";
-  if (!isHealth && !isUpload && !isBinaryUpload && !isLocalSave && !isTextGeneration && !isImageCaptionGeneration && !isOpenAiKeyValidation && !isCredentialLoad && !isCredentialSave && !isCatalogLoad && !isCatalogSave && !isCatalogV2Start && !isCatalogV2ImageSave && !isCatalogV2Commit && !isCatalogV2ManifestLoad && !isCatalogV2ImageLoad && !isMediaLibraryList && !isMediaLibrarySequence && !isMediaLibraryImage && !isPlotExposeAnalyze && !isPlotExposeCommit && !isPlotExposeLoad && !isPlotExposeArchive && !isPlotSyncStatus && !isPlotSyncRun && !isPlotSyncLog && !isMailRuntimeProbe) {
+  const isExactProductionDelete = request.method === "POST" && pathname === EXACT_PRODUCTION_DELETE_PATH;
+  if (!isHealth && !isUpload && !isBinaryUpload && !isLocalSave && !isTextGeneration && !isImageCaptionGeneration && !isOpenAiKeyValidation && !isCredentialLoad && !isCredentialSave && !isCatalogLoad && !isCatalogSave && !isCatalogV2Start && !isCatalogV2ImageSave && !isCatalogV2Commit && !isCatalogV2ManifestLoad && !isCatalogV2ImageLoad && !isMediaLibraryList && !isMediaLibrarySequence && !isMediaLibraryImage && !isPlotExposeAnalyze && !isPlotExposeCommit && !isPlotExposeLoad && !isPlotExposeArchive && !isPlotSyncStatus && !isPlotSyncRun && !isPlotSyncLog && !isMailRuntimeProbe && !isExactProductionDelete) {
     send(response, 404, { ok: false, message: "Nicht gefunden." }, origin);
     return;
   }
@@ -780,6 +785,39 @@ const server = createServer(async (request, response) => {
     }
 
     const body = await readJson(request, isCatalogSave ? MAX_CATALOG_BODY_BYTES : MAX_BODY_BYTES);
+
+    if (isExactProductionDelete) {
+      const externalObjectNumber = requireExactProductionDeleteTarget(body.externalObjectNumber);
+      const [rotationMode, deleteMode, productionPolicy, schedulerLease] = await Promise.all([
+        listingRotationOperatingModeStore.load(),
+        productionDeleteModeStore.load(),
+        listingRotationProductionPolicyStore.load(),
+        listingSchedulerLease.read(),
+      ]);
+      if (rotationMode.valid !== true || rotationMode.mode !== "off") {
+        throw new Error("Für den exakten Production-DELETE muss die Inseratrotation gültig auf off stehen.");
+      }
+      if (deleteMode.valid !== true || deleteMode.mode !== "active") {
+        throw new Error("Für den exakten Production-DELETE muss Production-DELETE kontrolliert aktiv sein.");
+      }
+      if (productionPolicy.valid !== true || productionPolicy.maxRunItems !== 1) {
+        throw new Error("Für den exakten Production-DELETE muss das Produktionslimit exakt 1 sein.");
+      }
+      if (schedulerLease) throw new Error("Während eines aktiven Scheduler-Claims ist der exakte Production-DELETE gesperrt.");
+      const result = await productionDeleteService.runOnce({
+        trigger: "manual-exact",
+        targetExternalObjectNumber: externalObjectNumber,
+      });
+      if (result.ran !== true) throw new Error(result.reason || "Der exakte Production-DELETE wurde fail-closed nicht ausgeführt.");
+      if (result.ok !== true) {
+        throw new Error(result.errors?.[0]?.message || "Der exakte Production-DELETE ist fehlgeschlagen.");
+      }
+      if (!result.transferred.includes(externalObjectNumber)) {
+        throw new Error("Der exakte Production-DELETE hat das angeforderte Ziel nicht übertragen.");
+      }
+      send(response, 200, { ok: true, ...result }, origin);
+      return;
+    }
 
     if (isPlotExposeCommit) {
       const result = await commitPlotExpose(body);

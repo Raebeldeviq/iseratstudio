@@ -708,6 +708,26 @@ Deletezustand. Sie erzeugt selbst keinen FTPS-Verkehr, keinen DELETE und keine
 Mailmutation. Ledger-first-Teilzustände sind idempotent wiederaufnehmbar; der
 Pfad wird weder vom Helper noch vom Scheduler automatisch aufgerufen.
 
+Für den anschließenden ausdrücklich angeordneten sequenziellen Abschluss der
+beiden verbleibenden Sources existiert ein sessiongeschützter exakter
+Operatorlauf. Er ist im Helper und im CLI hart auf `30460-574320` sowie
+`30460-268065` begrenzt, verlangt Rotation `off`, Production-DELETE `active`,
+einen freien Scheduler-Lock und das verschärfte Produktionslimit `1`. Der
+Aufruf verwendet denselben Bericht-, Payload-, Claim-, Ledger- und FTPS-Pfad
+wie der periodische Dienst und besitzt zusätzlich einen In-Process-
+Single-Flight-Guard:
+
+```bash
+node listing-rotation-production-delete-exact-cli.mjs run --external-id 30460-574320
+node listing-rotation-production-delete-exact-cli.mjs run --external-id 30460-268065
+```
+
+Andere Objektnummern werden vor dem lokalen Request abgewiesen. Der Pfad
+bestätigt zuerst vorhandene positive Löschberichte und darf anschließend nur
+die konkret angegebene, bereits regulär autorisierte Source übertragen. Er
+erteilt selbst keine fachliche Löschberechtigung und wird vom Scheduler niemals
+automatisch aufgerufen.
+
 ## Dynamisches Inseratsmanagement und sichere Variantenrotation
 
 Jede neue oder aus Excel importierte Adresse besitzt eine persistente
