@@ -357,6 +357,50 @@ neue Kopie auf `published` anheben. Bei FTPS-Fehler, unklarem Importzustand
 oder Helper-Abbruch bleibt das alte Inserat unverändert veröffentlicht; der
 idempotente Uploadauftrag wird mit derselben Job-ID fortgesetzt.
 
+Im produktiven Modus `active` ist dieser Ablauf seit der Lifecycle-Barriere
+keine lose Folge unabhängiger Timer mehr. Der Scheduler verarbeitet jede
+ausgewählte Source-/Replacement-Kette vollständig und strikt seriell:
+
+`Auswahl → Creative → Paket/Guard → FTPS → positiver Importbericht → published`
+
+`→ persistierter Handover → Production-DELETE → positiver Löschbericht → source deleted`
+
+Erst der final belegte Zustand `replacement published` und `source deleted`
+gibt die nächste zuvor ausgewählte Rotation frei. Das gilt identisch für den
+regulären Dreierlauf und einen beanspruchten One-Shot bis maximal 25. Der
+One-Shot erweitert ausschließlich das Mengenlimit; er erzeugt keine parallelen
+FTPS-, Import- oder DELETE-Ketten. Das vorab persistierte `scheduled` ist nur
+eine Arbeitsplanung: Es beansprucht weder Daily-Plot-Kontingent noch Creative-
+Nutzung und erzeugt keine Kopie. Die erste produktive Mutation von Kandidat N+1
+beginnt erst nach dem finalen Abschluss von Kandidat N.
+
+Der Helper wartet asynchron in fünfminütigen Prüfzyklen. Für die eindeutige
+Importbestätigung und die eindeutige Löschbestätigung gelten jeweils 30 Minuten
+Zeitlimit. Diese Werte liegen bewusst deutlich oberhalb der bisher beobachteten
+Providerlatenzen: Bei jeweils neun realen Berichten lag der Importmedian bei
+0,844 Minuten und das Maximum bei 1,265 Minuten; beim DELETE lagen Median und
+Maximum bei 4,972 beziehungsweise 9,607 Minuten. Ein FTPS-, Payload-, Mail-,
+Import-, DELETE- oder
+Bestätigungsfehler sowie ein Zeitlimit stoppt den gesamten Schedulerlauf am
+betroffenen Lifecycle. Spätere ausgewählte Inserate werden nicht mutiert und
+nicht übertragen. FTPS-Erfolg bleibt bei fehlender Importbestätigung
+`transferred_pending_import`; ein bereits übertragener DELETE bleibt bei
+fehlender Löschbestätigung im bestehenden Prüfzustand und wird nicht erneut
+übertragen.
+
+Der stündliche Helper-Timer bleibt ausschließlich Recovery- und Catch-up-
+Mechanismus. Offene Produktionsketten sperren jeden neuen produktiven
+Schedulerstart, bis die vorhandenen Import-/DELETE-Dienste sie eindeutig
+abgeschlossen haben. Schedulerlauf und Rotationskopie protokollieren
+Lifecycle-Index, Stufe, Start-/Endzeit, Dauer, Fehlercode, letzten Fehler sowie
+den finalen Ausgang. Fehlender Lifecycle-Koordinator, ausgeschalteter
+Production-DELETE-Modus oder unvollständige Abschlussbelege sperren `active`
+fail-closed vor der nächsten Mutation. Zwischen positiver Importbestätigung
+und DELETE besitzt der Koordinator die eigene persistierte Stufe
+`post_import_pre_delete`. Spätere Portalstufen können genau dort eingefügt
+werden, ohne die serielle Reihenfolge oder die bestehenden Providerdienste
+umzubauen; eine Portalautomation ist damit noch nicht implementiert.
+
 Neue Rotationskopien erhalten weiterhin eine kollisionsgeprüfte eindeutige
 Objektnummer. Ein `DELETE` ist ausschließlich für Kopien zulässig, die in einem
 regulären Produktionslauf eine persistente Lifecycle-Autorisierung erhielten,

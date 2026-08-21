@@ -52,6 +52,7 @@ import {
 } from "./helper-runtime-provenance.mjs";
 import { createCatalogStateStore } from "./catalog-state-store.mjs";
 import { createListingRotationSchedulerService } from "./listing-rotation-scheduler-service.mjs";
+import { createProductionRotationLifecycleCoordinator } from "./listing-rotation-lifecycle-coordinator.mjs";
 import { createPersistentLease } from "./persistent-lease.mjs";
 import { createListingRotationOperatingModeStore } from "./listing-rotation-operating-mode.mjs";
 import { createListingRotationProductionPolicyStore } from "./listing-rotation-production-policy.mjs";
@@ -498,22 +499,6 @@ async function automaticRotationUpload({ state, project, listing, runId, batchOv
   }
 }
 
-const listingRotationSchedulerService = createListingRotationSchedulerService({
-  store: catalogStateStore,
-  lease: listingSchedulerLease,
-  operatingModeStore: listingRotationOperatingModeStore,
-  productionPolicyStore: listingRotationProductionPolicyStore,
-  batchOverrideStore: productionBatchOverrideStore,
-  runtimeProvenance: RUNTIME_PROVENANCE,
-  upload: automaticRotationUpload,
-  writeRunLog: (event, details) => writeListingSchedulerLog(event, {
-    runtimeCommit: RUNTIME_PROVENANCE.runtimeCommit,
-    runtimeRelease: RUNTIME_PROVENANCE.runtimeRelease,
-    helperStartedAt: HELPER_STARTED_AT,
-    ...details,
-  }),
-});
-
 async function automaticProductionDeleteUpload({ archive, filename }) {
   const vault = await credentialVault();
   const ftp = vault.credentials;
@@ -542,6 +527,38 @@ const productionDeleteService = createProductionDeleteService({
   mailAdapter: productionDeleteMailAdapter,
   upload: automaticProductionDeleteUpload,
   writeLog: (event, details) => writeProductionDeleteLog(event, details),
+});
+
+const productionRotationLifecycleCoordinator = createProductionRotationLifecycleCoordinator({
+  store: catalogStateStore,
+  importReportService,
+  productionDeleteService,
+  productionDeleteModeStore,
+  uploadJobLedger,
+  productionDeleteLedger,
+  writeLog: (event, details) => writeListingSchedulerLog(event, {
+    runtimeCommit: RUNTIME_PROVENANCE.runtimeCommit,
+    runtimeRelease: RUNTIME_PROVENANCE.runtimeRelease,
+    helperStartedAt: HELPER_STARTED_AT,
+    ...details,
+  }),
+});
+
+const listingRotationSchedulerService = createListingRotationSchedulerService({
+  store: catalogStateStore,
+  lease: listingSchedulerLease,
+  operatingModeStore: listingRotationOperatingModeStore,
+  productionPolicyStore: listingRotationProductionPolicyStore,
+  batchOverrideStore: productionBatchOverrideStore,
+  runtimeProvenance: RUNTIME_PROVENANCE,
+  lifecycleCoordinator: productionRotationLifecycleCoordinator,
+  upload: automaticRotationUpload,
+  writeRunLog: (event, details) => writeListingSchedulerLog(event, {
+    runtimeCommit: RUNTIME_PROVENANCE.runtimeCommit,
+    runtimeRelease: RUNTIME_PROVENANCE.runtimeRelease,
+    helperStartedAt: HELPER_STARTED_AT,
+    ...details,
+  }),
 });
 
 async function saveToDownloads(archive, requestedFilename) {

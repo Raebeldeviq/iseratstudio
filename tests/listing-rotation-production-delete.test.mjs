@@ -318,6 +318,35 @@ test("manual exact production run selects only its authorized target and remains
   );
 });
 
+test("serial scheduler lifecycle targets exactly one source without weakening the normal three-item policy", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fpi-production-delete-lifecycle-exact-"));
+  const store = memoryStore(productionStateWithSecondPair());
+  const uploads = [];
+  const service = createProductionDeleteService({
+    store,
+    modeStore: fixedMode("active"),
+    ledger: createProductionDeleteLedger(join(directory, "jobs.json")),
+    productionPolicyStore: fixedPolicy(),
+    mailAdapter: { readOnly: true, async findCandidates() { return []; }, async readRawMessage() { throw new Error("unexpected"); } },
+    upload: async ({ eligibility }) => { uploads.push(eligibility.source.externalId); },
+    now: () => NOW,
+  });
+  const result = await service.runOnce({
+    trigger: "scheduler-lifecycle",
+    targetExternalObjectNumber: "30460-574320",
+  });
+  assert.deepEqual(result.transferred, ["30460-574320"]);
+  assert.deepEqual(uploads, ["30460-574320"]);
+  assert.equal(result.maxRunItems, 3);
+  const waiting = await service.runOnce({
+    trigger: "scheduler-lifecycle",
+    targetExternalObjectNumber: "30460-574320",
+  });
+  assert.equal(waiting.ran, true);
+  assert.deepEqual(waiting.transferred, []);
+  assert.deepEqual(uploads, ["30460-574320"]);
+});
+
 test("off mode and an upload failure remain fail closed", async () => {
   const directory = await mkdtemp(join(tmpdir(), "fpi-production-delete-off-"));
   const offStore = memoryStore(productionState());

@@ -132,7 +132,16 @@ function replaceProject(state, updatedProject) {
   };
 }
 
-function markProductionRotationCopy(state, projectId, copyId, sourceListingId, runId, at, batchOverride = null) {
+function markProductionRotationCopy(
+  state,
+  projectId,
+  copyId,
+  sourceListingId,
+  runId,
+  at,
+  effectiveMaxRunItems,
+  batchOverride = null,
+) {
   const project = state.projects.find((candidate) => candidate.id === projectId);
   const copy = project?.listings.find((candidate) => candidate.id === copyId);
   if (!project || !copy) throw new Error("Die Produktions-Rotationskopie ist nicht eindeutig vorhanden.");
@@ -144,6 +153,7 @@ function markProductionRotationCopy(state, projectId, copyId, sourceListingId, r
       sourceListingId,
       automaticDeleteAuthorized: true,
       preparedAt: at,
+      effectiveMaxRunItems,
       ...(batchOverride ? {
         batchOverrideId: batchOverride.overrideId,
         batchOverrideMaxRunItems: batchOverride.maxRunItems,
@@ -299,9 +309,13 @@ function updatePreparedCopyAfterUpload(state, projectId, copyId, result, at) {
   };
 }
 
-function finalRunStatus(completed, failed, abortReason) {
+function finalRunStatus(completed, failed, abortReason, operatingMode) {
   if (failed.length) return WORKFLOW_STATUS.FAILED;
-  if (completed.length) return WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT;
+  if (completed.length) {
+    return operatingMode === "active"
+      ? WORKFLOW_STATUS.PUBLISHED
+      : WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT;
+  }
   return abortReason ? WORKFLOW_STATUS.BLOCKED : WORKFLOW_STATUS.PREPARED;
 }
 
@@ -365,6 +379,36 @@ export function createListingRotationSchedulerService(options) {
       || productionPolicy.maxRunItems > 3
     );
     const runtimeGuardBlocked = productiveMode && runtimeGuard.valid !== true;
+    const lifecycleCoordinatorBlocked = operatingMode === "active" && (
+      typeof options.lifecycleCoordinator?.preflight !== "function"
+      || typeof options.lifecycleCoordinator?.complete !== "function"
+    );
+    let lifecyclePreflightAbortReason = "";
+    let lifecyclePreflightCode = "";
+    if (operatingMode === "active" && !lifecycleCoordinatorBlocked && !productionPolicyBlocked && !runtimeGuardBlocked) {
+      try {
+        const lifecyclePreflight = await options.lifecycleCoordinator.preflight({
+          schedulerRunId: runId,
+          trigger,
+          now: startedAt,
+        });
+        if (lifecyclePreflight?.ok !== true) {
+          lifecyclePreflightCode = String(lifecyclePreflight?.code || "ROTATION_LIFECYCLE_PREFLIGHT_BLOCKED");
+          lifecyclePreflightAbortReason = String(
+            lifecyclePreflight?.reason
+            || "Die serielle Produktions-Lifecycle-Barriere ist fail-closed gesperrt.",
+          );
+        }
+      } catch (error) {
+        lifecyclePreflightCode = String(error?.code || "ROTATION_LIFECYCLE_PREFLIGHT_FAILED");
+        lifecyclePreflightAbortReason = error instanceof Error
+          ? error.message
+          : "Die serielle Produktions-Lifecycle-Barriere konnte nicht sicher vorgeprüft werden.";
+      }
+    } else if (lifecycleCoordinatorBlocked) {
+      lifecyclePreflightCode = "ROTATION_LIFECYCLE_COORDINATOR_MISSING";
+      lifecyclePreflightAbortReason = "Der produktiven Inseratrotation fehlt die verpflichtende serielle End-to-End-Lifecycle-Barriere.";
+    }
     let activeRunLimit = operatingMode === "active" && productionPolicy.valid === true
       ? Math.max(0, Math.trunc(Number(productionPolicy.maxRunItems)))
       : Number.POSITIVE_INFINITY;
@@ -375,6 +419,7 @@ export function createListingRotationSchedulerService(options) {
       operatingMode === "active"
       && !productionPolicyBlocked
       && !runtimeGuardBlocked
+      && !lifecyclePreflightAbortReason
       && options.batchOverrideStore?.load
       && options.batchOverrideStore?.claim
       && BATCH_OVERRIDE_MUTATING_TRIGGERS.has(trigger)
@@ -436,6 +481,7 @@ export function createListingRotationSchedulerService(options) {
     let skippedListings = [];
     let abortReason = "";
     let startedRotationCount = 0;
+    let failedLifecycleIndex = null;
     let batchEndState = "claimed";
     try {
       await writeRunLog("started", {
@@ -451,6 +497,9 @@ export function createListingRotationSchedulerService(options) {
         overrideId: batchOverride?.overrideId || null,
         overrideClaimedAt: batchOverride?.claimedAt || "",
         startupCatchupMode: productionPolicy.startupCatchupMode || "detect-only",
+        lifecycleContract: operatingMode === "active" ? "serial-end-to-end-v1" : "not-required",
+        lifecyclePreflightCode,
+        lifecyclePreflightAbortReason,
         canaryListingIds: operatingMode === "canary" ? operatingPolicy.canaryListingIds : [],
         ...runtimeGuard,
       });
@@ -490,7 +539,7 @@ export function createListingRotationSchedulerService(options) {
         }
         const pendingLimitExceeded = operatingMode === "active" && pending.length > activeRunLimit;
         const blockingIssues = pending.length ? hardSchedulerIssues(windowIssues) : windowIssues;
-        const selection = operatingMode === "off" || productionPolicyBlocked || runtimeGuardBlocked || batchOverrideAbortReason || pendingLimitExceeded || blockingIssues.length || windowIssues.length
+        const selection = operatingMode === "off" || productionPolicyBlocked || runtimeGuardBlocked || lifecyclePreflightAbortReason || batchOverrideAbortReason || pendingLimitExceeded || blockingIssues.length || windowIssues.length
           ? { selections: [], skipped: [], issues: windowIssues, scheduler }
           : selectSchedulerListings({ ...state, scheduler }, startedAt, {
               ignoreTimeWindow: effectiveIgnoreTimeWindow,
@@ -537,6 +586,8 @@ export function createListingRotationSchedulerService(options) {
           abortReason = productionPolicy.fallbackReason || "Produktions-Rollout-Policy ist ungültig; active ist fail-closed gesperrt.";
         } else if (runtimeGuardBlocked) {
           abortReason = runtimeGuard.fallbackReason;
+        } else if (lifecyclePreflightAbortReason) {
+          abortReason = lifecyclePreflightAbortReason;
         } else if (batchOverrideAbortReason) {
           abortReason = batchOverrideAbortReason;
         } else if (pendingLimitExceeded) {
@@ -574,6 +625,8 @@ export function createListingRotationSchedulerService(options) {
           expectedProductionCommit: runtimeGuard.expectedProductionCommit,
           runtimeRelease: runtimeGuard.runtimeRelease,
           runtimeGuardValid: runtimeGuard.valid,
+          lifecycleContract: operatingMode === "active" ? "serial-end-to-end-v1" : "not-required",
+          lifecyclePreflightCode,
           maxRunItems: Number.isFinite(activeRunLimit) ? activeRunLimit : null,
           effectiveMaxRunItems: Number.isFinite(activeRunLimit) ? activeRunLimit : null,
           overrideId: batchOverride?.overrideId || null,
@@ -692,10 +745,27 @@ export function createListingRotationSchedulerService(options) {
             break;
           }
         }
-        startedRotationCount += 1;
         let copyId = item.resume ? item.listingId : "";
         let sourceListingId = item.sourceListingId;
+        let uploadPersisted = false;
+        const lifecycleIndex = startedRotationCount + 1;
         try {
+          if (operatingMode === "active") {
+            const itemPreflight = await options.lifecycleCoordinator.preflight({
+              schedulerRunId: runId,
+              trigger: `${trigger}:before-lifecycle-${lifecycleIndex}`,
+              now: itemCheckAt,
+            });
+            if (itemPreflight?.ok !== true) {
+              const preflightError = new Error(
+                itemPreflight?.reason
+                || "Die serielle Produktions-Lifecycle-Barriere wurde vor der nächsten Rotation gesperrt.",
+              );
+              preflightError.code = itemPreflight?.code || "ROTATION_LIFECYCLE_PREFLIGHT_BLOCKED";
+              throw preflightError;
+            }
+          }
+          startedRotationCount += 1;
           if (!item.resume) {
             const processingAt = stepTimestamp();
             await options.store.update((state) => ({
@@ -732,6 +802,7 @@ export function createListingRotationSchedulerService(options) {
                     source.id,
                     runId,
                     preparedAt,
+                    activeRunLimit,
                     batchOverride,
                   )
                 : result.state;
@@ -771,12 +842,37 @@ export function createListingRotationSchedulerService(options) {
               runId,
             }, completedAt),
           }), { now: completedAt });
+          uploadPersisted = true;
+          if (operatingMode === "active") {
+            const lifecycleResult = await options.lifecycleCoordinator.complete({
+              schedulerRunId: runId,
+              productionSchedulerRunId: copy.productionLifecycle?.schedulerRunId || runId,
+              projectId: project.id,
+              sourceListingId,
+              replacementListingId: copy.id,
+              lifecycleIndex,
+              lifecycleStartedAt: itemCheckAt,
+              ftpsCompletedAt: completedAt,
+              effectiveMaxRunItems: copy.productionLifecycle?.effectiveMaxRunItems
+                || copy.productionLifecycle?.batchOverrideMaxRunItems
+                || activeRunLimit,
+              overrideId: copy.productionLifecycle?.batchOverrideId || "",
+              heartbeat: (details) => lease.refresh?.(details),
+            });
+            if (lifecycleResult?.ok !== true) {
+              const lifecycleError = new Error("Die serielle Produktions-Lifecycle-Barriere lieferte keinen bestätigten Abschluss.");
+              lifecycleError.code = "ROTATION_LIFECYCLE_NOT_COMPLETED";
+              throw lifecycleError;
+            }
+          }
           completedListingIds.push(sourceListingId);
         } catch (error) {
           const message = error instanceof Error ? error.message : "Unbekannter Rotations- oder Uploadfehler";
           errors.push({ projectId: item.projectId, listingId: sourceListingId, copyId, message });
           failedListingIds.push(sourceListingId);
-          if (copyId) {
+          failedLifecycleIndex = lifecycleIndex;
+          abortReason = message;
+          if (copyId && !uploadPersisted) {
             const failedAt = stepTimestamp();
             await options.store.update((state) => ({
               state: updatePreparedCopyAfterUpload(state, item.projectId, copyId, {
@@ -786,7 +882,7 @@ export function createListingRotationSchedulerService(options) {
                 error: message,
               }, failedAt),
             }), { now: failedAt }).catch(() => undefined);
-          } else {
+          } else if (!copyId) {
             const failedAt = stepTimestamp();
             await options.store.update((state) => ({
               state: updateSourceControl(state, item.projectId, sourceListingId, {
@@ -799,16 +895,37 @@ export function createListingRotationSchedulerService(options) {
               }, failedAt),
             }), { now: failedAt }).catch(() => undefined);
           }
+          const unstartedSelections = workItems.slice(itemIndex + 1).filter((candidate) => !candidate.resume);
+          if (unstartedSelections.length) {
+            const releasedAt = stepTimestamp();
+            await options.store.update((state) => {
+              let nextState = state;
+              for (const candidate of unstartedSelections) {
+                nextState = updateSourceControl(nextState, candidate.projectId, candidate.sourceListingId, {
+                  status: WORKFLOW_STATUS.PUBLISHED,
+                  statusMessage: "Veröffentlicht · vorheriger Produktions-Lifecycle hat den Lauf gestoppt",
+                  schedulerSelectionId: "",
+                  schedulerSelectedAt: "",
+                  processLease: null,
+                }, releasedAt);
+              }
+              return { state: nextState };
+            }, { now: releasedAt }).catch(() => undefined);
+          }
+          break;
         }
       }
 
       const endedAt = String(input.endNow || new Date().toISOString());
-      const status = finalRunStatus(completedListingIds, failedListingIds, abortReason);
+      const totalDuration = Math.max(0, Date.parse(endedAt) - Date.parse(startedAt));
+      const status = finalRunStatus(completedListingIds, failedListingIds, abortReason, operatingMode);
       const statusMessage = failedListingIds.length
-        ? `${completedListingIds.length} übertragen, ${failedListingIds.length} fehlgeschlagen`
+        ? `${completedListingIds.length} Lifecycle-Ketten vollständig bestätigt, Lifecycle ${failedLifecycleIndex || "?"} fehlgeschlagen`
         : abortReason
-          ? `${completedListingIds.length} Rotationskopien übertragen · ${abortReason}`
-          : `${completedListingIds.length} Rotationskopien übertragen · Importbestätigung ausstehend`;
+          ? `${completedListingIds.length} Lifecycle-Ketten vollständig bestätigt · ${abortReason}`
+          : operatingMode === "active"
+            ? `${completedListingIds.length} serielle Lifecycle-Ketten vollständig bestätigt`
+            : `${completedListingIds.length} Rotationskopien übertragen · Importbestätigung ausstehend`;
       await finalizeRun(runId, {
         endedAt,
         completedListingIds,
@@ -818,6 +935,10 @@ export function createListingRotationSchedulerService(options) {
         statusMessage,
         error: errors.map((item) => item.message).join(" · "),
         errors,
+        startedLifecycles: startedRotationCount,
+        completedLifecycles: completedListingIds.length,
+        failedLifecycleIndex,
+        totalDuration,
       }, endedAt);
       await writeRunLog("finished", {
         runId,
@@ -832,6 +953,10 @@ export function createListingRotationSchedulerService(options) {
         skippedCount,
         skippedListings,
         completedCount: completedListingIds.length,
+        startedLifecycles: startedRotationCount,
+        completedLifecycles: completedListingIds.length,
+        failedLifecycleIndex,
+        totalDuration,
         errorCount: errors.length,
         abortReason,
         status,
@@ -857,6 +982,9 @@ export function createListingRotationSchedulerService(options) {
         skippedListings,
         errors,
         abortReason,
+        startedLifecycles: startedRotationCount,
+        completedLifecycles: completedListingIds.length,
+        failedLifecycleIndex,
       };
     } catch (error) {
       const endedAt = String(input.endNow || new Date().toISOString());

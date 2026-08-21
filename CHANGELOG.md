@@ -1,5 +1,57 @@
 # Änderungsprotokoll
 
+## Unreleased · Serielle Produktions-Lifecycle-Barriere – 21. August 2026
+
+### Report
+
+- Den produktiven Background-Scheduler von einer uploadorientierten Schleife
+  auf strikt serielle End-to-End-Ketten umgestellt. Jede Rotation wartet nach
+  exakt einem FTPS-Auftrag auf den eindeutigen positiven Importbericht, den
+  persistierten Handover, exakt einen Production-DELETE und den eindeutigen
+  positiven Löschbericht. Erst `replacement published` plus `source deleted`
+  erlaubt die nächste Katalogmutation.
+- Einen persistent protokollierten Lifecycle-Koordinator mit den Stufen
+  `awaiting_import_confirmation`, `post_import_pre_delete`,
+  `awaiting_delete_confirmation` und `completed` ergänzt. Die vorhandenen
+  Importbericht-, Uploadledger-, Production-DELETE-, DELETE-Ledger-, Claim-,
+  Lease-, CAS- und Deduplizierungsverträge werden wiederverwendet.
+- Asynchrone Prüfzyklen von fünf Minuten und getrennte fail-closed Zeitlimits
+  von jeweils 30 Minuten für Import- und Löschbestätigung eingeführt. Offene
+  Vorgängerketten, Mailfehler, Timeouts, Payload-/FTPS-Fehler oder unvollständige
+  Abschlussbelege stoppen den gesamten Lauf vor der nächsten Rotation.
+- Den zielgebundenen internen DELETE-Aufruf so erweitert, dass ein bereits
+  übertragener exakter Job nur weiter geprüft und niemals ein zweites Mal
+  übertragen wird. Das normale Dreierlimit und die provenance-gebundene
+  One-Shot-Obergrenze bis 25 bleiben unverändert.
+- Laufmetriken um gestartete und vollständig abgeschlossene Lifecycles,
+  fehlgeschlagenen Lifecycle-Index, Gesamtdauer und Stufenprotokolle ergänzt.
+  Canary bleibt weiterhin beim Zustand `transferred_pending_import` und nutzt
+  die produktive automatische Löschkette nicht.
+
+### Begründung
+
+Ein erfolgreicher FTPS-Transfer beweist weder den Portalimport noch die externe
+Löschung der alten Quelle. Die explizite Lifecycle-Barriere bindet deshalb jede
+weitere produktive Mutation an beide positiven Providerberichte und an den
+vollständig konsistenten Katalog-/Ledgerzustand. Die bestehenden spezialisierten
+Dienste bleiben die einzigen Stellen für Mailauswertung, Upload und DELETE.
+
+### Hürden und Risiken
+
+- Providerantworten sind zeitlich verzögert. Das asynchrone Polling hält den
+  Eventloop frei. Neun ausgewertete Importberichte lagen bei 0,844 Minuten
+  Median und 1,265 Minuten Maximum; neun DELETE-Berichte bei 4,972 Minuten
+  Median und 9,607 Minuten Maximum. Die 30-Minuten-Grenzen geben Reserve, ohne
+  unbegrenzt zu warten. Bei Ablauf bleibt der reale Zwischenzustand unverändert
+  und der nächste Schedulerlauf gesperrt.
+- Ein Helper-Abbruch kann eine Kette zwischen Provideraktion und Bericht
+  hinterlassen. Persistente Job-IDs, Ledgers und offene Lifecycle-Provenienz
+  verhindern einen zweiten Transfer; der vorhandene Timer darf ausschließlich
+  diese Kette reconciliieren, bevor neue Arbeit startet.
+- Während Implementierung und Tests wurden weder Helper noch Scheduler,
+  produktives FTPS, Production-DELETE oder Portalaktionen gestartet. Rotation
+  und Production-DELETE blieben im produktiven System auf `off`.
+
 ## Unreleased · Produktionszeitfenster bis 21:00 – 21. August 2026
 
 ### Report

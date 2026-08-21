@@ -13,7 +13,7 @@ import {
   updateListingControl,
 } from "../listing-groups.mjs";
 import { isHvObjectNumber } from "../listing-object-number.mjs";
-import { createListingRotationSchedulerService } from "../listing-rotation-scheduler-service.mjs";
+import { createListingRotationSchedulerService as createSchedulerService } from "../listing-rotation-scheduler-service.mjs";
 import {
   createListingScheduler,
   updateListingSchedulerSettings,
@@ -23,6 +23,16 @@ import { createProductionBatchOverrideStore } from "../production-batch-override
 import { WORKFLOW_STATUS } from "../workflow-status.mjs";
 
 const RUNTIME_COMMIT = "a".repeat(40);
+
+function createListingRotationSchedulerService(options) {
+  return createSchedulerService({
+    ...options,
+    lifecycleCoordinator: options.lifecycleCoordinator || {
+      preflight: async () => ({ ok: true }),
+      complete: async () => ({ ok: true }),
+    },
+  });
+}
 
 function ids(prefix) {
   let value = 0;
@@ -273,6 +283,24 @@ function sourceControls(state) {
   });
 }
 
+function lifecycleEventsFor(sourceListingId) {
+  return [
+    `${sourceListingId}:import-confirmed`,
+    `${sourceListingId}:published`,
+    `${sourceListingId}:delete-transferred`,
+    `${sourceListingId}:delete-confirmed`,
+    `${sourceListingId}:source-deleted`,
+  ];
+}
+
+async function waitUntil(predicate, attempts = 100) {
+  for (let index = 0; index < attempts; index += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.fail("Die erwartete asynchrone Testphase wurde nicht erreicht.");
+}
+
 test("background catch-up ignores selectedPlotIds and works without a browser", async () => {
   const store = memoryStore(studioState(2));
   const uploads = [];
@@ -493,6 +521,60 @@ test("canary processes exactly one explicitly approved listing and skips all oth
   assert.equal(result.skippedListings.filter((item) => /nicht explizit freigegeben/iu.test(item.reason)).length, 7);
   const current = (await store.load()).state;
   assert.equal(current.projects.flatMap((item) => item.listings).filter((item) => item.listingOrigin === "rotation-copy").length, 1);
+  assert.equal(current.scheduler.lastStatus, WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT);
+});
+
+test("active mode fails closed when the lifecycle coordinator is missing", async () => {
+  const store = memoryStore(studioState(1));
+  let uploads = 0;
+  const service = createSchedulerService({
+    store,
+    lease: memoryLease(),
+    operatingModeStore: fixedOperatingMode("active"),
+    productionPolicyStore: fixedProductionPolicy(),
+    runtimeProvenance: fixedRuntimeProvenance(),
+    upload: async () => { uploads += 1; return { ok: true, jobId: "unexpected" }; },
+  });
+  const result = await service.run({
+    now: "2026-08-21T10:00:00.000Z",
+    endNow: "2026-08-21T10:00:05.000Z",
+  });
+  assert.equal(result.ok, true);
+  assert.equal(uploads, 0);
+  assert.equal(result.completedListingIds.length, 0);
+  assert.match(result.abortReason, /Lifecycle-Barriere/iu);
+});
+
+test("helper restart recovery blocks every new active mutation while an older lifecycle is open", async () => {
+  const store = memoryStore(studioState(2));
+  let uploads = 0;
+  const service = createSchedulerService({
+    store,
+    lease: memoryLease(),
+    operatingModeStore: fixedOperatingMode("active"),
+    productionPolicyStore: fixedProductionPolicy(),
+    runtimeProvenance: fixedRuntimeProvenance(),
+    lifecycleCoordinator: {
+      preflight: async () => ({
+        ok: false,
+        code: "ROTATION_LIFECYCLE_RECOVERY_PENDING",
+        reason: "Eine frühere Produktions-Lifecycle-Kette wartet noch auf Recovery.",
+      }),
+      complete: async () => { throw new Error("must not run"); },
+    },
+    upload: async () => { uploads += 1; return { ok: true, jobId: "unexpected" }; },
+  });
+  const result = await service.run({
+    trigger: "periodic",
+    now: "2026-08-21T10:00:00.000Z",
+    endNow: "2026-08-21T10:00:05.000Z",
+  });
+  assert.equal(result.ok, true);
+  assert.equal(uploads, 0);
+  assert.match(result.abortReason, /Recovery/iu);
+  const state = (await store.load()).state;
+  assert.equal(state.projects.flatMap((project) => project.listings)
+    .filter((listingValue) => listingValue.listingOrigin === "rotation-copy").length, 0);
 });
 
 test("switching canary to active releases the remaining due scope without duplicating the canary", async () => {
@@ -582,6 +664,163 @@ test("active production policy limits one scheduler run to three distinct plots"
   assert.ok(copies.every((copy) => copy.productionLifecycle?.automaticDeleteAuthorized === true));
 });
 
+test("three production rotations start only after the previous complete lifecycle is confirmed", async () => {
+  const store = memoryStore(studioState(3));
+  const events = [];
+  const service = createListingRotationSchedulerService({
+    store,
+    lease: memoryLease(),
+    operatingModeStore: fixedOperatingMode("active"),
+    productionPolicyStore: fixedProductionPolicy(3, "guarded"),
+    runtimeProvenance: fixedRuntimeProvenance(),
+    lifecycleCoordinator: {
+      preflight: async () => ({ ok: true }),
+      complete: async ({ sourceListingId, effectiveMaxRunItems, overrideId }) => {
+        assert.equal(effectiveMaxRunItems, 3);
+        assert.equal(overrideId, "");
+        events.push(...lifecycleEventsFor(sourceListingId));
+        return { ok: true };
+      },
+    },
+    upload: async ({ project: projectValue, listing: listingValue }) => {
+      events.push(`${listingValue.rotationSourceListingId}:ftps`);
+      return { ok: true, jobId: createUploadJobId(projectValue, listingValue) };
+    },
+  });
+  const result = await service.run({ now: "2026-08-21T10:00:00.000Z", endNow: "2026-08-21T10:20:00.000Z" });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.completedLifecycles, 3);
+  const expected = result.selectedListingIds.flatMap((sourceListingId) => [
+    `${sourceListingId}:ftps`,
+    ...lifecycleEventsFor(sourceListingId),
+  ]);
+  assert.deepEqual(events, expected);
+  for (let index = 1; index < result.selectedListingIds.length; index += 1) {
+    const previous = result.selectedListingIds[index - 1];
+    const current = result.selectedListingIds[index];
+    assert.ok(events.indexOf(`${previous}:source-deleted`) < events.indexOf(`${current}:ftps`));
+  }
+});
+
+test("a delayed import confirmation prevents the next FTPS until the first lifecycle is final", async () => {
+  const store = memoryStore(studioState(2));
+  const uploads = [];
+  let releaseFirst;
+  const firstGate = new Promise((resolve) => { releaseFirst = resolve; });
+  const service = createListingRotationSchedulerService({
+    store,
+    lease: memoryLease(),
+    operatingModeStore: fixedOperatingMode("active"),
+    productionPolicyStore: fixedProductionPolicy(3, "guarded"),
+    runtimeProvenance: fixedRuntimeProvenance(),
+    lifecycleCoordinator: {
+      preflight: async () => ({ ok: true }),
+      complete: async ({ lifecycleIndex }) => {
+        if (lifecycleIndex === 1) await firstGate;
+        return { ok: true };
+      },
+    },
+    upload: async ({ project: projectValue, listing: listingValue }) => {
+      uploads.push(listingValue.rotationSourceListingId);
+      return { ok: true, jobId: createUploadJobId(projectValue, listingValue) };
+    },
+  });
+  const running = service.run({ now: "2026-08-21T10:00:00.000Z", endNow: "2026-08-21T10:20:00.000Z" });
+  await waitUntil(() => uploads.length === 1);
+  assert.equal(uploads.length, 1);
+  const whileWaiting = (await store.load()).state;
+  const selectedWhileWaiting = whileWaiting.scheduler.runs.at(-1).selectedListingIds;
+  const notStarted = whileWaiting.projects
+    .flatMap((projectValue) => projectValue.listings.map((listingValue) => ({ projectValue, listingValue })))
+    .filter(({ listingValue }) =>
+      listingValue.listingOrigin === "group-source"
+      && listingValue.id !== uploads[0]
+      && selectedWhileWaiting.includes(listingValue.id));
+  assert.ok(notStarted.length >= 1);
+  for (const { projectValue, listingValue } of notStarted) {
+    assert.equal(listingValue.status, WORKFLOW_STATUS.PUBLISHED);
+    assert.equal(projectValue.listings.some((candidate) => candidate.rotationSourceListingId === listingValue.id), false);
+    const control = listingControl(projectValue.listingGroup, listingValue);
+    assert.equal(control.processLease, null);
+  }
+  releaseFirst();
+  const result = await running;
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(uploads.length, 2);
+});
+
+test("a lifecycle timeout stops the run and leaves later selected rotations unstarted", async () => {
+  const store = memoryStore(studioState(3));
+  const uploads = [];
+  const service = createListingRotationSchedulerService({
+    store,
+    lease: memoryLease(),
+    operatingModeStore: fixedOperatingMode("active"),
+    productionPolicyStore: fixedProductionPolicy(3, "guarded"),
+    runtimeProvenance: fixedRuntimeProvenance(),
+    lifecycleCoordinator: {
+      preflight: async () => ({ ok: true }),
+      complete: async () => {
+        const error = new Error("Importconfirmation timeout");
+        error.code = "ROTATION_IMPORT_CONFIRMATION_TIMEOUT";
+        throw error;
+      },
+    },
+    upload: async ({ project: projectValue, listing: listingValue }) => {
+      uploads.push(listingValue.rotationSourceListingId);
+      return { ok: true, jobId: createUploadJobId(projectValue, listingValue) };
+    },
+  });
+  const result = await service.run({ now: "2026-08-21T10:00:00.000Z", endNow: "2026-08-21T10:30:00.000Z" });
+  assert.equal(result.ok, false);
+  assert.equal(result.failedLifecycleIndex, 1);
+  assert.equal(uploads.length, 1);
+  const state = (await store.load()).state;
+  const copy = state.projects.flatMap((projectValue) => projectValue.listings)
+    .find((listingValue) => listingValue.rotationSourceListingId === uploads[0]);
+  assert.equal(copy.status, WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT);
+  for (const sourceListingId of result.selectedListingIds.slice(1)) {
+    const project = state.projects.find((projectValue) =>
+      projectValue.listings.some((listingValue) => listingValue.id === sourceListingId));
+    const source = project.listings.find((listingValue) => listingValue.id === sourceListingId);
+    const control = listingControl(project.listingGroup, source);
+    assert.equal(source.status, WORKFLOW_STATUS.PUBLISHED);
+    assert.equal(control.status, WORKFLOW_STATUS.PUBLISHED);
+    assert.equal(control.schedulerSelectionId, "");
+    assert.equal(control.processLease, null);
+    assert.equal(project.listings.some((listingValue) => listingValue.rotationSourceListingId === sourceListingId), false);
+  }
+});
+
+test("an FTPS or Creative-Payload failure stops before every later lifecycle", async () => {
+  for (const errorCode of ["AUTOMATIC_ROTATION_UPLOAD_FAILED", "CREATIVE_PAYLOAD_MISMATCH"]) {
+    const store = memoryStore(studioState(3));
+    let uploadAttempts = 0;
+    let lifecycleCalls = 0;
+    const service = createListingRotationSchedulerService({
+      store,
+      lease: memoryLease(),
+      operatingModeStore: fixedOperatingMode("active"),
+      productionPolicyStore: fixedProductionPolicy(3, "guarded"),
+      runtimeProvenance: fixedRuntimeProvenance(),
+      lifecycleCoordinator: {
+        preflight: async () => ({ ok: true }),
+        complete: async () => { lifecycleCalls += 1; return { ok: true }; },
+      },
+      upload: async () => {
+        uploadAttempts += 1;
+        const error = new Error(errorCode);
+        error.code = errorCode;
+        throw error;
+      },
+    });
+    const result = await service.run({ now: "2026-08-21T10:00:00.000Z", endNow: "2026-08-21T10:05:00.000Z" });
+    assert.equal(result.ok, false);
+    assert.equal(uploadAttempts, 1);
+    assert.equal(lifecycleCalls, 0);
+  }
+});
+
 test("a chain started at 20:59 Europe/Berlin may finish, but the next new rotation cannot start after 21:00", async () => {
   const store = memoryStore(studioState(2));
   const uploads = [];
@@ -632,6 +871,7 @@ test("an armed one-shot override raises exactly one real scheduler run to 25 and
   const catalogStore = memoryStore(studioState(25));
   const { store: batchOverrideStore, armed } = await batchOverrideFixture(25);
   const uploads = [];
+  const lifecycleEvents = [];
   const runLogs = [];
   const service = createListingRotationSchedulerService({
     store: catalogStore,
@@ -641,6 +881,19 @@ test("an armed one-shot override raises exactly one real scheduler run to 25 and
     batchOverrideStore,
     runtimeProvenance: fixedRuntimeProvenance(),
     idFactory: ids("one-shot-run"),
+    lifecycleCoordinator: {
+      preflight: async () => ({ ok: true }),
+      complete: async ({ sourceListingId, lifecycleIndex, effectiveMaxRunItems, overrideId }) => {
+        if (overrideId) {
+          assert.equal(effectiveMaxRunItems, 25);
+          assert.equal(overrideId, armed.overrideId);
+        } else {
+          assert.equal(effectiveMaxRunItems, 3);
+        }
+        lifecycleEvents.push(`${lifecycleIndex}:${sourceListingId}:completed`);
+        return { ok: true };
+      },
+    },
     upload: async ({ project: projectValue, listing: listingValue, batchOverrideId, effectiveMaxRunItems }) => {
       uploads.push({
         projectId: projectValue.id,
@@ -662,6 +915,11 @@ test("an armed one-shot override raises exactly one real scheduler run to 25 and
   assert.equal(oneShot.ok, true, JSON.stringify(oneShot));
   assert.equal(oneShot.selectedListingIds.length, 25);
   assert.equal(uploads.length, 25);
+  assert.equal(lifecycleEvents.length, 25);
+  assert.deepEqual(
+    lifecycleEvents,
+    oneShot.selectedListingIds.map((sourceListingId, index) => `${index + 1}:${sourceListingId}:completed`),
+  );
   assert.equal(new Set(uploads.map((entry) => entry.projectId)).size, 25);
   assert.ok(uploads.every((entry) => entry.batchOverrideId === armed.overrideId && entry.effectiveMaxRunItems === 25));
 
@@ -678,6 +936,7 @@ test("an armed one-shot override raises exactly one real scheduler run to 25 and
   assert.ok(oneShotCopies.every((copy) =>
     copy.productionLifecycle?.batchOverrideId === armed.overrideId
     && copy.productionLifecycle?.batchOverrideMaxRunItems === 25
+    && copy.productionLifecycle?.effectiveMaxRunItems === 25
     && copy.productionLifecycle?.runtimeCommit === RUNTIME_COMMIT));
 
   const normal = await service.run({

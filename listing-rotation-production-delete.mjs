@@ -715,16 +715,23 @@ export function createProductionDeleteService(options) {
     const trigger = clean(input.trigger || "periodic", 100);
     const targetExternalObjectNumber = clean(input.targetExternalObjectNumber, 40);
     const manualExact = trigger === "manual-exact";
-    if (manualExact !== Boolean(targetExternalObjectNumber)) {
+    const schedulerLifecycleExact = trigger === "scheduler-lifecycle" && Boolean(targetExternalObjectNumber);
+    if (manualExact !== Boolean(targetExternalObjectNumber) && !schedulerLifecycleExact) {
       throw productionError(
         "PRODUCTION_DELETE_EXACT_CONTRACT_INVALID",
-        "Ein exakter Produktions-DELETE verlangt gemeinsam trigger=manual-exact und eine konkrete Objektnummer.",
+        "Ein exakter Produktions-DELETE verlangt den passenden manuellen oder seriellen Scheduler-Lifecycle-Vertrag und eine konkrete Objektnummer.",
       );
     }
     if (manualExact && (!/^30460-\d{6}$/u.test(targetExternalObjectNumber) || policy.maxRunItems !== 1)) {
       throw productionError(
         "PRODUCTION_DELETE_EXACT_POLICY_REQUIRED",
         "Ein exakter Produktions-DELETE verlangt eine gültige Anbieter-Objektnummer und das Produktionslimit 1.",
+      );
+    }
+    if (schedulerLifecycleExact && !/^30460-\d{6}$/u.test(targetExternalObjectNumber)) {
+      throw productionError(
+        "PRODUCTION_DELETE_LIFECYCLE_TARGET_INVALID",
+        "Der serielle Scheduler-Lifecycle benötigt eine gültige konkrete Anbieter-Objektnummer.",
       );
     }
     const ledgerBefore = await options.ledger.read();
@@ -751,14 +758,25 @@ export function createProductionDeleteService(options) {
     const resolved = await resolveDeleteContexts(snapshotAfterConfirmation.state, ledgerAfterConfirmation);
     const contextsWithCandidates = [...resolved.contexts.values()].filter((context) => context.candidates.length);
     let selectedContext = null;
+    let targetCandidateSelected = false;
     if (targetExternalObjectNumber) {
-      const matches = contextsWithCandidates.flatMap((context) => context.candidates.map((candidate) => ({ context, candidate }))).filter(({ candidate }) => {
+      const candidateMatches = contextsWithCandidates.flatMap((context) => context.candidates.map((candidate) => ({ context, candidate }))).filter(({ candidate }) => {
         const project = snapshotAfterConfirmation.state.projects.find((entry) => entry.id === candidate.projectId);
         const source = project?.listings.find((entry) => entry.id === candidate.sourceListingId);
         return source?.externalId === targetExternalObjectNumber;
       });
-      if (matches.length !== 1) throw productionError("PRODUCTION_DELETE_EXACT_TARGET_NOT_ELIGIBLE", "Das exakt angeforderte Produktions-Deleteziel ist nicht eindeutig löschberechtigt.");
-      selectedContext = matches[0].context;
+      const pendingMatches = [...resolved.contexts.values()].flatMap((context) => context.pendingJobs.map((job) => ({ context, job })))
+        .filter(({ job }) => job.externalObjectNumber === targetExternalObjectNumber);
+      const completedMatches = snapshotAfterConfirmation.state.projects.flatMap((project) => project.listings
+        .filter((source) =>
+          source.externalId === targetExternalObjectNumber
+          && source.status === WORKFLOW_STATUS.DELETED
+          && source.productionDeleteState === "confirmed"
+          && source.externalDeletionPending === false));
+      const exactMatchCount = candidateMatches.length + pendingMatches.length + completedMatches.length;
+      if (exactMatchCount !== 1) throw productionError("PRODUCTION_DELETE_EXACT_TARGET_NOT_ELIGIBLE", "Das exakt angeforderte Produktions-Deleteziel ist nicht eindeutig löschberechtigt oder bestätigt.");
+      selectedContext = candidateMatches[0]?.context || pendingMatches[0]?.context || null;
+      targetCandidateSelected = candidateMatches.length === 1;
     } else {
       selectedContext = contextsWithCandidates.sort((left, right) => {
         const leftAt = Math.min(...left.candidates.map((candidate) => Date.parse(candidate.authorizedAt || "1970-01-01")));
@@ -775,7 +793,7 @@ export function createProductionDeleteService(options) {
           PRODUCTION_BATCH_OVERRIDE_MAX_ITEMS - resolved.totalPending,
         ))
       : 0;
-    const transfer = selectedContext
+    const transfer = selectedContext?.candidates.length && (!targetExternalObjectNumber || targetCandidateSelected)
       ? await transferEligibleSources({ ...selectedContext, maxRunItems: effectiveMaxRunItems }, remainingTransferBudget, targetExternalObjectNumber)
       : { candidateCount: resolved.candidates.length, selectedCount: 0, skippedCount: resolved.candidates.length, transferred: [], errors: [] };
     await writeLog("run-context", {
