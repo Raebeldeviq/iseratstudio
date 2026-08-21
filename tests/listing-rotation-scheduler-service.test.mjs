@@ -153,7 +153,7 @@ function studioState(projectCount = 2) {
     updateIntervalDays: 12,
     allowedWeekdays: [0, 1, 2, 3, 4, 5, 6],
     startTime: "08:00",
-    endTime: "18:00",
+    endTime: "21:00",
   }, { now: "2026-07-29T08:00:00.000Z" });
   return {
     version: 1,
@@ -582,6 +582,52 @@ test("active production policy limits one scheduler run to three distinct plots"
   assert.ok(copies.every((copy) => copy.productionLifecycle?.automaticDeleteAuthorized === true));
 });
 
+test("a chain started at 20:59 Europe/Berlin may finish, but the next new rotation cannot start after 21:00", async () => {
+  const store = memoryStore(studioState(2));
+  const uploads = [];
+  let stepCall = 0;
+  const service = createListingRotationSchedulerService({
+    store,
+    lease: memoryLease(),
+    operatingModeStore: fixedOperatingMode("active"),
+    productionPolicyStore: fixedProductionPolicy(3, "guarded"),
+    runtimeProvenance: fixedRuntimeProvenance(),
+    upload: async ({ project: projectValue, listing: listingValue }) => {
+      uploads.push({ projectId: projectValue.id, listingId: listingValue.id });
+      return { ok: true, jobId: createUploadJobId(projectValue, listingValue) };
+    },
+  });
+  const result = await service.run({
+    runId: "scheduler-window-boundary",
+    now: "2026-08-17T18:59:00.000Z",
+    endNow: "2026-08-17T19:02:00.000Z",
+    stepNow: () => {
+      stepCall += 1;
+      return stepCall === 1
+        ? "2026-08-17T18:59:30.000Z"
+        : "2026-08-17T19:01:00.000Z";
+    },
+  });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.selectedListingIds.length, 2);
+  assert.equal(result.completedListingIds.length, 1);
+  assert.equal(uploads.length, 1);
+  assert.match(result.abortReason, /keine neue Rotation|Zeitfenster/iu);
+  assert.ok(result.skippedListings.some((entry) =>
+    entry.listingId === result.selectedListingIds[1]
+    && /Zeitfenster/iu.test(entry.reason)));
+  const current = (await store.load()).state;
+  const copies = current.projects.flatMap((projectValue) =>
+    projectValue.listings.filter((item) => item.listingOrigin === "rotation-copy"));
+  assert.equal(copies.length, 1);
+  const unstartedProject = current.projects.find((projectValue) => projectValue.id === "project-2");
+  const unstartedSource = unstartedProject.listings.find((item) => item.listingOrigin === "group-source");
+  const unstartedControl = listingControl(unstartedProject.listingGroup, unstartedSource);
+  assert.equal(unstartedControl.status, WORKFLOW_STATUS.PUBLISHED);
+  assert.equal(unstartedControl.schedulerSelectionId, "");
+  assert.equal(unstartedControl.processLease, null);
+});
+
 test("an armed one-shot override raises exactly one real scheduler run to 25 and the following run returns to three", async () => {
   const catalogStore = memoryStore(studioState(25));
   const { store: batchOverrideStore, armed } = await batchOverrideFixture(25);
@@ -753,6 +799,58 @@ test("the one-shot override never uses a separate time-window bypass", async () 
   const status = await batchOverrideStore.load();
   assert.equal(status.overrideId, armed.overrideId);
   assert.equal(status.state, "armed");
+});
+
+test("the one-shot override may start at 20:59 but remains blocked at 21:01 Europe/Berlin", async () => {
+  const allowedCatalog = memoryStore(studioState(2));
+  const { store: allowedOverrideStore, armed } = await batchOverrideFixture(25, "2026-08-17T18:59:00.000Z");
+  const allowedUploads = [];
+  const allowedService = createListingRotationSchedulerService({
+    store: allowedCatalog,
+    lease: memoryLease(),
+    operatingModeStore: fixedOperatingMode("active"),
+    productionPolicyStore: fixedProductionPolicy(),
+    batchOverrideStore: allowedOverrideStore,
+    runtimeProvenance: fixedRuntimeProvenance(),
+    upload: async ({ project: projectValue, listing: listingValue, batchOverrideId }) => {
+      allowedUploads.push(batchOverrideId);
+      return { ok: true, jobId: createUploadJobId(projectValue, listingValue) };
+    },
+  });
+  const allowed = await allowedService.run({
+    trigger: "periodic",
+    now: "2026-08-17T18:59:00.000Z",
+    endNow: "2026-08-17T19:02:00.000Z",
+    stepNow: () => "2026-08-17T18:59:30.000Z",
+  });
+  assert.equal(allowed.effectiveMaxRunItems, 25);
+  assert.equal(allowed.selectedListingIds.length, 2);
+  assert.deepEqual(allowedUploads, [armed.overrideId, armed.overrideId]);
+  assert.equal((await allowedOverrideStore.load()).state, "consumed");
+
+  const blockedCatalog = memoryStore(studioState(2));
+  const { store: blockedOverrideStore } = await batchOverrideFixture(25, "2026-08-17T19:01:00.000Z");
+  let blockedUploads = 0;
+  const blockedService = createListingRotationSchedulerService({
+    store: blockedCatalog,
+    lease: memoryLease(),
+    operatingModeStore: fixedOperatingMode("active"),
+    productionPolicyStore: fixedProductionPolicy(),
+    batchOverrideStore: blockedOverrideStore,
+    runtimeProvenance: fixedRuntimeProvenance(),
+    upload: async () => { blockedUploads += 1; return { ok: true, jobId: "unexpected" }; },
+  });
+  const blocked = await blockedService.run({
+    trigger: "manual-production-batch",
+    ignoreTimeWindow: true,
+    now: "2026-08-17T19:01:00.000Z",
+    endNow: "2026-08-17T19:02:00.000Z",
+  });
+  assert.equal(blocked.effectiveMaxRunItems, 3);
+  assert.equal(blocked.selectedListingIds.length, 0);
+  assert.match(blocked.abortReason, /Zeitfenster/iu);
+  assert.equal(blockedUploads, 0);
+  assert.equal((await blockedOverrideStore.load()).state, "armed");
 });
 
 test("an override bound to another runtime blocks before copy or upload and is cancelled", async () => {

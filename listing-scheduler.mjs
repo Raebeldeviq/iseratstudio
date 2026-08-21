@@ -18,6 +18,9 @@ import {
 } from "./workflow-status.mjs";
 
 export const SCHEDULER_LOG_LIMIT = MAX_SCHEDULER_LOGS;
+export const LISTING_SCHEDULER_TIME_ZONE = "Europe/Berlin";
+export const LISTING_SCHEDULER_LEGACY_END_TIME = "18:00";
+export const LISTING_SCHEDULER_PRODUCTION_END_TIME = "21:00";
 
 export const LISTING_SCHEDULER_DEFAULTS = Object.freeze({
   enabled: false,
@@ -30,7 +33,18 @@ export const LISTING_SCHEDULER_DEFAULTS = Object.freeze({
   updateIntervalDays: 12,
   allowedWeekdays: Object.freeze([1, 2, 3, 4, 5]),
   startTime: "08:00",
-  endTime: "18:00",
+  endTime: LISTING_SCHEDULER_PRODUCTION_END_TIME,
+});
+
+const BERLIN_DATE_TIME_FORMATTER = new Intl.DateTimeFormat("en-CA", {
+  timeZone: LISTING_SCHEDULER_TIME_ZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
 });
 
 const HEALTH_RULES = Object.freeze([
@@ -67,6 +81,13 @@ function positiveInteger(value, fallback) {
 
 function validTime(value, fallback) {
   return /^([01]\d|2[0-3]):[0-5]\d$/.test(String(value || "")) ? String(value) : fallback;
+}
+
+function normalizedSchedulerEndTime(value) {
+  const endTime = validTime(value, LISTING_SCHEDULER_DEFAULTS.endTime);
+  return endTime === LISTING_SCHEDULER_LEGACY_END_TIME
+    ? LISTING_SCHEDULER_PRODUCTION_END_TIME
+    : endTime;
 }
 
 function validMode(value) {
@@ -112,7 +133,7 @@ export function normalizeListingScheduler(value, options = {}) {
       updateIntervalDays: positiveInteger(rawSettings.updateIntervalDays, LISTING_SCHEDULER_DEFAULTS.updateIntervalDays),
       allowedWeekdays: allowedWeekdays.length ? allowedWeekdays : [...LISTING_SCHEDULER_DEFAULTS.allowedWeekdays],
       startTime: validTime(rawSettings.startTime, LISTING_SCHEDULER_DEFAULTS.startTime),
-      endTime: validTime(rawSettings.endTime, LISTING_SCHEDULER_DEFAULTS.endTime),
+      endTime: normalizedSchedulerEndTime(rawSettings.endTime),
     },
     runs: Array.isArray(source.runs) ? source.runs.slice(-SCHEDULER_LOG_LIMIT).map((run) => ({
       ...run,
@@ -137,14 +158,26 @@ export function updateListingSchedulerSettings(value, patch, options = {}) {
   }, options);
 }
 
-function localDayKey(value) {
+function berlinDateTimeParts(value) {
   const date = new Date(value);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  if (!Number.isFinite(date.getTime())) return null;
+  return Object.fromEntries(BERLIN_DATE_TIME_FORMATTER.formatToParts(date)
+    .filter((part) => part.type !== "literal")
+    .map((part) => [part.type, Number(part.value)]));
 }
 
-function minuteOfDay(value) {
-  const date = new Date(value);
-  return date.getHours() * 60 + date.getMinutes();
+function localDayKey(value) {
+  const parts = berlinDateTimeParts(value);
+  if (!parts) return "";
+  return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+}
+
+function berlinWeekday(parts) {
+  return new Date(Date.UTC(parts.year, parts.month - 1, parts.day)).getUTCDay();
+}
+
+function minuteOfDay(parts) {
+  return parts.hour * 60 + parts.minute;
 }
 
 function settingMinute(value) {
@@ -161,12 +194,14 @@ export function schedulerWindowBlockReasons(schedulerValue, at = nowIso(), optio
   if (settings.paused) reasons.push("Die Automatik ist pausiert.");
   if (settings.mode === "blocked") reasons.push("Der Scheduler-Modus ist gesperrt.");
   if (!Number.isFinite(timestamp)) reasons.push("Der Ausführungszeitpunkt ist ungültig.");
-  const date = new Date(at);
-  if (!options.ignoreTimeWindow && !settings.allowedWeekdays.includes(date.getDay())) reasons.push("Der heutige Wochentag ist nicht freigegeben.");
-  const minute = minuteOfDay(at);
-  const start = settingMinute(settings.startTime);
-  const end = settingMinute(settings.endTime);
-  if (!options.ignoreTimeWindow && (minute < start || minute > end)) reasons.push("Der aktuelle Zeitpunkt liegt außerhalb des Zeitfensters.");
+  const parts = berlinDateTimeParts(at);
+  if (parts && !options.ignoreTimeWindow && !settings.allowedWeekdays.includes(berlinWeekday(parts))) reasons.push("Der heutige Wochentag ist in Europe/Berlin nicht freigegeben.");
+  if (parts) {
+    const minute = minuteOfDay(parts);
+    const start = settingMinute(settings.startTime);
+    const end = settingMinute(settings.endTime);
+    if (!options.ignoreTimeWindow && (minute < start || minute > end)) reasons.push("Der aktuelle Zeitpunkt liegt außerhalb des Europe/Berlin-Zeitfensters.");
+  }
   if (scheduler.lastRunAt) {
     const spacingMs = settings.minimumSpacingHours * 60 * 60 * 1000;
     if (timestamp - Date.parse(scheduler.lastRunAt) < spacingMs) reasons.push("Der globale Mindestabstand seit dem letzten Lauf ist noch nicht erreicht.");

@@ -649,8 +649,49 @@ export function createListingRotationSchedulerService(options) {
         })),
       ];
 
-      for (const item of workItems) {
-        await lease.refresh?.({ now: stepTimestamp() });
+      for (let itemIndex = 0; itemIndex < workItems.length; itemIndex += 1) {
+        const item = workItems[itemIndex];
+        const itemCheckAt = stepTimestamp();
+        await lease.refresh?.({ now: itemCheckAt });
+        if (!item.resume) {
+          const boundarySnapshot = await options.store.load();
+          if (!boundarySnapshot?.stored || !boundarySnapshot.state) {
+            throw new Error("Der Katalog konnte vor dem Start der nächsten Rotation nicht sicher gelesen werden.");
+          }
+          const currentScheduler = normalizeListingScheduler(boundarySnapshot.state.scheduler, { now: itemCheckAt });
+          const startIssues = schedulerWindowBlockReasons(currentScheduler, itemCheckAt, {
+            ignoreTimeWindow: effectiveIgnoreTimeWindow,
+          });
+          if (startIssues.length) {
+            const unstartedItems = workItems.slice(itemIndex).filter((candidate) => !candidate.resume);
+            const stopReason = `Keine neue Rotation gestartet: ${startIssues.join(" · ")}`;
+            skippedListings = uniqueSkipRecords([
+              ...skippedListings,
+              ...unstartedItems.map((candidate) => skipRecord(
+                boundarySnapshot.state,
+                candidate.projectId,
+                candidate.sourceListingId,
+                stopReason,
+              )),
+            ]);
+            skippedCount = skippedListings.length;
+            abortReason = stopReason;
+            await options.store.update((state) => {
+              let nextState = state;
+              for (const candidate of unstartedItems) {
+                nextState = updateSourceControl(nextState, candidate.projectId, candidate.sourceListingId, {
+                  status: WORKFLOW_STATUS.PUBLISHED,
+                  statusMessage: "Veröffentlicht · Rotation wegen geschlossenem Startfenster nicht begonnen",
+                  schedulerSelectionId: "",
+                  schedulerSelectedAt: "",
+                  processLease: null,
+                }, itemCheckAt);
+              }
+              return { state: nextState };
+            }, { now: itemCheckAt });
+            break;
+          }
+        }
         startedRotationCount += 1;
         let copyId = item.resume ? item.listingId : "";
         let sourceListingId = item.sourceListingId;
@@ -765,7 +806,9 @@ export function createListingRotationSchedulerService(options) {
       const status = finalRunStatus(completedListingIds, failedListingIds, abortReason);
       const statusMessage = failedListingIds.length
         ? `${completedListingIds.length} übertragen, ${failedListingIds.length} fehlgeschlagen`
-        : `${completedListingIds.length} Rotationskopien übertragen · Importbestätigung ausstehend`;
+        : abortReason
+          ? `${completedListingIds.length} Rotationskopien übertragen · ${abortReason}`
+          : `${completedListingIds.length} Rotationskopien übertragen · Importbestätigung ausstehend`;
       await finalizeRun(runId, {
         endedAt,
         completedListingIds,

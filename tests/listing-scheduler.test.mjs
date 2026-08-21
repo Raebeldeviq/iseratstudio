@@ -4,7 +4,9 @@ import test from "node:test";
 import { assignListingGroupVariant, createListingGroup, updateListingControl } from "../listing-groups.mjs";
 import {
   createListingScheduler,
+  LISTING_SCHEDULER_PRODUCTION_END_TIME,
   listingHealthScore,
+  normalizeListingScheduler,
   reserveSchedulerSelection,
   runSchedulerDryRun,
   schedulerWindowBlockReasons,
@@ -103,6 +105,49 @@ test("window, pause, locks and failure isolation are enforced", () => {
   assert.equal(dryRun.results.length, 2);
   assert.equal(dryRun.results.every((item) => item.ok), true);
   assert.ok(dryRun.skipped.some((item) => item.projectId === "project-2"));
+});
+
+test("the production window is evaluated explicitly in Europe/Berlin with an inclusive 21:00 end minute", () => {
+  const scheduler = updateListingSchedulerSettings(createListingScheduler({
+    now: "2026-08-17T06:00:00.000Z",
+  }), {
+    enabled: true,
+    paused: false,
+    mode: "prepare-only",
+    allowedWeekdays: [1, 2, 3, 4, 5],
+    startTime: "08:00",
+    endTime: LISTING_SCHEDULER_PRODUCTION_END_TIME,
+  });
+  const checks = [
+    ["summer 07:59", "2026-08-17T05:59:00.000Z", true],
+    ["summer 08:00", "2026-08-17T06:00:00.000Z", false],
+    ["summer 17:59", "2026-08-17T15:59:00.000Z", false],
+    ["summer 18:00", "2026-08-17T16:00:00.000Z", false],
+    ["summer 19:00", "2026-08-17T17:00:00.000Z", false],
+    ["summer 20:00", "2026-08-17T18:00:00.000Z", false],
+    ["summer 20:59", "2026-08-17T18:59:00.000Z", false],
+    ["summer 21:00", "2026-08-17T19:00:00.000Z", false],
+    ["summer 21:00:59", "2026-08-17T19:00:59.000Z", false],
+    ["summer 21:01", "2026-08-17T19:01:00.000Z", true],
+    ["winter 07:59", "2026-12-14T06:59:00.000Z", true],
+    ["winter 08:00", "2026-12-14T07:00:00.000Z", false],
+    ["winter 21:00", "2026-12-14T20:00:00.000Z", false],
+    ["winter 21:01", "2026-12-14T20:01:00.000Z", true],
+  ];
+  for (const [label, at, blocked] of checks) {
+    const reasons = schedulerWindowBlockReasons(scheduler, at);
+    assert.equal(reasons.some((reason) => /Zeitfenster/iu.test(reason)), blocked, label);
+  }
+});
+
+test("the default and persisted legacy 18:00 window normalize to the permanent 21:00 production end", () => {
+  const created = createListingScheduler({ now: "2026-08-17T06:00:00.000Z" });
+  assert.equal(created.settings.endTime, LISTING_SCHEDULER_PRODUCTION_END_TIME);
+  const normalized = normalizeListingScheduler({
+    ...created,
+    settings: { ...created.settings, endTime: "18:00" },
+  });
+  assert.equal(normalized.settings.endTime, LISTING_SCHEDULER_PRODUCTION_END_TIME);
 });
 
 test("selection scales to 2,000 listings without fixed limits", () => {

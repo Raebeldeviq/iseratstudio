@@ -121,7 +121,7 @@ function state(projectCount = 4) {
     updateIntervalDays: 12,
     allowedWeekdays: [0, 1, 2, 3, 4, 5, 6],
     startTime: "08:00",
-    endTime: "18:00",
+    endTime: "21:00",
   }, { now: "2026-07-01T08:00:00.000Z" });
   return {
     version: 1,

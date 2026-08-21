@@ -1,5 +1,46 @@
 # Änderungsprotokoll
 
+## Unreleased · Produktionszeitfenster bis 21:00 – 21. August 2026
+
+### Report
+
+- Das reguläre Produktionszeitfenster dauerhaft von `08:00–18:00` auf
+  `08:00–21:00 Europe/Berlin` erweitert. Bestehende persistierte
+  `18:00`-Konfigurationen werden beim Laden auf den neuen Vertrag migriert;
+  Standard und produktive Validierung verwenden anschließend `21:00`.
+- Die Zeitfensterprüfung von der Rechnerzeitzone entkoppelt und ausdrücklich an
+  `Europe/Berlin` gebunden. Grenztests decken Sommer- und Winterzeit sowie
+  `07:59`, `08:00`, `17:59`, `18:00`, `19:00`, `20:00`, `20:59`, `21:00` und
+  `21:01` ab.
+- Zusätzlich zur Laufprüfung wird das Fenster unmittelbar vor jeder neuen
+  Rotation erneut geprüft. Bis `21:00:59` darf eine neue Kette starten; ab
+  `21:01` werden noch nicht begonnene Auswahlen freigegeben und mit eindeutigem
+  Skip-Grund protokolliert. Eine bereits vorher sicher gestartete Kette darf
+  ihre bestehenden FTPS-, Import- und DELETE-Bestätigungsstufen abschließen.
+- Normaler Dreierlauf, Mindestabstand von einer Stunde, Daily-Plot-Guard,
+  `detect-only`-Startup und der einmalige One-Shot mit maximal 25 Einträgen und
+  60-Minuten-TTL bleiben unverändert. Der One-Shot erhält keinen Zeit-Bypass.
+
+### Begründung
+
+Eine reine Anpassung des Defaultwerts hätte laufende persistierte
+`18:00`-Konfigurationen und bereits ausgewählte Mehrfachläufe nicht sicher
+erfasst. Die Kombination aus verlustarmer Migration, expliziter Berliner
+Zeitzone und erneuter Prüfung vor jedem Einzelstart stellt den fachlichen
+Vertrag auch bei langen seriellen Läufen und Zeitzonenwechseln zuverlässig her.
+
+### Hürden und Risiken
+
+- Die Grenze folgt der bereits vorhandenen Minutensemantik: Die gesamte Minute
+  `21:00` ist offen, `21:01` ist geschlossen. Dieser Vertrag ist nun explizit
+  dokumentiert und getestet.
+- Eine vor der Grenze gestartete Produktionskette wird nicht künstlich um
+  21:00 Uhr abgebrochen. Alle nachgelagerten Stufen bleiben jedoch weiterhin an
+  positive Berichte, Idempotenz, Claims, Leases, CAS und DELETE-Schutzgrenzen
+  gebunden.
+- Während Implementierung und Tests wurden weder Scheduler noch Helper, FTPS,
+  Importbestätigung, Production-DELETE oder Portalaktionen produktiv gestartet.
+
 ## Unreleased · One-Shot-Produktionsbatch – 21. August 2026
 
 ### Report

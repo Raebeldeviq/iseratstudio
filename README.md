@@ -467,11 +467,23 @@ großer Batch. Bereits vorbereitete Einzelkopien dürfen anschließend unter dem
 normalen Dreierlimit idempotent fortgesetzt werden.
 
 Status, Vorschau, Dry Run und `startup-detect-only` beanspruchen den Override
-nicht. Auch `startup-guarded` bleibt beim normalen Dreierlimit. Zeitfenster
-08:00–18:00 Europe/Berlin, mindestens eine Stunde Laufabstand, serielle
+nicht. Auch `startup-guarded` bleibt beim normalen Dreierlimit. Das dauerhafte
+Produktionszeitfenster ist `08:00–21:00 Europe/Berlin`; Sommer- und Winterzeit
+werden über die explizite IANA-Zeitzone ausgewertet. Die Prüfung erfolgt vor
+jedem neuen Rotationsstart. Minutengenau sind Starts bis einschließlich
+`21:00:59` zulässig, ab `21:01` nicht mehr. Eine vorher sicher gestartete Kette
+darf FTPS, Importbestätigung, Production-DELETE und Löschbestätigung nach ihren
+bestehenden Regeln abschließen. Mindestens eine Stunde Laufabstand, serielle
 Verarbeitung, Daily-Plot-Guard, Creative-Payload-Prüfung, Upload-Deduplizierung,
 Importbestätigung und alle Claims/Leases/CAS-Grenzen bleiben unverändert. Ein
 Runtime-Mismatch entwertet den Override vor Kopie und FTPS fail-closed.
+
+Der normale Produktionslauf bleibt auf `maxRunItems = 3` begrenzt. Der separat
+armierte One-Shot bleibt einmalig, 60 Minuten gültig und auf höchstens 25
+Rotationen beschränkt; er besitzt keinen Zeitfenster-Bypass. Der persistente
+Daily-Plot-Guard erlaubt weiterhin höchstens einen Hausupload je Grundstück und
+Europe/Berlin-Kalendertag. Startup-Catch-up bleibt `detect-only` und verbraucht
+keinen armierten One-Shot.
 
 Jede im One-Shot-Lauf neu erzeugte Ersatzkopie trägt zusätzlich Override-ID,
 ursprüngliche Schedulerlauf-ID, Batchlimit und Runtime-Commit. Nur diese exakte
