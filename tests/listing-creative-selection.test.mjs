@@ -328,6 +328,8 @@ test("prepared copy persists one coherent house, text, price, image and OpenImmo
     copy.version,
   ));
   assert.equal(copy.creativeSelection.houseId, copy.templateId);
+  assert.equal(copy.creativeSelection.houseName, copy.templateName);
+  assert.equal(copy.creativeSelection.heroAssetId, copy.creativeSelection.heroImageId);
   assert.equal(createUploadJobId(project, copy).endsWith(":normal"), true);
 
   const xml = buildOpenImmoXml({

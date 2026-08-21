@@ -21,6 +21,8 @@ import {
 import { createPersistentLease } from "../persistent-lease.mjs";
 import { WORKFLOW_STATUS } from "../workflow-status.mjs";
 
+const RUNTIME_COMMIT = "a".repeat(40);
+
 function ids(prefix) {
   let value = 0;
   return () => `${prefix}-${++value}`;
@@ -230,8 +232,26 @@ function mutableOperatingMode(mode = "canary", canaryListingIds = []) {
 function fixedProductionPolicy(maxRunItems = 3, startupCatchupMode = "detect-only") {
   return {
     async load() {
-      return { format: 1, maxRunItems, startupCatchupMode, valid: true, fallbackReason: "" };
+      return {
+        format: 2,
+        maxRunItems,
+        startupCatchupMode,
+        expectedRuntimeCommit: RUNTIME_COMMIT,
+        valid: true,
+        fallbackReason: "",
+      };
     },
+  };
+}
+
+function fixedRuntimeProvenance(runtimeCommit = RUNTIME_COMMIT) {
+  return {
+    valid: true,
+    runtimeCommit,
+    runtimeRelease: "release-test",
+    runtimeBuiltAt: "2026-08-17T08:00:00.000Z",
+    runtimeCodeSha256: "b".repeat(64),
+    fallbackReason: "",
   };
 }
 
@@ -251,6 +271,7 @@ test("background catch-up ignores selectedPlotIds and works without a browser", 
     lease: memoryLease(),
     operatingModeStore: fixedOperatingMode("active"),
     productionPolicyStore: fixedProductionPolicy(),
+    runtimeProvenance: fixedRuntimeProvenance(),
     idFactory: ids("run"),
     upload: async ({ project: projectValue, listing: listingValue }) => {
       uploads.push({ projectId: projectValue.id, listingId: listingValue.id, externalId: listingValue.externalId });
@@ -298,6 +319,7 @@ test("an identical repeated scheduler run does not recreate or re-upload copies"
     lease: memoryLease(),
     operatingModeStore: fixedOperatingMode("active"),
     productionPolicyStore: fixedProductionPolicy(),
+    runtimeProvenance: fixedRuntimeProvenance(),
     idFactory: ids("run"),
     upload: async ({ project: projectValue, listing: listingValue }) => {
       uploadCount += 1;
@@ -320,6 +342,8 @@ test("helper restart during canary keeps the source published and resumes only t
     store,
     lease: memoryLease(),
     operatingModeStore,
+    productionPolicyStore: fixedProductionPolicy(),
+    runtimeProvenance: fixedRuntimeProvenance(),
     idFactory: ids("first-run"),
     upload: async () => {
       const error = new Error("Helper wurde während des Upload-Jobs beendet.");
@@ -341,6 +365,8 @@ test("helper restart during canary keeps the source published and resumes only t
     store,
     lease: memoryLease(),
     operatingModeStore,
+    productionPolicyStore: fixedProductionPolicy(),
+    runtimeProvenance: fixedRuntimeProvenance(),
     idFactory: ids("restart-run"),
     upload: async ({ project: projectValue, listing: listingValue }) => {
       resumedIds.push(listingValue.id);
@@ -393,6 +419,7 @@ test("startup catch-up at off does not resume an already prepared rotation copy"
     lease: memoryLease(),
     operatingModeStore: fixedOperatingMode("active"),
     productionPolicyStore: fixedProductionPolicy(),
+    runtimeProvenance: fixedRuntimeProvenance(),
     idFactory: ids("prepare-before-off"),
     upload: async () => { throw new Error("Vorbereiteter Test-Upload wurde unterbrochen."); },
   });
@@ -435,6 +462,8 @@ test("canary processes exactly one explicitly approved listing and skips all oth
     store,
     lease: memoryLease(),
     operatingModeStore: fixedOperatingMode("canary", [approvedListing.externalId]),
+    productionPolicyStore: fixedProductionPolicy(),
+    runtimeProvenance: fixedRuntimeProvenance(),
     idFactory: ids("canary-run"),
     upload: async ({ project: projectValue, listing: listingValue }) => {
       uploads.push(listingValue.rotationSourceListingId);
@@ -466,6 +495,7 @@ test("switching canary to active releases the remaining due scope without duplic
     lease: memoryLease(),
     operatingModeStore,
     productionPolicyStore: fixedProductionPolicy(),
+    runtimeProvenance: fixedRuntimeProvenance(),
     idFactory: ids("mode-switch-run"),
     upload: async ({ project: projectValue, listing: listingValue }) => {
       uploads.push(listingValue.rotationSourceListingId);
@@ -523,6 +553,7 @@ test("active production policy limits one scheduler run to three distinct plots"
     lease: memoryLease(),
     operatingModeStore: fixedOperatingMode("active"),
     productionPolicyStore: fixedProductionPolicy(3, "guarded"),
+    runtimeProvenance: fixedRuntimeProvenance(),
     upload: async ({ project: projectValue, listing: listingValue }) => {
       uploads.push({ projectId: projectValue.id, plotId: projectValue.plotId, listingId: listingValue.id });
       return { ok: true, jobId: createUploadJobId(projectValue, listingValue) };
@@ -538,6 +569,27 @@ test("active production policy limits one scheduler run to three distinct plots"
   const copies = current.projects.flatMap((projectValue) => projectValue.listings.filter((item) => item.listingOrigin === "rotation-copy"));
   assert.equal(copies.length, 3);
   assert.ok(copies.every((copy) => copy.productionLifecycle?.automaticDeleteAuthorized === true));
+});
+
+test("active mode blocks every mutation when the staged runtime commit differs from policy", async () => {
+  const store = memoryStore(studioState(2));
+  let uploads = 0;
+  const service = createListingRotationSchedulerService({
+    store,
+    lease: memoryLease(),
+    operatingModeStore: fixedOperatingMode("active"),
+    productionPolicyStore: fixedProductionPolicy(),
+    runtimeProvenance: fixedRuntimeProvenance("c".repeat(40)),
+    upload: async () => { uploads += 1; return { ok: true, jobId: "unexpected" }; },
+  });
+  const result = await service.runIfDue({ now: "2026-08-14T09:00:00.000Z" });
+  assert.equal(result.ran, false);
+  assert.equal(result.runtimeGuardValid, false);
+  assert.equal(result.runtimeCommit, "c".repeat(40));
+  assert.equal(result.expectedProductionCommit, RUNTIME_COMMIT);
+  assert.equal(uploads, 0);
+  assert.equal(store.history.length, 1);
+  assert.match(result.reason, /Runtime-Commit/iu);
 });
 
 test("persistent scheduler claim blocks parallel helpers and recovers an expired crash lock", async () => {

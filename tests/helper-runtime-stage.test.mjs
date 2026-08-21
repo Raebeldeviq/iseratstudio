@@ -41,8 +41,14 @@ test("stages a self-contained helper runtime without secrets, tests or working d
     sourceRoot: root,
     runtimeParent,
     runtimeName: "release-test",
+    runtimeCommit: "a".repeat(40),
+    sourceTreeClean: true,
     now: new Date("2026-08-17T08:00:00.000Z"),
   });
+  assert.equal(result.manifest.format, 2);
+  assert.equal(result.manifest.runtimeCommit, "a".repeat(40));
+  assert.equal(result.manifest.sourceTreeClean, true);
+  assert.equal(result.manifest.releaseId, "release-test");
   assert.equal(result.manifest.excludesSecretsAndWorkingData, true);
   assert.equal(result.manifest.runtimeSupportFileCount, 1);
   assert.match(await readFile(join(result.runtimePath, "local-upload-server.mjs"), "utf8"), /export/u);
@@ -79,7 +85,13 @@ test("fails closed when the required macOS Keychain sidecar is absent", async ()
   await symlink(dependencies, join(root, "node_modules"));
 
   await assert.rejects(
-    stageHelperRuntime({ sourceRoot: root, runtimeParent, runtimeName: "release-test-missing-sidecar" }),
+    stageHelperRuntime({
+      sourceRoot: root,
+      runtimeParent,
+      runtimeName: "release-test-missing-sidecar",
+      runtimeCommit: "a".repeat(40),
+      sourceTreeClean: true,
+    }),
     { code: "ENOENT" },
   );
 });

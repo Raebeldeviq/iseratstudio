@@ -145,6 +145,13 @@ export function helperRuntimeDirectory(homeDirectory = homedir()) {
 
 export async function stageHelperRuntime(options = {}) {
   const sourceRoot = resolve(String(options.sourceRoot || process.cwd()));
+  const runtimeCommit = String(options.runtimeCommit || "").trim().toLowerCase();
+  if (!/^[a-f0-9]{40}$/u.test(runtimeCommit)) {
+    throw new Error("Die Helper-Runtime benötigt einen eindeutigen 40-stelligen Git-Commit.");
+  }
+  if (options.sourceTreeClean !== true) {
+    throw new Error("Die Helper-Runtime darf ausschließlich aus einem nachweislich sauberen Git-Stand gebaut werden.");
+  }
   const runtimeParent = resolve(String(options.runtimeParent || helperRuntimeDirectory(options.homeDirectory)));
   const runtimeName = String(options.runtimeName || releaseName(options.now, options.pid));
   if (!/^release-[a-zA-Z0-9-]+$/u.test(runtimeName)) throw new Error("Ungültiger Helper-Runtime-Name.");
@@ -180,8 +187,11 @@ export async function stageHelperRuntime(options = {}) {
   await access(join(staging, "node_modules", "basic-ftp"), constants.R_OK);
   await access(join(staging, "node_modules", "jszip"), constants.R_OK);
   const manifest = {
-    format: 1,
+    format: 2,
+    releaseId: runtimeName,
     createdAt: (options.now || new Date()).toISOString(),
+    runtimeCommit,
+    sourceTreeClean: true,
     codeSha256: await codeFingerprint(sourceRoot, [...rootFiles, ...supportFiles]),
     rootModuleCount: rootFiles.length,
     runtimeSupportFileCount: supportFiles.length,

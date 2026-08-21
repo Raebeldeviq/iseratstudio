@@ -13,10 +13,11 @@ export const LISTING_ROTATION_PRODUCTION_POLICY_PATH = join(
 
 function parseArguments(argv) {
   const [command = "status", ...rest] = argv;
-  const parsed = { command, maxRunItems: "", startupCatchupMode: "" };
+  const parsed = { command, maxRunItems: "", startupCatchupMode: "", expectedRuntimeCommit: "" };
   for (let index = 0; index < rest.length; index += 1) {
     if (rest[index] === "--max-run-items") parsed.maxRunItems = String(rest[++index] || "");
     else if (rest[index] === "--startup-catchup-mode") parsed.startupCatchupMode = String(rest[++index] || "");
+    else if (rest[index] === "--expected-runtime-commit") parsed.expectedRuntimeCommit = String(rest[++index] || "");
     else throw new Error(`Unbekanntes Argument: ${rest[index]}`);
   }
   return parsed;
@@ -30,6 +31,7 @@ export async function runListingRotationProductionPolicyCli(argv, options = {}) 
   return store.save({
     maxRunItems: parsed.maxRunItems,
     startupCatchupMode: parsed.startupCatchupMode,
+    expectedRuntimeCommit: parsed.expectedRuntimeCommit,
   });
 }
 

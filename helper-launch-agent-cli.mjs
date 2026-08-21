@@ -2,12 +2,14 @@
 
 import { installHelperLaunchAgent } from "./helper-launch-agent.mjs";
 import { stageHelperRuntime } from "./helper-runtime-stage.mjs";
+import { inspectSourceGitProvenance } from "./helper-runtime-provenance.mjs";
 
 async function main() {
   if (process.argv[2] !== "install") {
     throw new Error("Verwendung: node helper-launch-agent-cli.mjs install");
   }
-  const staged = await stageHelperRuntime({ sourceRoot: process.cwd() });
+  const source = await inspectSourceGitProvenance(process.cwd());
+  const staged = await stageHelperRuntime({ sourceRoot: process.cwd(), ...source });
   const result = await installHelperLaunchAgent({ projectRoot: staged.runtimePath });
   process.stdout.write(`${JSON.stringify({ ...result, runtimeManifest: staged.manifest }, null, 2)}\n`);
 }

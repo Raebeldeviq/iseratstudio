@@ -1,5 +1,45 @@
 # Änderungsprotokoll
 
+## Unreleased · Creative-Payload- und Runtime-Provenienz-Guard – 21. August 2026
+
+### Report
+
+- Den Background-Upload so abgesichert, dass die persistierte Creative-Auswahl
+  das tatsächlich erzeugte OpenImmo-ZIP bestimmt. Haus, hausabhängige Fakten,
+  Kaufpreis, Texte, Bildsatz und führendes Hero-Asset werden unmittelbar vor
+  FTPS gegen XML und ZIP-Inhalt geprüft; `CREATIVE_PAYLOAD_MISMATCH` stoppt vor
+  Zugangsdaten- und Netzwerkzugriff.
+- Aktionsheros im Background-Pfad aktivieren `promotionImageEnabled` nur für
+  die konkret persistierte Aktion. Hausheros bleiben auf dem kuratierten
+  Hausbildpfad; ein späterer SOL-242- oder anderer Standardhaus-Fallback ist
+  bei gültiger Creative-Auswahl nicht zulässig.
+- Isolierte Helper-Runtimes erhalten ein Manifest mit sauberem Source-Commit,
+  Release-ID, Buildzeit und Code-Fingerprint. Die Produktions-Policy bindet
+  `active` und `canary` an exakt diesen erwarteten Commit. Abweichungen sperren
+  Scheduler und automatischen Upload fail-closed.
+- Runtime-Provenienz, Helper-Startzeit und Prozess-ID sind über den geschützten
+  Diagnosepfad sowie in Scheduler- und Uploadlogs nachvollziehbar. Tests decken
+  House-/Action-Hero, tatsächlichen ZIP-Inhalt, Mismatch, Runtime-Mismatch,
+  Restart-Persistenz und unveränderte Schedulerlimits ab.
+
+### Begründung
+
+Die drei realen SOL-242-Übertragungen vom 16. August 2026 liefen nachweislich
+vor dem Creative-Commit vom 17. August. Persistierte Auswahl und Runtime-Commit
+fehlten damals in den Laufzeitdaten. Der neue Vertrag beseitigt beide blinden
+Flecken: Die Auswahl wird vor dem Upload fixiert und der reale Payload wird
+gegen sie verifiziert; zugleich kann unbekannter oder älterer Helper-Code keine
+automatische Rotation mehr ausführen.
+
+### Hürden und Risiken
+
+- Eine neue Runtime kann erst produktiv werden, nachdem ihr finaler Git-Commit
+  ausdrücklich in der Produktions-Policy hinterlegt wurde. Fehlende, alte oder
+  ungültige Policy-Dateien bleiben bewusst vollständig gesperrt.
+- Der Guard prüft den erzeugten Uploadinhalt, ersetzt aber nicht die weiterhin
+  erforderliche positive Immoprofessional-Importbestätigung. Production-DELETE
+  und seine bestätigten Sicherheitsverträge wurden nicht verändert.
+
 ## Unreleased · Einmalige Pre-FTPS-Delete-Reconciliation – 20. August 2026
 
 ### Report

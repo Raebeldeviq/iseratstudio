@@ -14,6 +14,7 @@ import {
 } from "./listing-scheduler.mjs";
 import { normalizeWorkflowStatus, WORKFLOW_STATUS } from "./workflow-status.mjs";
 import { normalizeListingRotationOperatingMode } from "./listing-rotation-operating-mode.mjs";
+import { verifyProductionRuntime } from "./helper-runtime-provenance.mjs";
 
 function uid() {
   return globalThis.crypto.randomUUID();
@@ -105,6 +106,7 @@ async function loadProductionPolicy(store) {
       valid: false,
       maxRunItems: 0,
       startupCatchupMode: "detect-only",
+      expectedRuntimeCommit: "",
       fallbackReason: "Produktions-Rollout-Policy fehlt; active ist fail-closed gesperrt.",
     };
   }
@@ -115,6 +117,7 @@ async function loadProductionPolicy(store) {
       valid: false,
       maxRunItems: 0,
       startupCatchupMode: "detect-only",
+      expectedRuntimeCommit: "",
       fallbackReason: "Produktions-Rollout-Policy konnte nicht gelesen werden; active ist fail-closed gesperrt.",
     };
   }
@@ -346,12 +349,15 @@ export function createListingRotationSchedulerService(options) {
     const operatingMode = operatingPolicy.mode;
     const operatingModeFallbackReason = operatingPolicy.fallbackReason || "";
     const productionPolicy = await loadProductionPolicy(options.productionPolicyStore);
-    const productionPolicyBlocked = operatingMode === "active" && (
+    const runtimeGuard = verifyProductionRuntime(options.runtimeProvenance, productionPolicy);
+    const productiveMode = operatingMode === "active" || operatingMode === "canary";
+    const productionPolicyBlocked = productiveMode && (
       productionPolicy.valid !== true
       || !Number.isInteger(productionPolicy.maxRunItems)
       || productionPolicy.maxRunItems < 1
       || productionPolicy.maxRunItems > 3
     );
+    const runtimeGuardBlocked = productiveMode && runtimeGuard.valid !== true;
     const activeRunLimit = operatingMode === "active" && productionPolicy.valid === true
       ? Math.max(0, Math.trunc(Number(productionPolicy.maxRunItems)))
       : Number.POSITIVE_INFINITY;
@@ -376,6 +382,7 @@ export function createListingRotationSchedulerService(options) {
       maxRunItems: Number.isFinite(activeRunLimit) ? activeRunLimit : null,
       startupCatchupMode: productionPolicy.startupCatchupMode || "detect-only",
       canaryListingIds: operatingMode === "canary" ? operatingPolicy.canaryListingIds : [],
+      ...runtimeGuard,
     });
     try {
       await lease.refresh?.({ now: startedAt });
@@ -414,7 +421,7 @@ export function createListingRotationSchedulerService(options) {
         }
         const pendingLimitExceeded = operatingMode === "active" && pending.length > activeRunLimit;
         const blockingIssues = pending.length ? hardSchedulerIssues(windowIssues) : windowIssues;
-        const selection = operatingMode === "off" || productionPolicyBlocked || pendingLimitExceeded || blockingIssues.length || windowIssues.length
+        const selection = operatingMode === "off" || productionPolicyBlocked || runtimeGuardBlocked || pendingLimitExceeded || blockingIssues.length || windowIssues.length
           ? { selections: [], skipped: [], issues: windowIssues, scheduler }
           : selectSchedulerListings({ ...state, scheduler }, startedAt, {
               ignoreTimeWindow: input.ignoreTimeWindow === true,
@@ -459,6 +466,8 @@ export function createListingRotationSchedulerService(options) {
             || "Globaler Betriebsmodus off: keine Rotationskopie und kein FTPS-Auftrag zulässig.";
         } else if (productionPolicyBlocked) {
           abortReason = productionPolicy.fallbackReason || "Produktions-Rollout-Policy ist ungültig; active ist fail-closed gesperrt.";
+        } else if (runtimeGuardBlocked) {
+          abortReason = runtimeGuard.fallbackReason;
         } else if (pendingLimitExceeded) {
           abortReason = `Es existieren ${pending.length} fortzusetzende Rotationen; das Produktionslimit maxRunItems=${activeRunLimit} wird fail-closed nicht überschritten.`;
         } else if (blockingIssues.length) abortReason = blockingIssues.join(" · ");
@@ -490,6 +499,10 @@ export function createListingRotationSchedulerService(options) {
           operatingModeFallbackReason,
           productionPolicyValid: productionPolicy.valid === true,
           productionPolicyFallbackReason: productionPolicy.fallbackReason || "",
+          runtimeCommit: runtimeGuard.runtimeCommit,
+          expectedProductionCommit: runtimeGuard.expectedProductionCommit,
+          runtimeRelease: runtimeGuard.runtimeRelease,
+          runtimeGuardValid: runtimeGuard.valid,
           maxRunItems: Number.isFinite(activeRunLimit) ? activeRunLimit : null,
           startupCatchupMode: productionPolicy.startupCatchupMode || "detect-only",
           mode: scheduler.settings.mode,
@@ -729,13 +742,21 @@ export function createListingRotationSchedulerService(options) {
         ...(await inspect({ ...input, now: at, trigger: input.trigger || "periodic-off", writeLog: false })),
       };
     }
-    if (operatingPolicy.mode === "active") {
+    if (operatingPolicy.mode === "active" || operatingPolicy.mode === "canary") {
       const productionPolicy = await loadProductionPolicy(options.productionPolicyStore);
       if (productionPolicy.valid !== true) {
         return {
           ran: false,
           reason: productionPolicy.fallbackReason || "production-policy-invalid",
           ...(await inspect({ ...input, now: at, trigger: input.trigger || "periodic-policy-blocked", writeLog: false })),
+        };
+      }
+      const runtimeGuard = verifyProductionRuntime(options.runtimeProvenance, productionPolicy);
+      if (!runtimeGuard.valid) {
+        return {
+          ran: false,
+          reason: runtimeGuard.fallbackReason,
+          ...(await inspect({ ...input, now: at, trigger: input.trigger || "periodic-runtime-blocked", writeLog: false })),
         };
       }
     }
@@ -755,6 +776,7 @@ export function createListingRotationSchedulerService(options) {
     if (!snapshot?.stored || !snapshot.state) return { inspected: false, reason: "catalog-not-stored" };
     const operatingPolicy = await loadOperatingMode(options.operatingModeStore);
     const productionPolicy = await loadProductionPolicy(options.productionPolicyStore);
+    const runtimeGuard = verifyProductionRuntime(options.runtimeProvenance, productionPolicy);
     const scheduler = normalizeListingScheduler(snapshot.state.scheduler, { now: at });
     const due = schedulerDueListings({ ...snapshot.state, scheduler }, at);
     const pending = pendingRotationCopies(snapshot.state);
@@ -767,6 +789,10 @@ export function createListingRotationSchedulerService(options) {
       productionPolicyValid: productionPolicy.valid === true,
       maxRunItems: productionPolicy.valid === true ? productionPolicy.maxRunItems : 0,
       startupCatchupMode: productionPolicy.startupCatchupMode || "detect-only",
+      runtimeCommit: runtimeGuard.runtimeCommit,
+      expectedProductionCommit: runtimeGuard.expectedProductionCommit,
+      runtimeRelease: runtimeGuard.runtimeRelease,
+      runtimeGuardValid: runtimeGuard.valid,
       dueCount: due.length,
       pendingCount: pending.length,
       schedulerIssues: schedulerWindowBlockReasons(scheduler, at),

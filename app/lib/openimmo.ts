@@ -1,6 +1,6 @@
 import JSZip from "jszip";
 import { APP_VERSION } from "./app-version.mjs";
-import { imageSequenceIssues, orderHouseImages } from "../../image-sequence.mjs";
+import { imageSequenceIssues, orderHouseImages, parseHouseVariant } from "../../image-sequence.mjs";
 import {
   enforceListingCopy,
   fillMissingProjectingDefaults,
@@ -28,6 +28,34 @@ export type PackageInput = {
   promotionImageEnabled?: boolean;
   promotionImagesByListingId?: Record<string, HouseImage>;
   heroImageIdsByListingId?: Record<string, string>;
+};
+
+export type CreativePayloadManifestEntry = {
+  listingId: string;
+  externalId: string;
+  houseId: string;
+  houseName: string;
+  houseVersion: string;
+  houseType: string;
+  housePrice: number;
+  listingPrice: number;
+  livingArea: number;
+  rooms: number;
+  bedrooms: number;
+  bathrooms: number;
+  floors: number;
+  constructionYear: number;
+  energyDemand: number;
+  energyClass: string;
+  heatingType: string;
+  energySource: string;
+  architecture: string;
+  equipmentHighlights: string;
+  heroType: "house" | "action";
+  heroAssetId: string;
+  payloadImageAssetIds: string[];
+  firstImageFilename: string;
+  promotionImageEnabled: boolean;
 };
 
 const SUPPORTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
@@ -162,6 +190,44 @@ function imageFilename(
   return `${slug(listing.externalId)}-${String(index + 1).padStart(2, "0")}-${slug(image.caption || image.name) || "bild"}.${extension(image)}`;
 }
 
+function creativePayloadManifest(input: PackageInput): CreativePayloadManifestEntry[] {
+  return input.listings.map((listing) => {
+    const house = input.houses.find((item) => item.id === listing.templateId);
+    if (!house) throw new Error(`Haustyp ${listing.templateName} fehlt.`);
+    const images = listingImages(input, house, listing);
+    const hero = images[0];
+    if (!hero) throw new Error(`${listing.templateName}: Das OpenImmo-Paket besitzt kein führendes Bild.`);
+    const action = hero.role === "promotion";
+    return {
+      listingId: listing.id,
+      externalId: listing.externalId,
+      houseId: house.id,
+      houseName: house.name,
+      houseVersion: String(parseHouseVariant(house.name)?.version || ""),
+      houseType: house.houseType,
+      housePrice: house.housePrice,
+      listingPrice: listing.price,
+      livingArea: house.livingArea,
+      rooms: house.rooms,
+      bedrooms: house.bedrooms,
+      bathrooms: house.bathrooms,
+      floors: house.floors,
+      constructionYear: house.constructionYear,
+      energyDemand: house.energyDemand,
+      energyClass: house.energyClass,
+      heatingType: house.heatingType,
+      energySource: house.energySource,
+      architecture: house.architecture,
+      equipmentHighlights: house.equipmentHighlights,
+      heroType: action ? "action" : "house",
+      heroAssetId: hero.id,
+      payloadImageAssetIds: images.map((image) => image.id),
+      firstImageFilename: imageFilename(listing, hero, 0),
+      promotionImageEnabled: action && input.promotionImageEnabled === true,
+    };
+  });
+}
+
 function imageXml(
   listing: GeneratedListing,
   images: HouseImage[],
@@ -271,6 +337,8 @@ function listingXml(
           <sonstige_angaben>${cdata(texts.other)}</sonstige_angaben>
           <user_defined_simplefield feldname="Sachlicher Hinweis zur Bebaubarkeit">${cdata(FACTUAL_BUILDABILITY_NOTE)}</user_defined_simplefield>
           <user_defined_simplefield feldname="Energieklasse">${cdata(projecting.energyClass)}</user_defined_simplefield>
+          <user_defined_simplefield feldname="Living Haus Modell-ID">${cdata(house.id)}</user_defined_simplefield>
+          <user_defined_simplefield feldname="Living Haus Modell">${cdata(house.name)}</user_defined_simplefield>
           <user_defined_simplefield feldname="Anmerkung">${cdata(FIXED_ANNOTATION_TEXT)}</user_defined_simplefield>
           <user_defined_simplefield feldname="Allgemeine Geschäftsbedingungen">${cdata(FIXED_TERMS_TEXT)}</user_defined_simplefield>
           <user_defined_simplefield feldname="Freier Textblock für Empfehlungen">${cdata(FIXED_RECOMMENDATION_TEXT)}</user_defined_simplefield>
@@ -329,6 +397,8 @@ export async function buildImportPackage(input: PackageInput): Promise<{
   blob: Blob;
   filename: string;
   xmlText: string;
+  xmlFilename: string;
+  creativePayloadManifest: CreativePayloadManifestEntry[];
 }> {
   const zip = new JSZip();
   const xmlText = buildOpenImmoXml(input);
@@ -338,6 +408,7 @@ export async function buildImportPackage(input: PackageInput): Promise<{
     : `${input.listings.length}-inserate`;
   const packageBaseName = `${packageSlug || "fabian-pascal-import"}-${listingSuffix}`;
   const xmlFilename = `${packageBaseName}.xml`;
+  const manifest = creativePayloadManifest(input);
   zip.file(xmlFilename, xmlText);
 
   input.listings.forEach((listing) => {
@@ -353,5 +424,7 @@ export async function buildImportPackage(input: PackageInput): Promise<{
     blob,
     filename: `${packageBaseName}-${new Date().toISOString().slice(0, 10)}.zip`,
     xmlText,
+    xmlFilename,
+    creativePayloadManifest: manifest,
   };
 }

@@ -10,7 +10,9 @@ import { createCatalogStateStore } from "./catalog-state-store.mjs";
 import { loadCredentialVault } from "./credential-vault.mjs";
 import { buildImportPackage } from "./app/lib/openimmo.ts";
 import { createListingRotationOperatingModeStore } from "./listing-rotation-operating-mode.mjs";
+import { createListingRotationProductionPolicyStore } from "./listing-rotation-production-policy.mjs";
 import { createListingRotationSchedulerService } from "./listing-rotation-scheduler-service.mjs";
+import { loadHelperRuntimeProvenance } from "./helper-runtime-provenance.mjs";
 import { createPersistentLease } from "./persistent-lease.mjs";
 import { APPLICATION_DATA_DIRECTORY } from "./platform-paths.mjs";
 import {
@@ -34,6 +36,7 @@ export const LIVE_CANARY_ROTATION_SOURCES = Object.freeze(Object.fromEntries(
 ));
 
 const MODE_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-rotation-mode.json");
+const PRODUCTION_POLICY_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-rotation-production-policy.json");
 const SCHEDULER_LOCK_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-scheduler.lock");
 const SCHEDULER_LOG_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-scheduler.log");
 const UPLOAD_LOG_PATH = join(APPLICATION_DATA_DIRECTORY, "upload.log");
@@ -184,8 +187,10 @@ export function createLiveCanaryRotationUpload(options) {
   };
 }
 
-function defaultRuntime(contract) {
+async function defaultRuntime(contract) {
   const modeStore = createListingRotationOperatingModeStore(MODE_PATH);
+  const productionPolicyStore = createListingRotationProductionPolicyStore(PRODUCTION_POLICY_PATH);
+  const runtimeProvenance = await loadHelperRuntimeProvenance();
   const uploadLedger = createUploadJobLedger(UPLOAD_LEDGER_PATH);
   const dailyGuard = createPlotDailyUploadGuard(DAILY_GUARD_PATH);
   const writeUploadLog = createStructuredFileLogger(UPLOAD_LOG_PATH, { jobType: "immoprofessional-upload" });
@@ -193,6 +198,8 @@ function defaultRuntime(contract) {
     store: createCatalogStateStore(),
     lease: createPersistentLease(SCHEDULER_LOCK_PATH),
     operatingModeStore: modeStore,
+    productionPolicyStore,
+    runtimeProvenance,
     upload: createLiveCanaryRotationUpload({ contract, modeStore, uploadLedger, dailyGuard, writeLog: writeUploadLog }),
     writeRunLog: createStructuredFileLogger(SCHEDULER_LOG_PATH, { jobType: "listing-rotation-scheduler" }),
   });
@@ -202,7 +209,7 @@ function defaultRuntime(contract) {
 export async function runLiveCanaryRotationOnce(input, options = {}) {
   const contract = assertAuthorizedSource(input?.sourceExternalId);
   if (input?.ignoreTimeWindowOnce !== true) throw liveError("LIVE_CANARY_TIME_OVERRIDE_REQUIRED", "Der Einzel-Canary benötigt den ausdrücklich flüchtigen Zeitfenster-Override.");
-  const runtime = options.runtime || defaultRuntime(contract);
+  const runtime = options.runtime || await defaultRuntime(contract);
   try {
     assertExactCanaryMode(await runtime.modeStore.load(), contract);
     const result = await runtime.service.run({

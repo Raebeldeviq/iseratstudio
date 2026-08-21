@@ -44,6 +44,12 @@ import { createPlotSyncService } from "./plot-sync-service.mjs";
 import { buildImportPackage } from "./app/lib/openimmo.ts";
 import { createUploadJobId } from "./batch-upload.mjs";
 import { eligiblePromotionHeroImages } from "./listing-creative-selection.mjs";
+import { assertCreativePayload } from "./listing-creative-payload-guard.mjs";
+import {
+  assertProductionRuntime,
+  loadHelperRuntimeProvenance,
+  verifyProductionRuntime,
+} from "./helper-runtime-provenance.mjs";
 import { createCatalogStateStore } from "./catalog-state-store.mjs";
 import { createListingRotationSchedulerService } from "./listing-rotation-scheduler-service.mjs";
 import { createPersistentLease } from "./persistent-lease.mjs";
@@ -85,6 +91,8 @@ const PRODUCTION_DELETE_MODE_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-ro
 const PRODUCTION_DELETE_LEDGER_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-rotation-production-delete-jobs.json");
 const PRODUCTION_DELETE_LOG_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-rotation-production-delete.log");
 const SESSION_TOKEN = String(process.env.FPI_SESSION_TOKEN || randomBytes(32).toString("hex"));
+const HELPER_STARTED_AT = new Date().toISOString();
+const RUNTIME_PROVENANCE = await loadHelperRuntimeProvenance();
 const allowedOrigins = new Set([
   "http://localhost:43181",
   "http://127.0.0.1:43181",
@@ -202,7 +210,13 @@ async function logUpload(event, details = {}) {
       : event === "transferred"
         ? WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT
         : WORKFLOW_STATUS.PROCESSING;
-    await writeUploadLog(event, { status, ...details });
+    await writeUploadLog(event, {
+      status,
+      runtimeCommit: RUNTIME_PROVENANCE.runtimeCommit,
+      runtimeRelease: RUNTIME_PROVENANCE.runtimeRelease,
+      helperStartedAt: HELPER_STARTED_AT,
+      ...details,
+    });
   } catch {
     // Ein Diagnoseprotokoll darf den eigentlichen Upload nicht blockieren.
   }
@@ -297,6 +311,8 @@ async function persistedUploadContext(projectId, listingId) {
 }
 
 async function automaticRotationUpload({ state, project, listing, runId }) {
+  const productionPolicy = await listingRotationProductionPolicyStore.load();
+  const runtimeGuard = assertProductionRuntime(RUNTIME_PROVENANCE, productionPolicy);
   const jobId = createUploadJobId(project, listing);
   const uploadJob = {
     jobId,
@@ -322,11 +338,6 @@ async function automaticRotationUpload({ state, project, listing, runId }) {
   let dailyClaim;
   try {
     dailyClaim = await claimPlotDailyUpload({ state, project, listing, uploadJob });
-    const vault = await credentialVault();
-    const ftp = vault.credentials;
-    if (!ftp.ftpHost || !ftp.ftpUser || !ftp.ftpPassword) {
-      throw new Error("Der FTP-Zugang ist unvollständig.");
-    }
     const sourceHouse = state.houses.find((house) => house.id === listing.templateId);
     if (!sourceHouse) throw new Error("Der Haustyp der Rotationskopie ist nicht mehr vorhanden.");
     const hydratedHouse = {
@@ -348,7 +359,7 @@ async function automaticRotationUpload({ state, project, listing, runId }) {
       listings: [listing],
       houses: [hydratedHouse],
       provider: state.provider,
-      promotionImageEnabled: false,
+      promotionImageEnabled: listing.heroCreativeType === "action",
       promotionImagesByListingId: hydratedPromotionImage
         ? { [listing.id]: hydratedPromotionImage }
         : {},
@@ -357,6 +368,27 @@ async function automaticRotationUpload({ state, project, listing, runId }) {
         : {},
     });
     const archive = Buffer.from(await packageResult.blob.arrayBuffer());
+    const creativeGuard = await assertCreativePayload({
+      listing,
+      house: hydratedHouse,
+      project,
+      promotionImage: hydratedPromotionImage,
+      packageResult,
+      archive,
+    });
+    await logUpload("creative-payload-verified", {
+      ...uploadJob,
+      runId,
+      externalId: listing.externalId,
+      status: WORKFLOW_STATUS.PROCESSING,
+      ...runtimeGuard,
+      ...creativeGuard.diagnostics,
+    });
+    const vault = await credentialVault();
+    const ftp = vault.credentials;
+    if (!ftp.ftpHost || !ftp.ftpUser || !ftp.ftpPassword) {
+      throw new Error("Der FTP-Zugang ist unvollständig.");
+    }
     const remotePath = String(ftp.ftpPath || "/").trim();
     await logUpload("started", {
       ...uploadJob,
@@ -400,6 +432,16 @@ async function automaticRotationUpload({ state, project, listing, runId }) {
     });
     return { ok: true, idempotent: false, jobId, filename: packageResult.filename };
   } catch (error) {
+    if (error?.code === "CREATIVE_PAYLOAD_MISMATCH") {
+      await logUpload("creative-payload-blocked", {
+        ...uploadJob,
+        runId,
+        externalId: listing.externalId,
+        status: WORKFLOW_STATUS.FAILED,
+        errorCode: error.code,
+        ...(error.diagnostics || {}),
+      });
+    }
     if (dailyClaim) {
       await plotDailyUploadGuard.fail({
         ...dailyClaim,
@@ -430,8 +472,14 @@ const listingRotationSchedulerService = createListingRotationSchedulerService({
   lease: listingSchedulerLease,
   operatingModeStore: listingRotationOperatingModeStore,
   productionPolicyStore: listingRotationProductionPolicyStore,
+  runtimeProvenance: RUNTIME_PROVENANCE,
   upload: automaticRotationUpload,
-  writeRunLog: (event, details) => writeListingSchedulerLog(event, details),
+  writeRunLog: (event, details) => writeListingSchedulerLog(event, {
+    runtimeCommit: RUNTIME_PROVENANCE.runtimeCommit,
+    runtimeRelease: RUNTIME_PROVENANCE.runtimeRelease,
+    helperStartedAt: HELPER_STARTED_AT,
+    ...details,
+  }),
 });
 
 async function automaticProductionDeleteUpload({ archive, filename }) {
@@ -499,6 +547,7 @@ const server = createServer(async (request, response) => {
   }
 
   const isHealth = request.method === "GET" && pathname === "/health";
+  const isRuntimeProvenance = request.method === "GET" && pathname === "/runtime-provenance";
   const isUpload = request.method === "POST" && pathname === "/upload";
   const isBinaryUpload = request.method === "POST" && pathname === "/upload-binary";
   const isLocalSave = request.method === "POST" && pathname === "/save-package";
@@ -526,7 +575,7 @@ const server = createServer(async (request, response) => {
   const isPlotSyncLog = request.method === "GET" && pathname === "/plot-sync/log";
   const isMailRuntimeProbe = request.method === "POST" && pathname === "/mail-runtime/probe";
   const isExactProductionDelete = request.method === "POST" && pathname === EXACT_PRODUCTION_DELETE_PATH;
-  if (!isHealth && !isUpload && !isBinaryUpload && !isLocalSave && !isTextGeneration && !isImageCaptionGeneration && !isOpenAiKeyValidation && !isCredentialLoad && !isCredentialSave && !isCatalogLoad && !isCatalogSave && !isCatalogV2Start && !isCatalogV2ImageSave && !isCatalogV2Commit && !isCatalogV2ManifestLoad && !isCatalogV2ImageLoad && !isMediaLibraryList && !isMediaLibrarySequence && !isMediaLibraryImage && !isPlotExposeAnalyze && !isPlotExposeCommit && !isPlotExposeLoad && !isPlotExposeArchive && !isPlotSyncStatus && !isPlotSyncRun && !isPlotSyncLog && !isMailRuntimeProbe && !isExactProductionDelete) {
+  if (!isHealth && !isRuntimeProvenance && !isUpload && !isBinaryUpload && !isLocalSave && !isTextGeneration && !isImageCaptionGeneration && !isOpenAiKeyValidation && !isCredentialLoad && !isCredentialSave && !isCatalogLoad && !isCatalogSave && !isCatalogV2Start && !isCatalogV2ImageSave && !isCatalogV2Commit && !isCatalogV2ManifestLoad && !isCatalogV2ImageLoad && !isMediaLibraryList && !isMediaLibrarySequence && !isMediaLibraryImage && !isPlotExposeAnalyze && !isPlotExposeCommit && !isPlotExposeLoad && !isPlotExposeArchive && !isPlotSyncStatus && !isPlotSyncRun && !isPlotSyncLog && !isMailRuntimeProbe && !isExactProductionDelete) {
     send(response, 404, { ok: false, message: "Nicht gefunden." }, origin);
     return;
   }
@@ -545,7 +594,26 @@ const server = createServer(async (request, response) => {
   }
 
   if (request.method === "GET" && pathname === "/health") {
-    send(response, 200, { ok: true, service: "fabian-pascal-helper", platform: process.platform }, origin);
+    send(response, 200, {
+      ok: true,
+      service: "fabian-pascal-helper",
+      platform: process.platform,
+      runtimeCommit: RUNTIME_PROVENANCE.runtimeCommit,
+      runtimeRelease: RUNTIME_PROVENANCE.runtimeRelease,
+      helperStartedAt: HELPER_STARTED_AT,
+    }, origin);
+    return;
+  }
+
+  if (isRuntimeProvenance) {
+    const productionPolicy = await listingRotationProductionPolicyStore.load();
+    send(response, 200, {
+      ok: true,
+      ...RUNTIME_PROVENANCE,
+      helperStartedAt: HELPER_STARTED_AT,
+      processId: process.pid,
+      productionGuard: verifyProductionRuntime(RUNTIME_PROVENANCE, productionPolicy),
+    }, origin);
     return;
   }
 

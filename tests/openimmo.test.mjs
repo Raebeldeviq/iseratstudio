@@ -143,6 +143,34 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
   assert.ok(perListingXml.indexOf("Aktuelles Angebot für dein neues Zuhause") < perListingXml.indexOf("FPI-TEST-2"));
   const packageResult = await buildImportPackage(input);
   assert.match(packageResult.filename, /testprojekt-testhaus-fpi-test-1-\d{4}-\d{2}-\d{2}\.zip/);
+  assert.match(packageResult.xmlFilename, /\.xml$/u);
+  assert.deepEqual(packageResult.creativePayloadManifest, [{
+    listingId: "listing-1",
+    externalId: "FPI-TEST-1",
+    houseId: "house-1",
+    houseName: "Testhaus",
+    houseVersion: "",
+    houseType: "Einfamilienhaus",
+    housePrice: 400000,
+    listingPrice: 500000,
+    livingArea: 150,
+    rooms: 5,
+    bedrooms: 3,
+    bathrooms: 2,
+    floors: 2,
+    constructionYear: 2027,
+    energyDemand: 18,
+    energyClass: "A+",
+    heatingType: "Wärmepumpe",
+    energySource: "Strom",
+    architecture: "",
+    equipmentHighlights: "",
+    heroType: "action",
+    heroAssetId: "promotion-image-1",
+    payloadImageAssetIds: ["promotion-image-1", "image-1", "image-2", "image-3", "image-4"],
+    firstImageFilename: "fpi-test-1-01-aktuelles-angebot-fur-dein-neues-zuhause.jpg",
+    promotionImageEnabled: true,
+  }]);
   assert.deepEqual(validateImportPackage(input), []);
 });
 

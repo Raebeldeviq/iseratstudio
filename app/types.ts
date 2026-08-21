@@ -265,8 +265,10 @@ export type GeneratedListing = {
     plotId: string;
     sourceListingId: string;
     houseId: string;
+    houseName: string;
     heroType: "house" | "action";
     heroImageId: string;
+    heroAssetId: string;
     promotionImageId: string;
     selectedAt: string;
     houseReason: string;

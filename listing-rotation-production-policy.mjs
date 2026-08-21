@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 
-export const LISTING_ROTATION_PRODUCTION_POLICY_FORMAT = 1;
+export const LISTING_ROTATION_PRODUCTION_POLICY_FORMAT = 2;
 export const LISTING_ROTATION_PRODUCTION_MAX_RUN_ITEMS = 3;
 export const LISTING_ROTATION_STARTUP_CATCHUP_MODES = Object.freeze(["detect-only", "guarded"]);
 
@@ -11,6 +11,7 @@ function failClosed(reason, updatedAt = "") {
     format: LISTING_ROTATION_PRODUCTION_POLICY_FORMAT,
     maxRunItems: 0,
     startupCatchupMode: "detect-only",
+    expectedRuntimeCommit: "",
     updatedAt: String(updatedAt || ""),
     valid: false,
     fallbackReason: reason,
@@ -26,16 +27,21 @@ export function normalizeListingRotationProductionPolicy(value) {
   }
   const maxRunItems = Math.trunc(Number(value.maxRunItems));
   const startupCatchupMode = String(value.startupCatchupMode || "").trim();
+  const expectedRuntimeCommit = String(value.expectedRuntimeCommit || "").trim().toLowerCase();
   if (!Number.isInteger(maxRunItems) || maxRunItems < 1 || maxRunItems > LISTING_ROTATION_PRODUCTION_MAX_RUN_ITEMS) {
     return failClosed(`Produktionslimit muss zwischen 1 und ${LISTING_ROTATION_PRODUCTION_MAX_RUN_ITEMS} liegen; active ist fail-closed gesperrt.`, value.updatedAt);
   }
   if (!LISTING_ROTATION_STARTUP_CATCHUP_MODES.includes(startupCatchupMode)) {
     return failClosed("Startup-Catch-up-Modus ist unbekannt; active ist fail-closed gesperrt.", value.updatedAt);
   }
+  if (!/^[a-f0-9]{40}$/u.test(expectedRuntimeCommit)) {
+    return failClosed("Der erwartete Produktions-Runtime-Commit fehlt oder ist ungültig; active ist fail-closed gesperrt.", value.updatedAt);
+  }
   return {
     format: LISTING_ROTATION_PRODUCTION_POLICY_FORMAT,
     maxRunItems,
     startupCatchupMode,
+    expectedRuntimeCommit,
     updatedAt: String(value.updatedAt || ""),
     valid: true,
     fallbackReason: "",
@@ -75,6 +81,7 @@ export function createListingRotationProductionPolicyStore(path, options = {}) {
         format: LISTING_ROTATION_PRODUCTION_POLICY_FORMAT,
         maxRunItems: Math.trunc(Number(input?.maxRunItems)),
         startupCatchupMode: String(input?.startupCatchupMode || "").trim(),
+        expectedRuntimeCommit: String(input?.expectedRuntimeCommit || "").trim().toLowerCase(),
         updatedAt: String(input?.updatedAt || now()),
       };
       const normalized = normalizeListingRotationProductionPolicy(config);

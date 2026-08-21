@@ -300,6 +300,17 @@ Importbericht schreibt Haus- und Aktionsbildnutzung genau einmal in die
 bestehenden Statistiken zurück. Ältere Rotationskopien bleiben ohne Migration
 als Historie auswertbar.
 
+Unmittelbar vor jedem automatischen FTPS-Transfer wird das tatsächlich erzeugte
+ZIP erneut geöffnet. Der Helper vergleicht dessen OpenImmo-XML und erstes
+Bild bytegenau mit der persistierten Creative-Auswahl. Geprüft werden unter
+anderem Haus-ID und -name, Version, Haus- und Kaufpreis, Flächen, Zimmer,
+Energie- und Ausstattungsdaten, der vollständige Bildsatz, Hero-Typ und
+Hero-Asset sowie die aus der Rotationskopie exportierten Texte. Ein Aktionshero
+ist nur gültig, wenn `promotionImageEnabled` für genau diesen Background-Payload
+aktiv ist. Jede Abweichung endet vor dem Laden der Zugangsdaten mit
+`CREATIVE_PAYLOAD_MISMATCH`; es gibt keinen stillen Standardhaus- oder
+SOL-242-Fallback.
+
 Die nächsten zehn oder zwanzig fälligen Kandidaten lassen sich ohne
 Katalogmutation, Helperstart oder Upload prüfen:
 
@@ -402,11 +413,18 @@ Helper nicht und führt selbst weder Rotation noch FTPS-Transfer aus.
 höchstens drei Source-/Replacement-Lifecycles je Schedulerlauf. Fehlt diese
 Datei, ist sie beschädigt, liegt `maxRunItems` außerhalb `1..3` oder ist der
 Startup-Modus unbekannt, bleibt `active` fail-closed ohne Rotation und Upload.
+Die Policy bindet produktive Mutationen außerdem an einen exakten 40-stelligen
+Git-Commit. Die isolierte Helper-Runtime darf nur aus einem sauberen Git-Stand
+gebaut werden und speichert Commit, Release-ID, Buildzeit und Code-Fingerprint
+in einem Manifest. Laufender und erwarteter Commit müssen identisch sein;
+andernfalls werden Rotation und Upload mit
+`PRODUCTION_RUNTIME_COMMIT_MISMATCH` gesperrt.
 
 ```bash
 node listing-rotation-production-policy-cli.mjs status
-node listing-rotation-production-policy-cli.mjs set --max-run-items 3 --startup-catchup-mode detect-only
-node listing-rotation-production-policy-cli.mjs set --max-run-items 3 --startup-catchup-mode guarded
+node listing-rotation-production-policy-cli.mjs set --max-run-items 3 --startup-catchup-mode detect-only --expected-runtime-commit <40-STELLIGER-GIT-COMMIT>
+node listing-rotation-production-policy-cli.mjs set --max-run-items 3 --startup-catchup-mode guarded --expected-runtime-commit <40-STELLIGER-GIT-COMMIT>
+node helper-runtime-provenance-cli.mjs status
 ```
 
 `detect-only` ist der sichere Release- und Erststartmodus. `guarded` verwendet
@@ -415,6 +433,13 @@ Zeitfenster, globaler Mindestabstand, Tageslimit, maximal drei Inserate,
 unterschiedliche Grundstücke und der persistente Daily-Plot-Guard bleiben
 wirksam. `selectedPlotIds` und explizite Listing-IDs sind in `active` keine
 Scheduler-Eingabe.
+
+Der sessiongeschützte Helper-Endpunkt `/runtime-provenance` und die Health-
+Antwort zeigen zusätzlich Runtime-Commit, Release und Helper-Startzeit. Jeder
+Scheduler- und automatische Uploadlog enthält diese Runtime-Provenienz; die
+strukturierten Logs ergänzen stets die Prozess-ID. Damit lässt sich die Kette
+`Runtime → Rotation → persistierte Creative-Auswahl → OpenImmo-Payload`
+vollständig rekonstruieren, ohne Zugangsdaten zu protokollieren.
 
 ### Immoprofessional-Importbestätigung aus dem serverseitigen Berichtordner
 
