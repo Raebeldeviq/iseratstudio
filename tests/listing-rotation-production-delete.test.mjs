@@ -18,11 +18,13 @@ import {
   PRODUCTION_DELETE_STATUS,
   resolveProductionDeleteEligibility,
 } from "../listing-rotation-production-delete.mjs";
+import { createProductionBatchOverrideStore } from "../production-batch-override.mjs";
 import { WORKFLOW_STATUS } from "../workflow-status.mjs";
 
 const NOW = "2026-08-14T12:00:00.000Z";
 const SOURCE_EXTERNAL_ID = "30460-654321";
 const REPLACEMENT_EXTERNAL_ID = "30460-654322";
+const RUNTIME_COMMIT = "a".repeat(40);
 
 function ids() {
   let value = 0;
@@ -139,6 +141,62 @@ function productionStateWithSecondPair() {
   state.projects.push(secondState.projects[0]);
   state.importReports.push(secondState.importReports[0]);
   return state;
+}
+
+function productionStateWithPairs(count, options = {}) {
+  const projects = [];
+  const importReports = [];
+  for (let index = 0; index < count; index += 1) {
+    const number = index + 1;
+    const sourceExternalId = `30460-${String(100_000 + number * 2).padStart(6, "0")}`;
+    const replacementExternalId = `30460-${String(100_001 + number * 2).padStart(6, "0")}`;
+    const schedulerRunId = options.schedulerRunId || `scheduler-run-${number}`;
+    const item = JSON.parse(JSON.stringify(productionState())
+      .replaceAll("project-1", `project-${number}`)
+      .replaceAll("plot-1", `plot-${number}`)
+      .replaceAll("source-listing", `source-listing-${number}`)
+      .replaceAll("replacement-listing", `replacement-listing-${number}`)
+      .replaceAll("report-1", `report-${number}`)
+      .replaceAll("scheduler-run-1", schedulerRunId)
+      .replaceAll(SOURCE_EXTERNAL_ID, sourceExternalId)
+      .replaceAll(REPLACEMENT_EXTERNAL_ID, replacementExternalId));
+    if (options.batchOverrideId) {
+      Object.assign(item.projects[0].listings[1].productionLifecycle, {
+        batchOverrideId: options.batchOverrideId,
+        batchOverrideMaxRunItems: options.batchOverrideMaxRunItems,
+        runtimeCommit: options.runtimeCommit,
+      });
+    }
+    projects.push(item.projects[0]);
+    importReports.push(item.importReports[0]);
+  }
+  const state = productionState();
+  state.projects = projects;
+  state.importReports = importReports;
+  return state;
+}
+
+async function consumedBatchOverride(directory, maxRunItems = 25, schedulerRunId = "scheduler-batch-25") {
+  let id = 0;
+  const store = createProductionBatchOverrideStore(join(directory, "batch-override.json"), {
+    now: () => NOW,
+    idFactory: () => `batch-${++id}`,
+  });
+  const armed = await store.arm({ maxRunItems, expectedRuntimeCommit: RUNTIME_COMMIT });
+  await store.claim({ schedulerRunId, runningRuntimeCommit: RUNTIME_COMMIT });
+  await store.consume({
+    overrideId: armed.overrideId,
+    schedulerRunId,
+    endState: "transferred_pending_import",
+    selectedCount: maxRunItems,
+    startedCount: maxRunItems,
+    completedCount: maxRunItems,
+  });
+  return { store, armed };
+}
+
+function fixedRuntimeProvenance(runtimeCommit = RUNTIME_COMMIT) {
+  return { valid: true, runtimeCommit, runtimeRelease: "release-test" };
 }
 
 function rawDeleteReport(target = SOURCE_EXTERNAL_ID) {
@@ -312,26 +370,36 @@ test("missing and corrupt production delete mode fall back to off", async () => 
 
 test("pending reports consume the shared three-item budget before new deletes", async () => {
   const directory = await mkdtemp(join(tmpdir(), "fpi-production-delete-budget-"));
-  const store = memoryStore(productionState());
+  const store = memoryStore(productionStateWithPairs(3));
   const ledger = createProductionDeleteLedger(join(directory, "jobs.json"));
   let uploads = 0;
   for (let index = 0; index < 2; index += 1) {
-    const suffix = String(index + 10).padStart(6, "0");
+    const state = (await store.load()).state;
+    const project = state.projects[index];
+    const source = project.listings[0];
+    const replacement = project.listings[1];
+    const eligibility = resolveProductionDeleteEligibility(state, project.id, source.id, await ledger.read());
+    const identity = productionDeleteIdentity(source, replacement);
+    const payload = await buildProductionDeletePayload(state, eligibility, { preparedAt: NOW });
     const prepared = await ledger.prepare({
-      deleteJobId: `existing-pending-${index}`,
-      idempotencyKey: `existing-idempotency-${index}`,
-      schedulerRunId: `existing-run-${index}`,
-      projectId: `existing-project-${index}`,
-      sourceListingId: `existing-source-${index}`,
-      replacementListingId: `existing-replacement-${index}`,
-      externalObjectNumber: `30460-${suffix}`,
-      replacementExternalObjectNumber: `30460-${String(index + 20).padStart(6, "0")}`,
-      payloadFilename: `existing-${index}.zip`,
-      payloadSha256: `sha-${index}`,
-      payloadSize: 100 + index,
+      ...identity,
+      projectId: project.id,
+      sourceListingId: source.id,
+      replacementListingId: replacement.id,
+      externalObjectNumber: source.externalId,
+      replacementExternalObjectNumber: replacement.externalId,
+      payloadFilename: payload.payloadFilename,
+      payloadSha256: payload.payloadSha256,
+      payloadSize: payload.payloadSize,
     }, NOW);
     const claimed = await ledger.claim(prepared.deleteJobId, NOW);
-    await ledger.transferred(prepared.deleteJobId, claimed.claimToken, NOW);
+    const transferred = await ledger.transferred(prepared.deleteJobId, claimed.claimToken, NOW);
+    await store.update((current) => {
+      const currentProject = current.projects.find((entry) => entry.id === project.id);
+      currentProject.listings[0].productionDeleteState = "pending_confirmation";
+      currentProject.listings[0].productionDeleteJobId = transferred.deleteJobId;
+      return { state: current };
+    });
   }
   const service = createProductionDeleteService({
     store,
@@ -347,12 +415,179 @@ test("pending reports consume the shared three-item budget before new deletes", 
   assert.equal(uploads, 1);
 
   const current = (await store.load()).state;
-  current.projects[0].listings[0].productionDeleteState = "authorized";
+  current.projects[2].listings[0].productionDeleteState = "authorized";
   await store.update(() => ({ state: current }));
   const second = await service.runOnce();
   assert.equal(second.pendingConfirmationCount, 3);
   assert.equal(second.transferred.length, 0);
   assert.equal(uploads, 1);
+});
+
+test("a provenance-bound consumed one-shot batch authorizes up to 25 serial production DELETE transfers", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fpi-production-delete-batch-"));
+  const schedulerRunId = "scheduler-batch-25";
+  const { store: batchOverrideStore, armed } = await consumedBatchOverride(directory, 25, schedulerRunId);
+  const state = productionStateWithPairs(25, {
+    schedulerRunId,
+    batchOverrideId: armed.overrideId,
+    batchOverrideMaxRunItems: 25,
+    runtimeCommit: RUNTIME_COMMIT,
+  });
+  const store = memoryStore(state);
+  const ledger = createProductionDeleteLedger(join(directory, "jobs.json"));
+  const logs = [];
+  const uploads = [];
+  let activeUploads = 0;
+  let maximumConcurrentUploads = 0;
+  const service = createProductionDeleteService({
+    store,
+    modeStore: fixedMode("active"),
+    ledger,
+    productionPolicyStore: fixedPolicy(),
+    batchOverrideStore,
+    runtimeProvenance: fixedRuntimeProvenance(),
+    mailAdapter: { readOnly: true, async findCandidates() { return []; }, async readRawMessage() { throw new Error("unexpected"); } },
+    upload: async ({ job }) => {
+      activeUploads += 1;
+      maximumConcurrentUploads = Math.max(maximumConcurrentUploads, activeUploads);
+      uploads.push(job.externalObjectNumber);
+      await new Promise((resolve) => setImmediate(resolve));
+      activeUploads -= 1;
+    },
+    writeLog: async (event, details) => logs.push({ event, ...details }),
+    now: () => NOW,
+  });
+  const result = await service.runOnce({ trigger: "batch-test" });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.maxRunItems, 3);
+  assert.equal(result.effectiveMaxRunItems, 25);
+  assert.equal(result.batchOverrideId, armed.overrideId);
+  assert.equal(result.schedulerRunId, schedulerRunId);
+  assert.equal(result.runtimeCommit, RUNTIME_COMMIT);
+  assert.equal(result.transferred.length, 25);
+  assert.equal(uploads.length, 25);
+  assert.equal(maximumConcurrentUploads, 1);
+  const jobs = (await ledger.read()).jobs;
+  assert.equal(jobs.length, 25);
+  assert.ok(jobs.every((job) =>
+    job.status === PRODUCTION_DELETE_STATUS.PENDING_CONFIRMATION
+    && job.batchOverrideId === armed.overrideId
+    && job.batchOverrideMaxRunItems === 25
+    && job.schedulerRunId === schedulerRunId
+    && job.runtimeCommit === RUNTIME_COMMIT));
+  assert.ok(logs.some((entry) => entry.event === "run-context" && entry.batchOverrideId === armed.overrideId && entry.effectiveMaxRunItems === 25));
+});
+
+test("more than three normal DELETE chains without one-shot provenance fail closed", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fpi-production-delete-normal-overflow-"));
+  let uploads = 0;
+  const service = createProductionDeleteService({
+    store: memoryStore(productionStateWithPairs(4)),
+    modeStore: fixedMode("active"),
+    ledger: createProductionDeleteLedger(join(directory, "jobs.json")),
+    productionPolicyStore: fixedPolicy(),
+    mailAdapter: { readOnly: true, async findCandidates() { return []; }, async readRawMessage() { throw new Error("unexpected"); } },
+    upload: async () => { uploads += 1; },
+    now: () => NOW,
+  });
+  await assert.rejects(
+    service.runOnce({ trigger: "normal-overflow" }),
+    (error) => error.code === "PRODUCTION_DELETE_NORMAL_LIMIT_EXCEEDED",
+  );
+  assert.equal(uploads, 0);
+});
+
+test("a DELETE job with a false batch override ID or scheduler run fails closed before FTPS", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fpi-production-delete-batch-mismatch-"));
+  const schedulerRunId = "scheduler-batch-mismatch";
+  const { store: batchOverrideStore, armed } = await consumedBatchOverride(directory, 25, schedulerRunId);
+  const state = productionStateWithPairs(1, {
+    schedulerRunId,
+    batchOverrideId: armed.overrideId,
+    batchOverrideMaxRunItems: 25,
+    runtimeCommit: RUNTIME_COMMIT,
+  });
+  const ledger = createProductionDeleteLedger(join(directory, "jobs.json"));
+  const eligibility = resolveProductionDeleteEligibility(state, "project-1", "source-listing-1");
+  const identity = productionDeleteIdentity(eligibility.source, eligibility.replacement);
+  const payload = await buildProductionDeletePayload(state, eligibility, { preparedAt: NOW });
+  await ledger.prepare({
+    ...identity,
+    batchOverrideId: "production-batch-override:false-id",
+    projectId: eligibility.project.id,
+    sourceListingId: eligibility.source.id,
+    replacementListingId: eligibility.replacement.id,
+    externalObjectNumber: eligibility.source.externalId,
+    replacementExternalObjectNumber: eligibility.replacement.externalId,
+    payloadFilename: payload.payloadFilename,
+    payloadSha256: payload.payloadSha256,
+    payloadSize: payload.payloadSize,
+  }, NOW);
+  let uploads = 0;
+  const service = createProductionDeleteService({
+    store: memoryStore(state),
+    modeStore: fixedMode("active"),
+    ledger,
+    productionPolicyStore: fixedPolicy(),
+    batchOverrideStore,
+    runtimeProvenance: fixedRuntimeProvenance(),
+    mailAdapter: { readOnly: true, async findCandidates() { return []; }, async readRawMessage() { throw new Error("unexpected"); } },
+    upload: async () => { uploads += 1; },
+    now: () => NOW,
+  });
+  await assert.rejects(
+    service.runOnce({ trigger: "mismatched-job" }),
+    (error) => error.code === "PRODUCTION_DELETE_JOB_PROVENANCE_MISMATCH",
+  );
+  assert.equal(uploads, 0);
+
+  const wrongRunState = structuredClone(state);
+  wrongRunState.projects[0].listings[1].productionLifecycle.schedulerRunId = "different-scheduler-run";
+  const wrongRunService = createProductionDeleteService({
+    store: memoryStore(wrongRunState),
+    modeStore: fixedMode("active"),
+    ledger: createProductionDeleteLedger(join(directory, "wrong-run-jobs.json")),
+    productionPolicyStore: fixedPolicy(),
+    batchOverrideStore,
+    runtimeProvenance: fixedRuntimeProvenance(),
+    mailAdapter: { readOnly: true, async findCandidates() { return []; }, async readRawMessage() { throw new Error("unexpected"); } },
+    upload: async () => { uploads += 1; },
+    now: () => NOW,
+  });
+  await assert.rejects(
+    wrongRunService.runOnce({ trigger: "wrong-run" }),
+    (error) => error.code === "PRODUCTION_DELETE_LIFECYCLE_MISMATCH",
+  );
+  assert.equal(uploads, 0);
+});
+
+test("batch DELETE provenance requires the exact running runtime and persistent override record", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fpi-production-delete-runtime-mismatch-"));
+  const schedulerRunId = "scheduler-batch-runtime";
+  const { store: batchOverrideStore, armed } = await consumedBatchOverride(directory, 4, schedulerRunId);
+  const state = productionStateWithPairs(1, {
+    schedulerRunId,
+    batchOverrideId: armed.overrideId,
+    batchOverrideMaxRunItems: 4,
+    runtimeCommit: RUNTIME_COMMIT,
+  });
+  let uploads = 0;
+  const service = createProductionDeleteService({
+    store: memoryStore(state),
+    modeStore: fixedMode("active"),
+    ledger: createProductionDeleteLedger(join(directory, "jobs.json")),
+    productionPolicyStore: fixedPolicy(),
+    batchOverrideStore,
+    runtimeProvenance: fixedRuntimeProvenance("b".repeat(40)),
+    mailAdapter: { readOnly: true, async findCandidates() { return []; }, async readRawMessage() { throw new Error("unexpected"); } },
+    upload: async () => { uploads += 1; },
+    now: () => NOW,
+  });
+  await assert.rejects(
+    service.runOnce({ trigger: "runtime-mismatch" }),
+    (error) => error.code === "PRODUCTION_DELETE_BATCH_RUNTIME_UNAUTHORIZED",
+  );
+  assert.equal(uploads, 0);
 });
 
 test("interrupted delete job blocks every later transfer after restart", async () => {

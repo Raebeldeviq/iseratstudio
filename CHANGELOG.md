@@ -1,5 +1,49 @@
 # Änderungsprotokoll
 
+## Unreleased · One-Shot-Produktionsbatch – 21. August 2026
+
+### Report
+
+- Einen persistenten Operatorvertrag für exakt einen Produktionsschedulerlauf
+  mit einem ganzzahligen Limit von vier bis höchstens 25 ergänzt. Der normale
+  Produktionsvertrag und seine Policy bleiben unverändert bei maximal drei.
+- Override-ID, TTL, Runtime-Commit, atomarer Scheduler-Claim, Lauf-ID,
+  Abschlusszählwerte und die Zustände `armed`, `claimed`, `consumed`,
+  `cancelled` und `expired` werden auditierbar gespeichert. Status, Armieren und
+  Abbruch eines noch nicht beanspruchten Overrides besitzen ein separates CLI.
+- Schedulerkopien, Uploadübergabe und Production-DELETE tragen die exakte
+  Override-/Scheduler-/Runtime-Provenienz. Nur der zugehörige Batch darf beim
+  seriellen DELETE über drei hinausgehen; falsche IDs, anderer Schedulerlauf,
+  andere Runtime oder mehr als 25 Ketten stoppen vor FTPS.
+- Tests decken Grenzen `3/4/24/25/26`, konkurrierende Claims, TTL,
+  Runtime-Mismatch, Startup/Preview, Erfolg mit 25, Abbruch nach sieben,
+  Restart-Fortsetzung, automatischen Rückfall auf drei und provenance-gebundene
+  25er-DELETEs ab.
+
+### Begründung
+
+Eine dauerhafte Erhöhung der Produktions-Policy würde jeden späteren Lauf und
+auch den Löschdienst unbeabsichtigt erweitern. Der separate One-Shot-Datensatz
+ist dagegen kurzlebig, commit-gebunden und wird vor der ersten Mutation exklusiv
+einem Schedulerlauf zugeordnet. Dadurch ist die Ausnahme nach Erfolg, Fehler
+oder Restart nicht wiederverwendbar, während vorhandene Idempotenz- und
+Reconciliation-Pfade erhalten bleiben.
+
+### Hürden und Risiken
+
+- Ein harter Helper-Abbruch lässt den Override absichtlich `claimed`. Das ist
+  fail-closed und erfordert für einen weiteren großen Batch eine neue, separat
+  geprüfte Operatorfreigabe; es entsteht niemals automatisch ein zweiter Lauf.
+- Bereits vorbereitete Batchkopien können unter dem normalen Dreierlimit
+  fortgesetzt werden, müssen dabei aber weiterhin den ursprünglichen
+  historischen Claim und Runtime-Commit nachweisen. Ein Runtime-Wechsel mit
+  offenen Batchketten blockiert deren Upload-/DELETE-Fortsetzung deshalb
+  absichtlich bis zur expliziten Reconciliation.
+- Die Ausnahme umgeht weder Zeitfenster, Stundenabstand, Daily-Plot-Guard,
+  Creative-Payload-Guard, positive Import-/Deleteberichte noch die Sperre bei
+  unklaren Transfers. Vor der Maintainer-Integration wurde kein produktiver
+  Scheduler-, FTPS- oder DELETE-Lauf ausgeführt.
+
 ## Unreleased · Creative-Payload- und Runtime-Provenienz-Guard – 21. August 2026
 
 ### Report

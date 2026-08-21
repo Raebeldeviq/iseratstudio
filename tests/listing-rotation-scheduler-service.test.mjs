@@ -19,6 +19,7 @@ import {
   updateListingSchedulerSettings,
 } from "../listing-scheduler.mjs";
 import { createPersistentLease } from "../persistent-lease.mjs";
+import { createProductionBatchOverrideStore } from "../production-batch-override.mjs";
 import { WORKFLOW_STATUS } from "../workflow-status.mjs";
 
 const RUNTIME_COMMIT = "a".repeat(40);
@@ -209,6 +210,16 @@ function memoryLease() {
       return { release: async () => { active = false; } };
     },
   };
+}
+
+async function batchOverrideFixture(maxRunItems = 25, now = "2026-08-14T09:00:00.000Z") {
+  const directory = await mkdtemp(join(tmpdir(), "fpi-scheduler-batch-override-"));
+  const store = createProductionBatchOverrideStore(join(directory, "override.json"), {
+    now: () => now,
+    idFactory: ids("batch-override"),
+  });
+  const armed = await store.arm({ maxRunItems, expectedRuntimeCommit: RUNTIME_COMMIT });
+  return { store, armed };
 }
 
 function fixedOperatingMode(mode = "active", canaryListingIds = []) {
@@ -569,6 +580,382 @@ test("active production policy limits one scheduler run to three distinct plots"
   const copies = current.projects.flatMap((projectValue) => projectValue.listings.filter((item) => item.listingOrigin === "rotation-copy"));
   assert.equal(copies.length, 3);
   assert.ok(copies.every((copy) => copy.productionLifecycle?.automaticDeleteAuthorized === true));
+});
+
+test("an armed one-shot override raises exactly one real scheduler run to 25 and the following run returns to three", async () => {
+  const catalogStore = memoryStore(studioState(25));
+  const { store: batchOverrideStore, armed } = await batchOverrideFixture(25);
+  const uploads = [];
+  const runLogs = [];
+  const service = createListingRotationSchedulerService({
+    store: catalogStore,
+    lease: memoryLease(),
+    operatingModeStore: fixedOperatingMode("active"),
+    productionPolicyStore: fixedProductionPolicy(3, "detect-only"),
+    batchOverrideStore,
+    runtimeProvenance: fixedRuntimeProvenance(),
+    idFactory: ids("one-shot-run"),
+    upload: async ({ project: projectValue, listing: listingValue, batchOverrideId, effectiveMaxRunItems }) => {
+      uploads.push({
+        projectId: projectValue.id,
+        listingId: listingValue.id,
+        batchOverrideId,
+        effectiveMaxRunItems,
+      });
+      return { ok: true, jobId: createUploadJobId(projectValue, listingValue) };
+    },
+    writeRunLog: async (event, details) => runLogs.push({ event, ...details }),
+  });
+
+  const oneShot = await service.run({
+    runId: "scheduler-one-shot-25",
+    trigger: "periodic",
+    now: "2026-08-14T09:00:00.000Z",
+    endNow: "2026-08-14T09:30:00.000Z",
+  });
+  assert.equal(oneShot.ok, true, JSON.stringify(oneShot));
+  assert.equal(oneShot.selectedListingIds.length, 25);
+  assert.equal(uploads.length, 25);
+  assert.equal(new Set(uploads.map((entry) => entry.projectId)).size, 25);
+  assert.ok(uploads.every((entry) => entry.batchOverrideId === armed.overrideId && entry.effectiveMaxRunItems === 25));
+
+  const consumed = await batchOverrideStore.load();
+  assert.equal(consumed.state, "consumed");
+  assert.equal(consumed.claimedBySchedulerRunId, "scheduler-one-shot-25");
+  assert.equal(consumed.selectedCount, 25);
+  assert.equal(consumed.startedCount, 25);
+  assert.equal(consumed.completedCount, 25);
+  const afterOneShot = (await catalogStore.load()).state;
+  const oneShotCopies = afterOneShot.projects.flatMap((projectValue) =>
+    projectValue.listings.filter((item) => item.listingOrigin === "rotation-copy"));
+  assert.equal(oneShotCopies.length, 25);
+  assert.ok(oneShotCopies.every((copy) =>
+    copy.productionLifecycle?.batchOverrideId === armed.overrideId
+    && copy.productionLifecycle?.batchOverrideMaxRunItems === 25
+    && copy.productionLifecycle?.runtimeCommit === RUNTIME_COMMIT));
+
+  const normal = await service.run({
+    runId: "scheduler-normal-after-one-shot",
+    trigger: "periodic",
+    now: "2026-08-15T09:00:00.000Z",
+    endNow: "2026-08-15T09:05:00.000Z",
+  });
+  assert.equal(normal.ok, true, JSON.stringify(normal));
+  assert.equal(normal.selectedListingIds.length, 3);
+  assert.equal(uploads.length, 28);
+  assert.ok(uploads.slice(25).every((entry) => !entry.batchOverrideId && entry.effectiveMaxRunItems === 3));
+  assert.ok(runLogs.some((entry) => entry.event === "started" && entry.overrideId === armed.overrideId && entry.effectiveMaxRunItems === 25));
+  assert.ok(runLogs.some((entry) => entry.event === "started" && entry.overrideId === null && entry.effectiveMaxRunItems === 3));
+});
+
+test("detect-only and preview inspection leave an armed override untouched", async () => {
+  const catalogStore = memoryStore(studioState(5));
+  const { store: batchOverrideStore, armed } = await batchOverrideFixture(25);
+  let uploads = 0;
+  const service = createListingRotationSchedulerService({
+    store: catalogStore,
+    lease: memoryLease(),
+    operatingModeStore: fixedOperatingMode("active"),
+    productionPolicyStore: fixedProductionPolicy(3, "detect-only"),
+    batchOverrideStore,
+    runtimeProvenance: fixedRuntimeProvenance(),
+    upload: async () => { uploads += 1; return { ok: true, jobId: "unexpected" }; },
+  });
+  const detectOnly = await service.inspect({ trigger: "startup-detect-only", now: "2026-08-14T09:00:00.000Z" });
+  const preview = await service.inspect({ trigger: "creative-preview", now: "2026-08-14T09:01:00.000Z" });
+  assert.equal(detectOnly.effectiveMaxRunItems, 3);
+  assert.equal(preview.effectiveMaxRunItems, 3);
+  assert.equal(detectOnly.overrideId, null);
+  assert.equal(uploads, 0);
+  const status = await batchOverrideStore.load();
+  assert.equal(status.overrideId, armed.overrideId);
+  assert.equal(status.state, "armed");
+  assert.equal(catalogStore.history.length, 1);
+});
+
+test("startup processing and an expired override both retain the normal three-item limit", async () => {
+  const startupCatalog = memoryStore(studioState(5));
+  const { store: armedStore } = await batchOverrideFixture(25);
+  const startupUploads = [];
+  const startupService = createListingRotationSchedulerService({
+    store: startupCatalog,
+    lease: memoryLease(),
+    operatingModeStore: fixedOperatingMode("active"),
+    productionPolicyStore: fixedProductionPolicy(3, "guarded"),
+    batchOverrideStore: armedStore,
+    runtimeProvenance: fixedRuntimeProvenance(),
+    upload: async ({ project: projectValue, listing: listingValue, effectiveMaxRunItems, batchOverrideId }) => {
+      startupUploads.push({ effectiveMaxRunItems, batchOverrideId });
+      return { ok: true, jobId: createUploadJobId(projectValue, listingValue) };
+    },
+  });
+  const startup = await startupService.run({
+    trigger: "startup-guarded",
+    now: "2026-08-14T09:00:00.000Z",
+    endNow: "2026-08-14T09:05:00.000Z",
+  });
+  assert.equal(startup.selectedListingIds.length, 3);
+  assert.equal(startup.effectiveMaxRunItems, 3);
+  assert.ok(startupUploads.every((entry) => entry.effectiveMaxRunItems === 3 && !entry.batchOverrideId));
+  assert.equal((await armedStore.load()).state, "armed");
+
+  const expiredCatalog = memoryStore(studioState(5));
+  const expiredUploads = [];
+  const expiredService = createListingRotationSchedulerService({
+    store: expiredCatalog,
+    lease: memoryLease(),
+    operatingModeStore: fixedOperatingMode("active"),
+    productionPolicyStore: fixedProductionPolicy(),
+    batchOverrideStore: armedStore,
+    runtimeProvenance: fixedRuntimeProvenance(),
+    upload: async ({ project: projectValue, listing: listingValue, effectiveMaxRunItems }) => {
+      expiredUploads.push(effectiveMaxRunItems);
+      return { ok: true, jobId: createUploadJobId(projectValue, listingValue) };
+    },
+  });
+  const expired = await expiredService.run({
+    trigger: "periodic",
+    now: "2026-08-14T10:00:01.000Z",
+    endNow: "2026-08-14T10:05:00.000Z",
+  });
+  assert.equal(expired.selectedListingIds.length, 3);
+  assert.equal(expired.effectiveMaxRunItems, 3);
+  assert.deepEqual(expiredUploads, [3, 3, 3]);
+  assert.equal((await armedStore.load({ now: "2026-08-14T10:00:01.000Z" })).state, "expired");
+});
+
+test("the one-shot override never uses a separate time-window bypass", async () => {
+  const catalogStore = memoryStore(studioState(5));
+  const { store: batchOverrideStore, armed } = await batchOverrideFixture(25);
+  const uploads = [];
+  const service = createListingRotationSchedulerService({
+    store: catalogStore,
+    lease: memoryLease(),
+    operatingModeStore: fixedOperatingMode("active"),
+    productionPolicyStore: fixedProductionPolicy(),
+    batchOverrideStore,
+    runtimeProvenance: fixedRuntimeProvenance(),
+    upload: async ({ project: projectValue, listing: listingValue, effectiveMaxRunItems }) => {
+      uploads.push(effectiveMaxRunItems);
+      return { ok: true, jobId: createUploadJobId(projectValue, listingValue) };
+    },
+  });
+  const result = await service.run({
+    trigger: "manual-production-batch",
+    ignoreTimeWindow: true,
+    now: "2026-08-14T04:30:00.000Z",
+    endNow: "2026-08-14T04:35:00.000Z",
+  });
+  assert.equal(result.effectiveMaxRunItems, 3);
+  assert.equal(result.selectedListingIds.length, 0);
+  assert.match(result.abortReason, /Zeitfenster/iu);
+  assert.deepEqual(uploads, []);
+  const status = await batchOverrideStore.load();
+  assert.equal(status.overrideId, armed.overrideId);
+  assert.equal(status.state, "armed");
+});
+
+test("an override bound to another runtime blocks before copy or upload and is cancelled", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fpi-scheduler-runtime-mismatch-"));
+  const batchOverrideStore = createProductionBatchOverrideStore(join(directory, "override.json"), {
+    now: () => "2026-08-14T09:00:00.000Z",
+    idFactory: ids("runtime-mismatch-override"),
+  });
+  await batchOverrideStore.arm({ maxRunItems: 25, expectedRuntimeCommit: "b".repeat(40) });
+  const catalogStore = memoryStore(studioState(5));
+  let uploads = 0;
+  const service = createListingRotationSchedulerService({
+    store: catalogStore,
+    lease: memoryLease(),
+    operatingModeStore: fixedOperatingMode("active"),
+    productionPolicyStore: fixedProductionPolicy(),
+    batchOverrideStore,
+    runtimeProvenance: fixedRuntimeProvenance(),
+    upload: async () => { uploads += 1; return { ok: true, jobId: "unexpected" }; },
+  });
+  const result = await service.run({
+    trigger: "periodic",
+    now: "2026-08-14T09:00:00.000Z",
+    endNow: "2026-08-14T09:01:00.000Z",
+  });
+  assert.match(result.abortReason, /Runtime-Commit/iu);
+  assert.equal(result.selectedListingIds.length, 0);
+  assert.equal(uploads, 0);
+  assert.equal((await batchOverrideStore.load()).state, "cancelled");
+  assert.equal((await catalogStore.load()).state.projects.flatMap((item) => item.listings).some((item) => item.listingOrigin === "rotation-copy"), false);
+});
+
+test("an interrupted claimed batch is consumed after seven rotations and cannot grant a second elevated run", async () => {
+  const catalogStore = memoryStore(studioState(10));
+  const { store: batchOverrideStore, armed } = await batchOverrideFixture(25);
+  let refreshCount = 0;
+  const interruptedLease = {
+    async acquire() {
+      return {
+        async refresh() {
+          refreshCount += 1;
+          if (refreshCount === 16) throw new Error("synthetic helper abort after seven rotations");
+        },
+        async release() {},
+      };
+    },
+  };
+  let uploadCount = 0;
+  const interruptedService = createListingRotationSchedulerService({
+    store: catalogStore,
+    lease: interruptedLease,
+    operatingModeStore: fixedOperatingMode("active"),
+    productionPolicyStore: fixedProductionPolicy(),
+    batchOverrideStore,
+    runtimeProvenance: fixedRuntimeProvenance(),
+    upload: async ({ project: projectValue, listing: listingValue }) => {
+      uploadCount += 1;
+      return { ok: true, jobId: createUploadJobId(projectValue, listingValue) };
+    },
+  });
+  const interrupted = await interruptedService.run({
+    runId: "scheduler-interrupted-one-shot",
+    now: "2026-08-14T09:00:00.000Z",
+    endNow: "2026-08-14T09:10:00.000Z",
+  });
+  assert.equal(interrupted.ok, false);
+  assert.equal(uploadCount, 7);
+  const consumed = await batchOverrideStore.load();
+  assert.equal(consumed.overrideId, armed.overrideId);
+  assert.equal(consumed.state, "consumed");
+  assert.equal(consumed.startedCount, 7);
+  assert.equal(consumed.completedCount, 7);
+  assert.equal(consumed.endState, "failed");
+
+  const restartedService = createListingRotationSchedulerService({
+    store: catalogStore,
+    lease: memoryLease(),
+    operatingModeStore: fixedOperatingMode("active"),
+    productionPolicyStore: fixedProductionPolicy(),
+    batchOverrideStore,
+    runtimeProvenance: fixedRuntimeProvenance(),
+    upload: async ({ project: projectValue, listing: listingValue, effectiveMaxRunItems }) => {
+      assert.equal(effectiveMaxRunItems, 3);
+      uploadCount += 1;
+      return { ok: true, jobId: createUploadJobId(projectValue, listingValue) };
+    },
+  });
+  const restarted = await restartedService.run({
+    runId: "scheduler-after-interrupted-one-shot",
+    now: "2026-08-14T11:00:00.000Z",
+    endNow: "2026-08-14T11:05:00.000Z",
+  });
+  assert.equal(restarted.ok, true, JSON.stringify(restarted));
+  assert.equal(restarted.selectedListingIds.length, 3);
+  assert.equal(uploadCount, 10);
+  assert.equal((await batchOverrideStore.load()).state, "consumed");
+});
+
+test("a prepared batch copy resumes idempotently under a later normal three-item scheduler run", async () => {
+  const catalogStore = memoryStore(studioState(1));
+  const { store: batchOverrideStore, armed } = await batchOverrideFixture(25);
+  const firstService = createListingRotationSchedulerService({
+    store: catalogStore,
+    lease: memoryLease(),
+    operatingModeStore: fixedOperatingMode("active"),
+    productionPolicyStore: fixedProductionPolicy(),
+    batchOverrideStore,
+    runtimeProvenance: fixedRuntimeProvenance(),
+    upload: async () => { throw new Error("synthetic FTPS interruption"); },
+  });
+  const first = await firstService.run({
+    runId: "scheduler-batch-upload-interrupted",
+    now: "2026-08-14T09:00:00.000Z",
+    endNow: "2026-08-14T09:05:00.000Z",
+  });
+  assert.equal(first.ok, false);
+  assert.equal(first.effectiveMaxRunItems, 25);
+  assert.equal((await batchOverrideStore.load()).state, "consumed");
+  const prepared = (await catalogStore.load()).state.projects[0].listings.find((item) => item.listingOrigin === "rotation-copy");
+  assert.equal(prepared.status, WORKFLOW_STATUS.PREPARED);
+  assert.equal(prepared.productionLifecycle.batchOverrideId, armed.overrideId);
+
+  const resumedUploads = [];
+  const resumedService = createListingRotationSchedulerService({
+    store: catalogStore,
+    lease: memoryLease(),
+    operatingModeStore: fixedOperatingMode("active"),
+    productionPolicyStore: fixedProductionPolicy(),
+    batchOverrideStore,
+    runtimeProvenance: fixedRuntimeProvenance(),
+    upload: async ({ project: projectValue, listing: listingValue, batchOverrideId, batchSchedulerRunId, effectiveMaxRunItems }) => {
+      resumedUploads.push({ batchOverrideId, batchSchedulerRunId, effectiveMaxRunItems });
+      return { ok: true, jobId: createUploadJobId(projectValue, listingValue) };
+    },
+  });
+  const resumed = await resumedService.run({
+    runId: "scheduler-normal-resume",
+    now: "2026-08-14T11:00:00.000Z",
+    endNow: "2026-08-14T11:05:00.000Z",
+  });
+  assert.equal(resumed.ok, true, JSON.stringify(resumed));
+  assert.equal(resumed.effectiveMaxRunItems, 3);
+  assert.deepEqual(resumedUploads, [{
+    batchOverrideId: armed.overrideId,
+    batchSchedulerRunId: "scheduler-batch-upload-interrupted",
+    effectiveMaxRunItems: 25,
+  }]);
+  const completedCopy = (await catalogStore.load()).state.projects[0].listings.find((item) => item.id === prepared.id);
+  assert.equal(completedCopy.status, WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT);
+});
+
+test("a one-shot run resumes an older normal copy with limit three and grants 25 only to its own new copies", async () => {
+  const catalogStore = memoryStore(studioState(5));
+  const normalService = createListingRotationSchedulerService({
+    store: catalogStore,
+    lease: memoryLease(),
+    operatingModeStore: fixedOperatingMode("active"),
+    productionPolicyStore: fixedProductionPolicy(1),
+    runtimeProvenance: fixedRuntimeProvenance(),
+    upload: async () => { throw new Error("synthetic normal upload interruption"); },
+  });
+  const normal = await normalService.run({
+    runId: "scheduler-normal-before-batch",
+    now: "2026-08-14T09:00:00.000Z",
+    endNow: "2026-08-14T09:05:00.000Z",
+  });
+  assert.equal(normal.ok, false);
+  const preparedNormal = (await catalogStore.load()).state.projects
+    .flatMap((projectValue) => projectValue.listings)
+    .find((item) => item.listingOrigin === "rotation-copy");
+  assert.equal(preparedNormal.status, WORKFLOW_STATUS.PREPARED);
+  assert.equal(preparedNormal.productionLifecycle?.batchOverrideId, undefined);
+
+  const { store: batchOverrideStore, armed } = await batchOverrideFixture(25, "2026-08-14T12:00:00.000Z");
+  const uploads = [];
+  const batchService = createListingRotationSchedulerService({
+    store: catalogStore,
+    lease: memoryLease(),
+    operatingModeStore: fixedOperatingMode("active"),
+    productionPolicyStore: fixedProductionPolicy(3),
+    batchOverrideStore,
+    runtimeProvenance: fixedRuntimeProvenance(),
+    upload: async ({ project: projectValue, listing: listingValue, batchOverrideId, effectiveMaxRunItems }) => {
+      uploads.push({ listingId: listingValue.id, batchOverrideId, effectiveMaxRunItems });
+      return { ok: true, jobId: createUploadJobId(projectValue, listingValue) };
+    },
+  });
+  const batch = await batchService.run({
+    runId: "scheduler-batch-after-normal-pending",
+    now: "2026-08-14T12:00:00.000Z",
+    endNow: "2026-08-14T12:10:00.000Z",
+  });
+  assert.equal(batch.ok, true, JSON.stringify(batch));
+  assert.equal(batch.effectiveMaxRunItems, 25, JSON.stringify(batch));
+  const resumedUpload = uploads.find((entry) => entry.listingId === preparedNormal.id);
+  assert.deepEqual(resumedUpload, {
+    listingId: preparedNormal.id,
+    batchOverrideId: "",
+    effectiveMaxRunItems: 3,
+  });
+  assert.ok(uploads
+    .filter((entry) => entry.listingId !== preparedNormal.id)
+    .every((entry) => entry.batchOverrideId === armed.overrideId && entry.effectiveMaxRunItems === 25));
 });
 
 test("active mode blocks every mutation when the staged runtime commit differs from policy", async () => {

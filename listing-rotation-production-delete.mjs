@@ -7,6 +7,10 @@ import JSZip from "jszip";
 import { APP_VERSION } from "./app/lib/app-version.mjs";
 import { parseImmoprofessionalDeleteReport } from "./immoprofessional-delete-report-parser.mjs";
 import { listingControl, normalizeListingGroup, updateListingControl } from "./listing-groups.mjs";
+import {
+  PRODUCTION_BATCH_OVERRIDE_MAX_ITEMS,
+  PRODUCTION_BATCH_OVERRIDE_MIN_ITEMS,
+} from "./production-batch-override.mjs";
 import { WORKFLOW_STATUS } from "./workflow-status.mjs";
 
 export const PRODUCTION_DELETE_FORMAT = 1;
@@ -145,6 +149,9 @@ export function createProductionDeleteLedger(path) {
           deleteJobId: clean(input.deleteJobId, 200),
           idempotencyKey: clean(input.idempotencyKey, 128),
           schedulerRunId: clean(input.schedulerRunId, 200),
+          batchOverrideId: clean(input.batchOverrideId, 200),
+          batchOverrideMaxRunItems: Math.max(0, Math.trunc(Number(input.batchOverrideMaxRunItems) || 0)),
+          runtimeCommit: clean(input.runtimeCommit, 40).toLowerCase(),
           projectId: clean(input.projectId, 200),
           sourceListingId: clean(input.sourceListingId, 200),
           replacementListingId: clean(input.replacementListingId, 200),
@@ -221,11 +228,29 @@ function mapHouseType(value) {
 }
 
 export function productionDeleteIdentity(source, replacement) {
-  const schedulerRunId = clean(replacement?.productionLifecycle?.schedulerRunId, 200);
+  const lifecycle = replacement?.productionLifecycle;
+  const schedulerRunId = clean(lifecycle?.schedulerRunId, 200);
   if (!schedulerRunId || source?.productionRotationRunId !== schedulerRunId) throw productionError("PRODUCTION_DELETE_LIFECYCLE_MISMATCH", "Source und Replacement besitzen keinen identischen Produktions-Rotationslauf.");
+  const batchOverrideId = clean(lifecycle?.batchOverrideId, 200);
+  const batchOverrideMaxRunItems = Math.max(0, Math.trunc(Number(lifecycle?.batchOverrideMaxRunItems) || 0));
+  const runtimeCommit = clean(lifecycle?.runtimeCommit, 40).toLowerCase();
+  const batchValuesPresent = Boolean(batchOverrideId || batchOverrideMaxRunItems || runtimeCommit);
+  if (batchValuesPresent && (
+    !batchOverrideId
+    || batchOverrideMaxRunItems < PRODUCTION_BATCH_OVERRIDE_MIN_ITEMS
+    || batchOverrideMaxRunItems > PRODUCTION_BATCH_OVERRIDE_MAX_ITEMS
+    || !/^[a-f0-9]{40}$/u.test(runtimeCommit)
+  )) {
+    throw productionError("PRODUCTION_DELETE_BATCH_PROVENANCE_INVALID", "Die One-Shot-Provenienz der Deletekette ist unvollständig oder ungültig.");
+  }
   const canonical = [
     "contract=production-rotation-delete-v1",
     `schedulerRunId=${schedulerRunId}`,
+    ...(batchOverrideId ? [
+      `batchOverrideId=${batchOverrideId}`,
+      `batchOverrideMaxRunItems=${batchOverrideMaxRunItems}`,
+      `runtimeCommit=${runtimeCommit}`,
+    ] : []),
     `sourceListingId=${source.id}`,
     `sourceExternalId=${source.externalId}`,
     `replacementListingId=${replacement.id}`,
@@ -233,7 +258,15 @@ export function productionDeleteIdentity(source, replacement) {
     `replacementConfirmedAt=${replacement.importConfirmedAt || ""}`,
   ].join("\n");
   const idempotencyKey = sha256(canonical);
-  return { deleteJobId: `production-delete:${idempotencyKey}`, idempotencyKey, schedulerRunId, canonical };
+  return {
+    deleteJobId: `production-delete:${idempotencyKey}`,
+    idempotencyKey,
+    schedulerRunId,
+    batchOverrideId,
+    batchOverrideMaxRunItems,
+    runtimeCommit,
+    canonical,
+  };
 }
 
 export function productionDeleteCandidates(state) {
@@ -272,6 +305,21 @@ export function resolveProductionDeleteEligibility(state, projectId, sourceListi
   if (!house || !clean(project.zip) || !clean(project.city) || !clean(state.provider?.company) || !clean(state.provider?.email)) reasons.push("delete_payload_source_incomplete");
   const jobs = (ledger.jobs || []).filter((job) => job.sourceListingId === source.id || job.externalObjectNumber === source.externalId);
   if (jobs.length > 1) reasons.push("multiple_delete_jobs");
+  if (jobs.length === 1) {
+    try {
+      const identity = productionDeleteIdentity(source, replacement);
+      const job = jobs[0];
+      if (
+        clean(job.deleteJobId, 200) !== identity.deleteJobId
+        || clean(job.schedulerRunId, 200) !== identity.schedulerRunId
+        || clean(job.batchOverrideId, 200) !== identity.batchOverrideId
+        || Math.max(0, Math.trunc(Number(job.batchOverrideMaxRunItems) || 0)) !== identity.batchOverrideMaxRunItems
+        || clean(job.runtimeCommit, 40).toLowerCase() !== identity.runtimeCommit
+      ) reasons.push("delete_job_provenance_mismatch");
+    } catch {
+      reasons.push("delete_job_provenance_mismatch");
+    }
+  }
   if (reasons.length) throw productionError("PRODUCTION_DELETE_NOT_ELIGIBLE", `Das Altinserat ist nicht produktiv löschberechtigt: ${reasons.join(", ")}.`, { reasons });
   return { project, source, sourceControl, replacement, replacementControl, lifecycle, report, group, house, existingJob: jobs[0] || null };
 }
@@ -409,15 +457,147 @@ export function createProductionDeleteService(options) {
   const writeLog = options.writeLog || (async () => undefined);
   const now = options.now || (() => new Date().toISOString());
 
-  async function transferEligibleSources(maxRunItems, targetExternalObjectNumber = "") {
-    if (!Number.isInteger(maxRunItems) || maxRunItems < 0 || maxRunItems > 3) {
+  function deleteContextKey(identity) {
+    return identity.batchOverrideId
+      ? `batch:${identity.batchOverrideId}:${identity.schedulerRunId}:${identity.runtimeCommit}`
+      : "normal";
+  }
+
+  async function authorizeDeleteIdentity(identity) {
+    if (!identity.batchOverrideId) {
+      return {
+        key: "normal",
+        overrideId: null,
+        schedulerRunId: "",
+        runtimeCommit: "",
+        maxRunItems: 3,
+      };
+    }
+    const runtimeCommit = clean(options.runtimeProvenance?.runtimeCommit, 40).toLowerCase();
+    if (
+      !options.batchOverrideStore?.authorize
+      || options.runtimeProvenance?.valid !== true
+      || !/^[a-f0-9]{40}$/u.test(runtimeCommit)
+      || runtimeCommit !== identity.runtimeCommit
+    ) {
+      throw productionError(
+        "PRODUCTION_DELETE_BATCH_RUNTIME_UNAUTHORIZED",
+        "Die One-Shot-Deletekette stimmt nicht eindeutig mit der laufenden Helper-Runtime überein.",
+      );
+    }
+    const authorization = await options.batchOverrideStore.authorize({
+      overrideId: identity.batchOverrideId,
+      schedulerRunId: identity.schedulerRunId,
+      runningRuntimeCommit: runtimeCommit,
+    });
+    if (
+      authorization.valid !== true
+      || authorization.record?.overrideId !== identity.batchOverrideId
+      || authorization.record?.claimedBySchedulerRunId !== identity.schedulerRunId
+      || authorization.record?.expectedRuntimeCommit !== identity.runtimeCommit
+      || authorization.record?.maxRunItems !== identity.batchOverrideMaxRunItems
+    ) {
+      throw productionError(
+        "PRODUCTION_DELETE_BATCH_OVERRIDE_UNAUTHORIZED",
+        authorization.reason || "Die Deletekette besitzt keine passende persistente One-Shot-Provenienz.",
+      );
+    }
+    return {
+      key: deleteContextKey(identity),
+      overrideId: identity.batchOverrideId,
+      schedulerRunId: identity.schedulerRunId,
+      runtimeCommit: identity.runtimeCommit,
+      maxRunItems: identity.batchOverrideMaxRunItems,
+    };
+  }
+
+  function identityForJob(state, job) {
+    const project = state.projects.find((entry) => entry.id === job.projectId);
+    const source = project?.listings.find((entry) => entry.id === job.sourceListingId);
+    const replacement = project?.listings.find((entry) => entry.id === job.replacementListingId);
+    if (!project || !source || !replacement) {
+      throw productionError("PRODUCTION_DELETE_JOB_CATALOG_MISMATCH", "Ein offener Deletejob besitzt keine eindeutige Katalogbeziehung.");
+    }
+    const identity = productionDeleteIdentity(source, replacement);
+    if (
+      job.deleteJobId !== identity.deleteJobId
+      || clean(job.schedulerRunId, 200) !== identity.schedulerRunId
+      || clean(job.batchOverrideId, 200) !== identity.batchOverrideId
+      || Math.max(0, Math.trunc(Number(job.batchOverrideMaxRunItems) || 0)) !== identity.batchOverrideMaxRunItems
+      || clean(job.runtimeCommit, 40).toLowerCase() !== identity.runtimeCommit
+    ) {
+      throw productionError("PRODUCTION_DELETE_JOB_PROVENANCE_MISMATCH", "Ein offener Deletejob stimmt nicht mit seiner persistierten Rotations-/Batch-Provenienz überein.");
+    }
+    return identity;
+  }
+
+  async function resolveDeleteContexts(state, ledger) {
+    const contexts = new Map();
+    const ensureContext = (authorized) => {
+      const existing = contexts.get(authorized.key);
+      if (existing) return existing;
+      const context = { ...authorized, candidates: [], pendingJobs: [] };
+      contexts.set(authorized.key, context);
+      return context;
+    };
+    const candidates = productionDeleteCandidates(state);
+    for (const candidate of candidates) {
+      const project = state.projects.find((entry) => entry.id === candidate.projectId);
+      const source = project?.listings.find((entry) => entry.id === candidate.sourceListingId);
+      const replacement = project?.listings.find((entry) => entry.id === source?.supersededByListingId);
+      if (!source || !replacement) throw productionError("PRODUCTION_DELETE_RELATION_NOT_UNIQUE", "Eine autorisierte Deletekette besitzt keine eindeutige Source-/Replacement-Beziehung.");
+      const identity = productionDeleteIdentity(source, replacement);
+      const context = ensureContext(await authorizeDeleteIdentity(identity));
+      context.candidates.push(candidate);
+    }
+    const openJobs = (ledger.jobs || []).filter((job) => [
+      PRODUCTION_DELETE_STATUS.PREPARED,
+      PRODUCTION_DELETE_STATUS.PENDING_CONFIRMATION,
+    ].includes(job.status));
+    for (const job of openJobs) {
+      const identity = identityForJob(state, job);
+      const context = ensureContext(await authorizeDeleteIdentity(identity));
+      if (job.status === PRODUCTION_DELETE_STATUS.PENDING_CONFIRMATION) context.pendingJobs.push(job);
+    }
+    for (const context of contexts.values()) {
+      const chainIds = new Set([
+        ...context.candidates.map((candidate) => candidate.sourceListingId),
+        ...context.pendingJobs.map((job) => job.sourceListingId),
+      ]);
+      if (chainIds.size > context.maxRunItems) {
+        throw productionError(
+          context.overrideId ? "PRODUCTION_DELETE_BATCH_LIMIT_EXCEEDED" : "PRODUCTION_DELETE_NORMAL_LIMIT_EXCEEDED",
+          `${chainIds.size} Deleteketten überschreiten das eindeutig autorisierte Limit ${context.maxRunItems} dieses Produktionskontexts.`,
+        );
+      }
+    }
+    const totalPending = [...contexts.values()].reduce((sum, context) => sum + context.pendingJobs.length, 0);
+    if (totalPending > PRODUCTION_BATCH_OVERRIDE_MAX_ITEMS) {
+      throw productionError("PRODUCTION_DELETE_GLOBAL_PENDING_LIMIT_EXCEEDED", "Mehr als 25 offene Delete-Berichte sind auch über mehrere Produktionskontexte nicht zulässig.");
+    }
+    return { contexts, candidates, totalPending };
+  }
+
+  async function transferEligibleSources(context, maxRunItems, targetExternalObjectNumber = "") {
+    const maximum = context?.overrideId ? context.maxRunItems : 3;
+    if (!Number.isInteger(maxRunItems) || maxRunItems < 0 || maxRunItems > maximum) {
       throw productionError("PRODUCTION_DELETE_TRANSFER_BUDGET_INVALID", "Das verbleibende Produktions-Deletebudget ist ungültig.");
     }
     const snapshot = await options.store.load();
     const candidates = productionDeleteCandidates(snapshot.state);
-    let eligibleCandidates = candidates;
+    const contextCandidates = [];
+    for (const candidate of candidates) {
+      const project = snapshot.state.projects.find((entry) => entry.id === candidate.projectId);
+      const source = project?.listings.find((entry) => entry.id === candidate.sourceListingId);
+      const replacement = project?.listings.find((entry) => entry.id === source?.supersededByListingId);
+      if (!source || !replacement) continue;
+      const identity = productionDeleteIdentity(source, replacement);
+      const currentContext = await authorizeDeleteIdentity(identity);
+      if (currentContext.key === context.key) contextCandidates.push(candidate);
+    }
+    let eligibleCandidates = contextCandidates;
     if (targetExternalObjectNumber) {
-      eligibleCandidates = candidates.filter((candidate) => {
+      eligibleCandidates = contextCandidates.filter((candidate) => {
         const project = snapshot.state.projects.find((entry) => entry.id === candidate.projectId);
         const listing = project?.listings.find((entry) => entry.id === candidate.sourceListingId);
         return listing?.externalId === targetExternalObjectNumber;
@@ -440,6 +620,8 @@ export function createProductionDeleteService(options) {
         const currentLedger = await options.ledger.read();
         const eligibility = resolveProductionDeleteEligibility(currentSnapshot.state, candidate.projectId, candidate.sourceListingId, currentLedger);
         identity = productionDeleteIdentity(eligibility.source, eligibility.replacement);
+        const currentContext = await authorizeDeleteIdentity(identity);
+        if (currentContext.key !== context.key) throw productionError("PRODUCTION_DELETE_CONTEXT_CHANGED", "Die Deletekette wechselte während der Verarbeitung ihren Produktionskontext.");
         const payload = await buildProductionDeletePayload(currentSnapshot.state, eligibility, {
           preparedAt: eligibility.existingJob?.preparedAt,
         });
@@ -457,12 +639,12 @@ export function createProductionDeleteService(options) {
         if (job.status !== PRODUCTION_DELETE_STATUS.PREPARED) continue;
         if (job.payloadFilename !== payload.payloadFilename || job.payloadSha256 !== payload.payloadSha256 || job.payloadSize !== payload.payloadSize) throw productionError("PRODUCTION_DELETE_PAYLOAD_MISMATCH", "Der erneut erzeugte Delete-Payload stimmt nicht mit dem persistenten Job überein.");
         claimed = await options.ledger.claim(job.deleteJobId, now());
-        await writeLog("transfer-started", { deleteJobId: job.deleteJobId, schedulerRunId: identity.schedulerRunId, externalObjectNumber: eligibility.source.externalId, payloadFilename: payload.payloadFilename, payloadSha256: payload.payloadSha256, payloadSize: payload.payloadSize });
+        await writeLog("transfer-started", { deleteJobId: job.deleteJobId, schedulerRunId: identity.schedulerRunId, batchOverrideId: identity.batchOverrideId || null, effectiveMaxRunItems: context.maxRunItems, runtimeCommit: identity.runtimeCommit || null, externalObjectNumber: eligibility.source.externalId, payloadFilename: payload.payloadFilename, payloadSha256: payload.payloadSha256, payloadSize: payload.payloadSize });
         await options.upload({ archive: payload.archive, filename: payload.payloadFilename, job, eligibility });
         const transferredJob = await options.ledger.transferred(job.deleteJobId, claimed.claimToken, now());
         await options.store.update((state) => ({ state: markDeleteTransferredInState(state, eligibility, transferredJob, now()) }), { now: now() });
         transferred.push(transferredJob.externalObjectNumber);
-        await writeLog("transferred", { deleteJobId: transferredJob.deleteJobId, schedulerRunId: identity.schedulerRunId, externalObjectNumber: transferredJob.externalObjectNumber, payloadFilename: payload.payloadFilename, payloadSha256: payload.payloadSha256, payloadSize: payload.payloadSize, status: transferredJob.status });
+        await writeLog("transferred", { deleteJobId: transferredJob.deleteJobId, schedulerRunId: identity.schedulerRunId, batchOverrideId: identity.batchOverrideId || null, effectiveMaxRunItems: context.maxRunItems, runtimeCommit: identity.runtimeCommit || null, externalObjectNumber: transferredJob.externalObjectNumber, payloadFilename: payload.payloadFilename, payloadSha256: payload.payloadSha256, payloadSize: payload.payloadSize, status: transferredJob.status });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Produktions-Delete-Transfer fehlgeschlagen.";
         if (claimed && identity) {
@@ -477,7 +659,7 @@ export function createProductionDeleteService(options) {
     return { candidateCount: candidates.length, selectedCount: selected.length, skippedCount: Math.max(0, candidates.length - selected.length), transferred, errors };
   }
 
-  async function confirmPendingReports(maxRunItems) {
+  async function confirmPendingReports() {
     const ledger = await options.ledger.read();
     const confirmedJobs = ledger.jobs.filter((job) => job.status === PRODUCTION_DELETE_STATUS.CONFIRMED);
     for (const job of confirmedJobs) {
@@ -493,7 +675,6 @@ export function createProductionDeleteService(options) {
       }), { now: now() });
     }
     const pending = ledger.jobs.filter((job) => job.status === PRODUCTION_DELETE_STATUS.PENDING_CONFIRMATION);
-    if (pending.length > maxRunItems) throw productionError("PRODUCTION_DELETE_PENDING_LIMIT_EXCEEDED", `Es existieren ${pending.length} offene Delete-Berichte; das Produktionslimit ${maxRunItems} wird fail-closed nicht überschritten.`);
     if (!pending.length) return { pendingCount: 0, candidateCount: 0, confirmed: [], mailMutations: 0 };
     const earliest = Math.min(...pending.map((job) => Date.parse(job.transferCompletedAt || now())).filter(Number.isFinite));
     const lookbackHours = Math.max(2, Math.min(720, Math.ceil((Date.now() - earliest) / 3600000) + 24));
@@ -515,7 +696,7 @@ export function createProductionDeleteService(options) {
         const confirmedJob = await options.ledger.confirm(job.deleteJobId, report, now());
         await options.store.update((state) => ({ state: finalizeProductionDeleteInState(state, confirmedJob, report, { now: now() }).state }), { now: now() });
         confirmed.push(job.externalObjectNumber);
-        await writeLog("confirmed", { deleteJobId: job.deleteJobId, schedulerRunId: job.schedulerRunId, externalObjectNumber: job.externalObjectNumber, reportMessageId: report.messageId, reportHash: report.rawHash, mailboxName: candidate.mailboxName, mailMutations: 0, status: confirmedJob.status });
+        await writeLog("confirmed", { deleteJobId: job.deleteJobId, schedulerRunId: job.schedulerRunId, batchOverrideId: job.batchOverrideId || null, effectiveMaxRunItems: job.batchOverrideId ? job.batchOverrideMaxRunItems : 3, runtimeCommit: job.runtimeCommit || null, externalObjectNumber: job.externalObjectNumber, reportMessageId: report.messageId, reportHash: report.rawHash, mailboxName: candidate.mailboxName, mailMutations: 0, status: confirmedJob.status });
         break;
       }
     }
@@ -562,22 +743,62 @@ export function createProductionDeleteService(options) {
       };
     }
 
-    // Bestätigungen werden zuerst verarbeitet. Noch offene Berichte belegen
-    // dasselbe persistente Maximalbudget wie neue Transfers. So können weder
-    // ein Helper-Neustart noch ein verzögerter Providerbericht mehr als drei
-    // gleichzeitig offene Produktions-Löschketten erzeugen.
-    const confirmation = await confirmPendingReports(policy.maxRunItems);
+    const snapshotBeforeConfirmation = await options.store.load();
+    await resolveDeleteContexts(snapshotBeforeConfirmation.state, ledgerBefore);
+    const confirmation = await confirmPendingReports();
     const ledgerAfterConfirmation = await options.ledger.read();
-    const pendingAfterConfirmation = ledgerAfterConfirmation.jobs.filter((job) => job.status === PRODUCTION_DELETE_STATUS.PENDING_CONFIRMATION);
-    const remainingTransferBudget = policy.maxRunItems - pendingAfterConfirmation.length;
-    const transfer = await transferEligibleSources(remainingTransferBudget, targetExternalObjectNumber);
+    const snapshotAfterConfirmation = await options.store.load();
+    const resolved = await resolveDeleteContexts(snapshotAfterConfirmation.state, ledgerAfterConfirmation);
+    const contextsWithCandidates = [...resolved.contexts.values()].filter((context) => context.candidates.length);
+    let selectedContext = null;
+    if (targetExternalObjectNumber) {
+      const matches = contextsWithCandidates.flatMap((context) => context.candidates.map((candidate) => ({ context, candidate }))).filter(({ candidate }) => {
+        const project = snapshotAfterConfirmation.state.projects.find((entry) => entry.id === candidate.projectId);
+        const source = project?.listings.find((entry) => entry.id === candidate.sourceListingId);
+        return source?.externalId === targetExternalObjectNumber;
+      });
+      if (matches.length !== 1) throw productionError("PRODUCTION_DELETE_EXACT_TARGET_NOT_ELIGIBLE", "Das exakt angeforderte Produktions-Deleteziel ist nicht eindeutig löschberechtigt.");
+      selectedContext = matches[0].context;
+    } else {
+      selectedContext = contextsWithCandidates.sort((left, right) => {
+        const leftAt = Math.min(...left.candidates.map((candidate) => Date.parse(candidate.authorizedAt || "1970-01-01")));
+        const rightAt = Math.min(...right.candidates.map((candidate) => Date.parse(candidate.authorizedAt || "1970-01-01")));
+        return leftAt - rightAt || left.key.localeCompare(right.key);
+      })[0] || null;
+    }
+    const effectiveMaxRunItems = selectedContext?.overrideId
+      ? selectedContext.maxRunItems
+      : policy.maxRunItems;
+    const remainingTransferBudget = selectedContext
+      ? Math.max(0, Math.min(
+          effectiveMaxRunItems - selectedContext.pendingJobs.length,
+          PRODUCTION_BATCH_OVERRIDE_MAX_ITEMS - resolved.totalPending,
+        ))
+      : 0;
+    const transfer = selectedContext
+      ? await transferEligibleSources({ ...selectedContext, maxRunItems: effectiveMaxRunItems }, remainingTransferBudget, targetExternalObjectNumber)
+      : { candidateCount: resolved.candidates.length, selectedCount: 0, skippedCount: resolved.candidates.length, transferred: [], errors: [] };
+    await writeLog("run-context", {
+      trigger,
+      batchOverrideId: selectedContext?.overrideId || null,
+      schedulerRunId: selectedContext?.schedulerRunId || null,
+      runtimeCommit: selectedContext?.runtimeCommit || null,
+      effectiveMaxRunItems,
+      candidateCount: transfer.candidateCount,
+      selectedCount: transfer.selectedCount,
+      pendingConfirmationCount: resolved.totalPending + transfer.transferred.length,
+    });
     return {
       ran: true,
       trigger,
       targetExternalObjectNumber,
       maxRunItems: policy.maxRunItems,
+      effectiveMaxRunItems,
+      batchOverrideId: selectedContext?.overrideId || null,
+      schedulerRunId: selectedContext?.schedulerRunId || null,
+      runtimeCommit: selectedContext?.runtimeCommit || null,
       ...transfer,
-      pendingConfirmationCount: pendingAfterConfirmation.length + transfer.transferred.length,
+      pendingConfirmationCount: resolved.totalPending + transfer.transferred.length,
       reportCandidateCount: confirmation.candidateCount,
       confirmed: confirmation.confirmed,
       mailMutations: 0,

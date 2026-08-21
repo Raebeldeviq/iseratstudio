@@ -16,6 +16,8 @@ import { normalizeWorkflowStatus, WORKFLOW_STATUS } from "./workflow-status.mjs"
 import { normalizeListingRotationOperatingMode } from "./listing-rotation-operating-mode.mjs";
 import { verifyProductionRuntime } from "./helper-runtime-provenance.mjs";
 
+const BATCH_OVERRIDE_MUTATING_TRIGGERS = new Set(["periodic", "manual-production-batch"]);
+
 function uid() {
   return globalThis.crypto.randomUUID();
 }
@@ -130,7 +132,7 @@ function replaceProject(state, updatedProject) {
   };
 }
 
-function markProductionRotationCopy(state, projectId, copyId, sourceListingId, runId, at) {
+function markProductionRotationCopy(state, projectId, copyId, sourceListingId, runId, at, batchOverride = null) {
   const project = state.projects.find((candidate) => candidate.id === projectId);
   const copy = project?.listings.find((candidate) => candidate.id === copyId);
   if (!project || !copy) throw new Error("Die Produktions-Rotationskopie ist nicht eindeutig vorhanden.");
@@ -142,6 +144,11 @@ function markProductionRotationCopy(state, projectId, copyId, sourceListingId, r
       sourceListingId,
       automaticDeleteAuthorized: true,
       preparedAt: at,
+      ...(batchOverride ? {
+        batchOverrideId: batchOverride.overrideId,
+        batchOverrideMaxRunItems: batchOverride.maxRunItems,
+        runtimeCommit: batchOverride.expectedRuntimeCommit,
+      } : {}),
     },
   };
   const group = normalizeListingGroup(project.listingGroup, project.id, { now: at });
@@ -358,9 +365,66 @@ export function createListingRotationSchedulerService(options) {
       || productionPolicy.maxRunItems > 3
     );
     const runtimeGuardBlocked = productiveMode && runtimeGuard.valid !== true;
-    const activeRunLimit = operatingMode === "active" && productionPolicy.valid === true
+    let activeRunLimit = operatingMode === "active" && productionPolicy.valid === true
       ? Math.max(0, Math.trunc(Number(productionPolicy.maxRunItems)))
       : Number.POSITIVE_INFINITY;
+    let batchOverride = null;
+    let batchOverrideAbortReason = "";
+
+    if (
+      operatingMode === "active"
+      && !productionPolicyBlocked
+      && !runtimeGuardBlocked
+      && options.batchOverrideStore?.load
+      && options.batchOverrideStore?.claim
+      && BATCH_OVERRIDE_MUTATING_TRIGGERS.has(trigger)
+    ) {
+      try {
+        const overrideStatus = await options.batchOverrideStore.load({ now: startedAt });
+        if (overrideStatus.valid !== true) {
+          batchOverrideAbortReason = overrideStatus.fallbackReason
+            || "One-Shot-Produktionsoverride ist nicht sicher lesbar.";
+        } else if (overrideStatus.state === "armed") {
+          const snapshot = await options.store.load();
+          if (snapshot?.stored && snapshot.state) {
+            const scheduler = normalizeListingScheduler(snapshot.state.scheduler, { now: startedAt });
+            const windowIssues = schedulerWindowBlockReasons(scheduler, startedAt, {
+              ignoreTimeWindow: false,
+            });
+            const pending = pendingRotationCopies(snapshot.state);
+            const selection = windowIssues.length
+              ? { selections: [] }
+              : selectSchedulerListings({ ...snapshot.state, scheduler }, startedAt, {
+                  ignoreTimeWindow: false,
+                  maximumSelections: Math.max(0, overrideStatus.maxRunItems - pending.length),
+                });
+            if (!windowIssues.length && selection.selections.length) {
+              const claim = await options.batchOverrideStore.claim({
+                schedulerRunId: runId,
+                runningRuntimeCommit: runtimeGuard.runtimeCommit,
+                now: startedAt,
+              });
+              if (claim.blocking) {
+                batchOverrideAbortReason = claim.reason === "runtime_mismatch"
+                  ? "One-Shot-Produktionsoverride gesperrt: Runtime-Commit stimmt nicht mit der Freigabe überein."
+                  : String(claim.reason || "One-Shot-Produktionsoverride ist gesperrt.");
+              } else if (claim.claimed && claim.record) {
+                batchOverride = claim.record;
+                activeRunLimit = claim.record.maxRunItems;
+              }
+            }
+          }
+        }
+      } catch (error) {
+        batchOverrideAbortReason = error instanceof Error
+          ? error.message
+          : "Der One-Shot-Produktionsoverride konnte nicht sicher vorgeprüft oder atomar beansprucht werden.";
+      }
+    }
+
+    const effectiveIgnoreTimeWindow = batchOverride || trigger === "manual-production-batch"
+      ? false
+      : input.ignoreTimeWindow === true;
 
     const completedListingIds = [];
     const failedListingIds = [];
@@ -371,26 +435,31 @@ export function createListingRotationSchedulerService(options) {
     let skippedCount = 0;
     let skippedListings = [];
     let abortReason = "";
-    await writeRunLog("started", {
-      runId,
-      trigger,
-      startedAt,
-      operatingMode,
-      operatingModeFallbackReason,
-      productionPolicyValid: productionPolicy.valid === true,
-      productionPolicyFallbackReason: productionPolicy.fallbackReason || "",
-      maxRunItems: Number.isFinite(activeRunLimit) ? activeRunLimit : null,
-      startupCatchupMode: productionPolicy.startupCatchupMode || "detect-only",
-      canaryListingIds: operatingMode === "canary" ? operatingPolicy.canaryListingIds : [],
-      ...runtimeGuard,
-    });
+    let startedRotationCount = 0;
+    let batchEndState = "claimed";
     try {
+      await writeRunLog("started", {
+        runId,
+        trigger,
+        startedAt,
+        operatingMode,
+        operatingModeFallbackReason,
+        productionPolicyValid: productionPolicy.valid === true,
+        productionPolicyFallbackReason: productionPolicy.fallbackReason || "",
+        maxRunItems: Number.isFinite(activeRunLimit) ? activeRunLimit : null,
+        effectiveMaxRunItems: Number.isFinite(activeRunLimit) ? activeRunLimit : null,
+        overrideId: batchOverride?.overrideId || null,
+        overrideClaimedAt: batchOverride?.claimedAt || "",
+        startupCatchupMode: productionPolicy.startupCatchupMode || "detect-only",
+        canaryListingIds: operatingMode === "canary" ? operatingPolicy.canaryListingIds : [],
+        ...runtimeGuard,
+      });
       await lease.refresh?.({ now: startedAt });
       const initialized = await options.store.update((rawState) => {
         const state = recoverInterruptedState(rawState, startedAt);
         const scheduler = normalizeListingScheduler(state.scheduler, { now: startedAt });
         const windowIssues = schedulerWindowBlockReasons(scheduler, startedAt, {
-          ignoreTimeWindow: input.ignoreTimeWindow === true,
+          ignoreTimeWindow: effectiveIgnoreTimeWindow,
         });
         const due = schedulerDueListings({ ...state, scheduler }, startedAt);
         const allPending = pendingRotationCopies(state);
@@ -421,10 +490,10 @@ export function createListingRotationSchedulerService(options) {
         }
         const pendingLimitExceeded = operatingMode === "active" && pending.length > activeRunLimit;
         const blockingIssues = pending.length ? hardSchedulerIssues(windowIssues) : windowIssues;
-        const selection = operatingMode === "off" || productionPolicyBlocked || runtimeGuardBlocked || pendingLimitExceeded || blockingIssues.length || windowIssues.length
+        const selection = operatingMode === "off" || productionPolicyBlocked || runtimeGuardBlocked || batchOverrideAbortReason || pendingLimitExceeded || blockingIssues.length || windowIssues.length
           ? { selections: [], skipped: [], issues: windowIssues, scheduler }
           : selectSchedulerListings({ ...state, scheduler }, startedAt, {
-              ignoreTimeWindow: input.ignoreTimeWindow === true,
+              ignoreTimeWindow: effectiveIgnoreTimeWindow,
               ...(operatingMode === "canary" ? { allowedListingIds } : {}),
               ...(operatingMode === "active" ? { maximumSelections: Math.max(0, activeRunLimit - pending.length) } : {}),
             });
@@ -468,6 +537,8 @@ export function createListingRotationSchedulerService(options) {
           abortReason = productionPolicy.fallbackReason || "Produktions-Rollout-Policy ist ungültig; active ist fail-closed gesperrt.";
         } else if (runtimeGuardBlocked) {
           abortReason = runtimeGuard.fallbackReason;
+        } else if (batchOverrideAbortReason) {
+          abortReason = batchOverrideAbortReason;
         } else if (pendingLimitExceeded) {
           abortReason = `Es existieren ${pending.length} fortzusetzende Rotationen; das Produktionslimit maxRunItems=${activeRunLimit} wird fail-closed nicht überschritten.`;
         } else if (blockingIssues.length) abortReason = blockingIssues.join(" · ");
@@ -504,6 +575,9 @@ export function createListingRotationSchedulerService(options) {
           runtimeRelease: runtimeGuard.runtimeRelease,
           runtimeGuardValid: runtimeGuard.valid,
           maxRunItems: Number.isFinite(activeRunLimit) ? activeRunLimit : null,
+          effectiveMaxRunItems: Number.isFinite(activeRunLimit) ? activeRunLimit : null,
+          overrideId: batchOverride?.overrideId || null,
+          overrideClaimedAt: batchOverride?.claimedAt || "",
           startupCatchupMode: productionPolicy.startupCatchupMode || "detect-only",
           mode: scheduler.settings.mode,
           selectedListingIds,
@@ -544,8 +618,25 @@ export function createListingRotationSchedulerService(options) {
           error: "",
           abortReason,
         }, endedAt);
-        await writeRunLog("finished", { runId, trigger, startedAt, endedAt, operatingMode, operatingModeFallbackReason, dueCount, selectedCount: 0, skippedCount, skippedListings, errorCount: 0, abortReason, status });
-        return { ok: true, claimed: true, runId, operatingMode, operatingModeFallbackReason, dueCount, selectedListingIds, resumedListingIds, completedListingIds, failedListingIds, skippedCount, skippedListings, abortReason };
+        await writeRunLog("finished", {
+          runId,
+          trigger,
+          startedAt,
+          endedAt,
+          operatingMode,
+          operatingModeFallbackReason,
+          dueCount,
+          selectedCount: 0,
+          skippedCount,
+          skippedListings,
+          errorCount: 0,
+          abortReason,
+          status,
+          effectiveMaxRunItems: Number.isFinite(activeRunLimit) ? activeRunLimit : null,
+          overrideId: batchOverride?.overrideId || null,
+        });
+        batchEndState = "blocked";
+        return { ok: true, claimed: true, runId, operatingMode, operatingModeFallbackReason, effectiveMaxRunItems: Number.isFinite(activeRunLimit) ? activeRunLimit : null, overrideId: batchOverride?.overrideId || null, dueCount, selectedListingIds, resumedListingIds, completedListingIds, failedListingIds, skippedCount, skippedListings, abortReason };
       }
 
       const workItems = [
@@ -560,6 +651,7 @@ export function createListingRotationSchedulerService(options) {
 
       for (const item of workItems) {
         await lease.refresh?.({ now: stepTimestamp() });
+        startedRotationCount += 1;
         let copyId = item.resume ? item.listingId : "";
         let sourceListingId = item.sourceListingId;
         try {
@@ -599,6 +691,7 @@ export function createListingRotationSchedulerService(options) {
                     source.id,
                     runId,
                     preparedAt,
+                    batchOverride,
                   )
                 : result.state;
               const nextProject = nextState.projects.find((candidate) => candidate.id === project.id);
@@ -613,12 +706,20 @@ export function createListingRotationSchedulerService(options) {
           const copy = project?.listings.find((candidate) => candidate.id === copyId);
           if (!project || !copy) throw new Error("Die vorbereitete Rotationskopie ist nicht mehr im Katalog vorhanden.");
           sourceListingId = copy.rotationSourceListingId || sourceListingId;
+          const copyBatchOverrideId = String(copy.productionLifecycle?.batchOverrideId || "");
+          const copyBatchSchedulerRunId = String(copy.productionLifecycle?.schedulerRunId || "");
+          const copyBatchMaxRunItems = Math.max(0, Math.trunc(Number(copy.productionLifecycle?.batchOverrideMaxRunItems) || 0));
           const uploadResult = await options.upload({
             state: snapshot.state,
             project,
             listing: copy,
             runId,
             trigger,
+            batchOverrideId: copyBatchOverrideId,
+            batchSchedulerRunId: copyBatchOverrideId ? copyBatchSchedulerRunId : "",
+            effectiveMaxRunItems: copyBatchOverrideId
+              ? copyBatchMaxRunItems
+              : productionPolicy.valid === true ? productionPolicy.maxRunItems : null,
           });
           const completedAt = stepTimestamp();
           await lease.refresh?.({ now: completedAt });
@@ -691,14 +792,19 @@ export function createListingRotationSchedulerService(options) {
         errorCount: errors.length,
         abortReason,
         status,
+        effectiveMaxRunItems: Number.isFinite(activeRunLimit) ? activeRunLimit : null,
+        overrideId: batchOverride?.overrideId || null,
         errors,
       });
+      batchEndState = status;
       return {
         ok: failedListingIds.length === 0,
         claimed: true,
         runId,
         operatingMode,
         operatingModeFallbackReason,
+        effectiveMaxRunItems: Number.isFinite(activeRunLimit) ? activeRunLimit : null,
+        overrideId: batchOverride?.overrideId || null,
         dueCount,
         selectedListingIds,
         resumedListingIds,
@@ -712,6 +818,7 @@ export function createListingRotationSchedulerService(options) {
     } catch (error) {
       const endedAt = String(input.endNow || new Date().toISOString());
       const message = error instanceof Error ? error.message : "Scheduler-Lauf ist unerwartet fehlgeschlagen.";
+      abortReason = message;
       errors.push({ projectId: "", listingId: "", copyId: "", message });
       await finalizeRun(runId, {
         endedAt,
@@ -723,10 +830,64 @@ export function createListingRotationSchedulerService(options) {
         error: errors.map((item) => item.message).join(" · "),
         errors,
       }, endedAt).catch(() => undefined);
-      await writeRunLog("failed", { runId, trigger, startedAt, endedAt, operatingMode, operatingModeFallbackReason, dueCount, selectedCount: selectedListingIds.length, skippedCount, skippedListings, errorCount: errors.length, errors });
-      return { ok: false, claimed: true, runId, operatingMode, operatingModeFallbackReason, dueCount, selectedListingIds, resumedListingIds, completedListingIds, failedListingIds, skippedCount, skippedListings, errors, abortReason: message };
+      await writeRunLog("failed", {
+        runId,
+        trigger,
+        startedAt,
+        endedAt,
+        operatingMode,
+        operatingModeFallbackReason,
+        dueCount,
+        selectedCount: selectedListingIds.length,
+        skippedCount,
+        skippedListings,
+        errorCount: errors.length,
+        errors,
+        effectiveMaxRunItems: Number.isFinite(activeRunLimit) ? activeRunLimit : null,
+        overrideId: batchOverride?.overrideId || null,
+      });
+      batchEndState = "failed";
+      return { ok: false, claimed: true, runId, operatingMode, operatingModeFallbackReason, effectiveMaxRunItems: Number.isFinite(activeRunLimit) ? activeRunLimit : null, overrideId: batchOverride?.overrideId || null, dueCount, selectedListingIds, resumedListingIds, completedListingIds, failedListingIds, skippedCount, skippedListings, errors, abortReason: message };
     } finally {
-      await lease.release();
+      try {
+        if (batchOverride && options.batchOverrideStore?.consume) {
+          const finishedAt = stepTimestamp();
+          try {
+            const record = await options.batchOverrideStore.consume({
+              overrideId: batchOverride.overrideId,
+              schedulerRunId: runId,
+              finishedAt,
+              endState: batchEndState,
+              selectedCount: selectedListingIds.length + resumedListingIds.length,
+              startedCount: startedRotationCount,
+              completedCount: completedListingIds.length,
+              failedCount: failedListingIds.length,
+              abortReason,
+            });
+            await writeRunLog("override-consumed", {
+              overrideId: record.overrideId,
+              schedulerRunId: runId,
+              maxRunItems: record.maxRunItems,
+              claimedAt: record.claimedAt,
+              consumedAt: record.consumedAt,
+              selectedCount: record.selectedCount,
+              startedCount: record.startedCount,
+              completedCount: record.completedCount,
+              failedCount: record.failedCount,
+              endState: record.endState,
+            }).catch(() => undefined);
+          } catch (error) {
+            await writeRunLog("override-consume-failed", {
+              overrideId: batchOverride.overrideId,
+              schedulerRunId: runId,
+              errorCode: String(error?.code || "PRODUCTION_BATCH_OVERRIDE_CONSUME_FAILED"),
+              message: error instanceof Error ? error.message : "One-Shot-Produktionsoverride blieb sicher claimed.",
+            }).catch(() => undefined);
+          }
+        }
+      } finally {
+        await lease.release();
+      }
     }
   }
 
@@ -788,6 +949,8 @@ export function createListingRotationSchedulerService(options) {
       operatingModeValid: operatingPolicy.valid === true,
       productionPolicyValid: productionPolicy.valid === true,
       maxRunItems: productionPolicy.valid === true ? productionPolicy.maxRunItems : 0,
+      effectiveMaxRunItems: productionPolicy.valid === true ? productionPolicy.maxRunItems : 0,
+      overrideId: null,
       startupCatchupMode: productionPolicy.startupCatchupMode || "detect-only",
       runtimeCommit: runtimeGuard.runtimeCommit,
       expectedProductionCommit: runtimeGuard.expectedProductionCommit,

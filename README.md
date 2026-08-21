@@ -441,6 +441,44 @@ strukturierten Logs ergänzen stets die Prozess-ID. Damit lässt sich die Kette
 `Runtime → Rotation → persistierte Creative-Auswahl → OpenImmo-Payload`
 vollständig rekonstruieren, ohne Zugangsdaten zu protokollieren.
 
+### Einmaliger Produktionsbatch bis maximal 25
+
+Der dauerhafte Produktionsvertrag bleibt unverändert bei höchstens drei
+Rotationen pro Schedulerlauf. Eine größere Runde ist ausschließlich über den
+persistent verbrauchbaren Operatorvertrag `production_batch_once` zulässig. Er
+akzeptiert nur ganze Werte von `4` bis `25`, bindet sich beim Armieren an den
+exakten Commit der laufenden isolierten Helper-Runtime und verfällt nach 60
+Minuten automatisch, falls ihn kein regulärer Produktionslauf beansprucht.
+
+```bash
+node production-batch-override-cli.mjs status
+node production-batch-override-cli.mjs arm --max-run-items 25
+node production-batch-override-cli.mjs cancel
+```
+
+`arm` erzeugt ausschließlich einen Datensatz im Zustand `armed`; es startet
+weder Scheduler noch FTPS. Vor der ersten produktiven Katalogmutation kann
+exakt ein regulärer Schedulerlauf den Datensatz atomar auf `claimed` setzen.
+Der Claim speichert die Schedulerlauf-ID und ist damit auch über konkurrierende
+Helper und Restarts hinweg exklusiv. Nach einem erfolgreichen, blockierten oder
+fehlgeschlagenen Abschluss wird er `consumed`. Ein harter Prozessabbruch lässt
+ihn sicher `claimed`; dadurch entsteht ebenfalls nie automatisch ein zweiter
+großer Batch. Bereits vorbereitete Einzelkopien dürfen anschließend unter dem
+normalen Dreierlimit idempotent fortgesetzt werden.
+
+Status, Vorschau, Dry Run und `startup-detect-only` beanspruchen den Override
+nicht. Auch `startup-guarded` bleibt beim normalen Dreierlimit. Zeitfenster
+08:00–18:00 Europe/Berlin, mindestens eine Stunde Laufabstand, serielle
+Verarbeitung, Daily-Plot-Guard, Creative-Payload-Prüfung, Upload-Deduplizierung,
+Importbestätigung und alle Claims/Leases/CAS-Grenzen bleiben unverändert. Ein
+Runtime-Mismatch entwertet den Override vor Kopie und FTPS fail-closed.
+
+Jede im One-Shot-Lauf neu erzeugte Ersatzkopie trägt zusätzlich Override-ID,
+ursprüngliche Schedulerlauf-ID, Batchlimit und Runtime-Commit. Nur diese exakte
+Provenienz kann später den Production-DELETE für denselben Batchkontext bis zur
+autorisierten Obergrenze erweitern. Ohne diese Provenienz bleibt DELETE bei
+höchstens drei Ketten; falsche oder gemischte Jobprovenienz stoppt vor FTPS.
+
 ### Immoprofessional-Importbestätigung aus dem serverseitigen Berichtordner
 
 Der lokale Background-Helper schließt die zweite Veröffentlichungsstufe über
@@ -669,15 +707,26 @@ node listing-rotation-production-delete-cli.mjs mode --mode active
 
 Im Modus `active` verarbeitet er ausschließlich neue, eindeutig markierte
 Produktions-Lifecycles, strikt sequenziell und höchstens bis zum identischen
-`maxRunItems`-Limit. Nach einem Transfer bleibt die alte Quelle `published` und
-`delete_pending_confirmation`. Erst ein read-only gelesener positiver
+`maxRunItems`-Limit von normalerweise drei. Ausschließlich Ketten eines
+persistiert `claimed` oder `consumed` One-Shot-Batches dürfen anhand der exakten
+Override-, Schedulerlauf- und Runtime-Provenienz bis zu dessen maximal 25
+Einträgen verarbeitet werden. Das erhöht kein globales Delete-Limit und erlaubt
+keine fremde oder spätere Löschkette. Nach einem Transfer bleibt die alte Quelle
+`published` und `delete_pending_confirmation`. Erst ein read-only gelesener positiver
 Immoprofessional-Bericht mit Anbieter `30460`, Objektanzahl eins, exakter alter
 Objektnummer, SPF-Vertrauensnachweis und ohne Warnung/Fehler setzt sie auf
 `deleted`. Ein unklarer Transfer wird nie automatisch wiederholt; das
 Replacement wird in keinem Delete-Pfad verändert.
-Offene Löschberichte und neue Löschtransfers teilen sich dieses Dreierbudget.
+Offene Löschberichte und neue Löschtransfers teilen sich das jeweilige,
+provenienzgebundene Kontextbudget; global bleiben höchstens 25 offene Berichte.
 Ein unterbrochener oder unklarer Deletejob blockiert fail-closed sämtliche
 weiteren Delete-Transfers, bis der Zustand manuell geklärt wurde.
+
+Ein Runtime-Wechsel während noch offener One-Shot-Ketten bleibt bewusst
+fail-closed: Upload- und DELETE-Fortsetzung verlangen weiterhin den exakt im
+Batch persistierten Runtime-Commit. Vor einem Runtime-Wechsel müssen solche
+Ketten daher abgeschlossen oder ausdrücklich reconciliert werden; der Helper
+leitet daraus niemals selbst eine neue Batchfreigabe ab.
 
 ### Einmalige Katalog-Reconciliation des bestätigten Delete-Canarys
 

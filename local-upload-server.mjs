@@ -55,6 +55,7 @@ import { createListingRotationSchedulerService } from "./listing-rotation-schedu
 import { createPersistentLease } from "./persistent-lease.mjs";
 import { createListingRotationOperatingModeStore } from "./listing-rotation-operating-mode.mjs";
 import { createListingRotationProductionPolicyStore } from "./listing-rotation-production-policy.mjs";
+import { createProductionBatchOverrideStore } from "./production-batch-override.mjs";
 import { createAppleMailImportReportAdapter } from "./apple-mail-import-report-adapter.mjs";
 import { runMailRuntimeProbe } from "./mail-runtime-probe.mjs";
 import { createAppleMailDeleteReportAdapter } from "./apple-mail-live-canary-delete-report-adapter.mjs";
@@ -85,6 +86,7 @@ const LISTING_SCHEDULER_LOG_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-sch
 const LISTING_SCHEDULER_LOCK_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-scheduler.lock");
 const LISTING_ROTATION_MODE_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-rotation-mode.json");
 const LISTING_ROTATION_PRODUCTION_POLICY_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-rotation-production-policy.json");
+const PRODUCTION_BATCH_OVERRIDE_PATH = join(APPLICATION_DATA_DIRECTORY, "production-batch-override.json");
 const IMPORT_REPORT_LOG_PATH = join(APPLICATION_DATA_DIRECTORY, "immoprofessional-import-reports.log");
 const MAIL_RUNTIME_LOG_PATH = join(APPLICATION_DATA_DIRECTORY, "mail-runtime.log");
 const PRODUCTION_DELETE_MODE_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-rotation-production-delete-mode.json");
@@ -110,6 +112,7 @@ const catalogStateStore = createCatalogStateStore();
 const listingSchedulerLease = createPersistentLease(LISTING_SCHEDULER_LOCK_PATH);
 const listingRotationOperatingModeStore = createListingRotationOperatingModeStore(LISTING_ROTATION_MODE_PATH);
 const listingRotationProductionPolicyStore = createListingRotationProductionPolicyStore(LISTING_ROTATION_PRODUCTION_POLICY_PATH);
+const productionBatchOverrideStore = createProductionBatchOverrideStore(PRODUCTION_BATCH_OVERRIDE_PATH);
 const productionDeleteModeStore = createProductionDeleteModeStore(PRODUCTION_DELETE_MODE_PATH);
 const productionDeleteLedger = createProductionDeleteLedger(PRODUCTION_DELETE_LEDGER_PATH);
 const importReportMailAdapter = createAppleMailImportReportAdapter();
@@ -310,9 +313,34 @@ async function persistedUploadContext(projectId, listingId) {
   return { state: snapshot.state, project, listing };
 }
 
-async function automaticRotationUpload({ state, project, listing, runId }) {
+async function automaticRotationUpload({ state, project, listing, runId, batchOverrideId = "", batchSchedulerRunId = "", effectiveMaxRunItems = null }) {
   const productionPolicy = await listingRotationProductionPolicyStore.load();
   const runtimeGuard = assertProductionRuntime(RUNTIME_PROVENANCE, productionPolicy);
+  const lifecycle = listing.productionLifecycle;
+  if (batchOverrideId) {
+    const authorization = await productionBatchOverrideStore.authorize({
+      overrideId: batchOverrideId,
+      schedulerRunId: batchSchedulerRunId,
+      runningRuntimeCommit: runtimeGuard.runtimeCommit,
+    });
+    if (
+      authorization.valid !== true
+      || lifecycle?.batchOverrideId !== batchOverrideId
+      || !batchSchedulerRunId
+      || lifecycle?.schedulerRunId !== batchSchedulerRunId
+      || lifecycle?.runtimeCommit !== runtimeGuard.runtimeCommit
+      || lifecycle?.batchOverrideMaxRunItems !== authorization.record?.maxRunItems
+      || effectiveMaxRunItems !== authorization.record?.maxRunItems
+    ) {
+      const error = new Error("Der Rotationsupload besitzt keine eindeutige persistente One-Shot-/Scheduler-/Runtime-Provenienz.");
+      error.code = "PRODUCTION_BATCH_OVERRIDE_UPLOAD_UNAUTHORIZED";
+      throw error;
+    }
+  } else if (lifecycle?.batchOverrideId || (effectiveMaxRunItems !== null && effectiveMaxRunItems > 3)) {
+    const error = new Error("Ein erhöhtes Uploadlimit ohne gültige One-Shot-Provenienz ist nicht zulässig.");
+    error.code = "PRODUCTION_BATCH_OVERRIDE_UPLOAD_PROVENANCE_MISSING";
+    throw error;
+  }
   const jobId = createUploadJobId(project, listing);
   const uploadJob = {
     jobId,
@@ -321,6 +349,9 @@ async function automaticRotationUpload({ state, project, listing, runId }) {
     plotId: String(project.plotId || ""),
     plotUploadDayKey: project.plotId ? plotUploadDayKey(project.plotId) : "",
     jobType: "automatic-listing-rotation",
+    batchOverrideId,
+    batchSchedulerRunId,
+    effectiveMaxRunItems,
   };
   const claim = await uploadJobLedger.claim(uploadJob);
   if (claim.alreadyCompleted) {
@@ -472,6 +503,7 @@ const listingRotationSchedulerService = createListingRotationSchedulerService({
   lease: listingSchedulerLease,
   operatingModeStore: listingRotationOperatingModeStore,
   productionPolicyStore: listingRotationProductionPolicyStore,
+  batchOverrideStore: productionBatchOverrideStore,
   runtimeProvenance: RUNTIME_PROVENANCE,
   upload: automaticRotationUpload,
   writeRunLog: (event, details) => writeListingSchedulerLog(event, {
@@ -505,6 +537,8 @@ const productionDeleteService = createProductionDeleteService({
   modeStore: productionDeleteModeStore,
   ledger: productionDeleteLedger,
   productionPolicyStore: listingRotationProductionPolicyStore,
+  batchOverrideStore: productionBatchOverrideStore,
+  runtimeProvenance: RUNTIME_PROVENANCE,
   mailAdapter: productionDeleteMailAdapter,
   upload: automaticProductionDeleteUpload,
   writeLog: (event, details) => writeProductionDeleteLog(event, details),
