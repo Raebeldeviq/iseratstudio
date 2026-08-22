@@ -3,11 +3,16 @@ import test from "node:test";
 
 import { createUploadJobId } from "../batch-upload.mjs";
 import {
+  reconcileCompletedProductionLifecycleInState,
   createProductionRotationLifecycleCoordinator,
   openProductionRotationLifecycles,
   ROTATION_LIFECYCLE_STAGE,
+  ROTATION_LIFECYCLE_VERIFIED_STAGE,
 } from "../listing-rotation-lifecycle-coordinator.mjs";
-import { PRODUCTION_DELETE_STATUS } from "../listing-rotation-production-delete.mjs";
+import {
+  productionDeleteIdentity,
+  PRODUCTION_DELETE_STATUS,
+} from "../listing-rotation-production-delete.mjs";
 import { WORKFLOW_STATUS } from "../workflow-status.mjs";
 
 const START = Date.parse("2026-08-21T10:00:00.000Z");
@@ -51,11 +56,23 @@ function fixtureState() {
     }],
     importReports: [],
     deleteReports: [],
+    uploadHistory: [{
+      id: "upload-history-a",
+      jobId: createUploadJobId(
+        { id: "project-a" },
+        { id: "replacement-a", externalId: "30460-200001", version: 1 },
+      ),
+      projectId: "project-a",
+      listingId: "replacement-a",
+      status: WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT,
+      error: "",
+    }],
   };
 }
 
 function memoryStore(initialState) {
   let state = structuredClone(initialState);
+  const history = [structuredClone(state)];
   return {
     async load() {
       return { stored: true, state: structuredClone(state) };
@@ -63,7 +80,11 @@ function memoryStore(initialState) {
     async update(mutator) {
       const mutation = await mutator(structuredClone(state));
       state = structuredClone(mutation?.state || mutation);
+      history.push(structuredClone(state));
       return { stored: true, state: structuredClone(state), result: mutation?.result };
+    },
+    history() {
+      return structuredClone(history);
     },
   };
 }
@@ -112,6 +133,7 @@ function coordinatorFixture(options = {}) {
     projectId: "project-a",
     listingId: "replacement-a",
     status: WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT,
+    transferredAt: "2026-08-21T10:00:00.000Z",
   };
   let importPolls = 0;
   let deletePolls = 0;
@@ -152,19 +174,46 @@ function coordinatorFixture(options = {}) {
     events.push("import-confirmed");
   }
 
-  async function confirmDelete() {
+  async function transferDelete() {
+    if (deleteJobs.length) return;
+    await updatePair(store, ({ source, replacement }) => {
+      const deleteJobId = productionDeleteIdentity(source, replacement).deleteJobId;
+      deleteJobs = [{
+        deleteJobId,
+        schedulerRunId: "scheduler-a",
+        projectId: "project-a",
+        sourceListingId: "source-a",
+        replacementListingId: "replacement-a",
+        externalObjectNumber: "30460-100001",
+        replacementExternalObjectNumber: "30460-200001",
+        status: PRODUCTION_DELETE_STATUS.PENDING_CONFIRMATION,
+        attempt: 1,
+        transferStartedAt: new Date(clockValue - 1_000).toISOString(),
+        transferCompletedAt: new Date(clockValue).toISOString(),
+      }];
+      return {
+        source: {
+          ...source,
+          productionDeleteState: "pending_confirmation",
+          productionDeleteJobId: deleteJobId,
+        },
+        replacement,
+        statePatch: {},
+      };
+    }, new Date(clockValue).toISOString());
+    events.push("delete-transferred");
+  }
+
+  async function confirmDelete(optionsValue = {}) {
+    if (!deleteJobs.length) await transferDelete();
     const confirmedAt = new Date(clockValue).toISOString();
     await updatePair(store, ({ state, source, replacement }) => {
       const job = {
-        deleteJobId: "delete-job-a",
-        schedulerRunId: "scheduler-a",
-        sourceListingId: source.id,
-        replacementListingId: replacement.id,
-        externalObjectNumber: source.externalId,
-        replacementExternalObjectNumber: replacement.externalId,
+        ...deleteJobs[0],
         status: PRODUCTION_DELETE_STATUS.CONFIRMED,
-        transferCompletedAt: new Date(clockValue - 1_000).toISOString(),
         confirmedAt,
+        reportMessageId: "delete-message-a",
+        reportHash: "b".repeat(64),
       };
       deleteJobs = [job];
       const report = {
@@ -174,22 +223,27 @@ function coordinatorFixture(options = {}) {
         replacementListingId: replacement.id,
         externalObjectNumber: source.externalId,
         result: "success",
+        messageId: job.reportMessageId,
+        rawHash: job.reportHash,
       };
       return {
-        source: {
-          ...source,
-          status: WORKFLOW_STATUS.DELETED,
-          externalDeletionPending: false,
-          productionDeleteState: "confirmed",
-          deleteConfirmedAt: confirmedAt,
-          deleteReportHash: "a".repeat(64),
-          deleteJobId: job.deleteJobId,
-        },
+        source: optionsValue.persistSource === false ? source : {
+            ...source,
+            status: WORKFLOW_STATUS.DELETED,
+            externalDeletionPending: false,
+            productionDeleteState: "confirmed",
+            deleteConfirmedAt: confirmedAt,
+            deleteReportHash: job.reportHash,
+            deleteJobId: job.deleteJobId,
+            productionDeleteJobId: job.deleteJobId,
+          },
         replacement,
-        statePatch: { deleteReports: [...state.deleteReports, report] },
+        statePatch: {
+          deleteReports: [...state.deleteReports.filter((entry) => entry.reportId !== report.reportId), report],
+        },
       };
     }, confirmedAt);
-    events.push("delete-confirmed");
+    events.push(optionsValue.persistSource === false ? "delete-confirmed-ledger-only" : "delete-confirmed");
   }
 
   const importReportService = {
@@ -203,7 +257,11 @@ function coordinatorFixture(options = {}) {
           reason: options.importErrorReason || "Apple-Mail-Abfrage ist fehlgeschlagen.",
         };
       }
-      if (importPolls > (options.importDelayPolls || 0) && options.importNever !== true) await confirmImport();
+      if (importPolls > (options.importDelayPolls || 0) && options.importNever !== true) {
+        await confirmImport();
+        if (options.backgroundDeleteTransferred) await transferDelete();
+        if (options.backgroundDeleteConfirmed) await confirmDelete({ persistSource: options.backgroundPersistDeleted !== false });
+      }
       return { ran: true, processed: [] };
     },
   };
@@ -214,23 +272,7 @@ function coordinatorFixture(options = {}) {
       deletePolls += 1;
       events.push("delete-poll");
       if (deletePolls > (options.deleteDelayPolls || 0) && options.deleteNever !== true) await confirmDelete();
-      else if (!deleteJobs.length) {
-        deleteJobs = [{
-          deleteJobId: "delete-job-a",
-          schedulerRunId: "scheduler-a",
-          sourceListingId: "source-a",
-          replacementListingId: "replacement-a",
-          externalObjectNumber: "30460-100001",
-          replacementExternalObjectNumber: "30460-200001",
-          status: PRODUCTION_DELETE_STATUS.PENDING_CONFIRMATION,
-          transferCompletedAt: new Date(clockValue).toISOString(),
-        }];
-        await updatePair(store, ({ source, replacement }) => ({
-          source: { ...source, productionDeleteState: "pending_confirmation", deleteJobId: "delete-job-a" },
-          replacement,
-          statePatch: {},
-        }), new Date(clockValue).toISOString());
-      }
+      else if (!deleteJobs.length) await transferDelete();
       return { ran: true, transferred: deletePolls === 1 ? ["30460-100001"] : [], confirmed: [], errors: [] };
     },
   };
@@ -249,7 +291,14 @@ function coordinatorFixture(options = {}) {
     sleep: async (milliseconds) => { events.push("sleep"); clockValue += milliseconds; },
     writeLog: async (event, details) => events.push(`${event}:${details.lifecycleStage || details.finalResult || ""}`),
   });
-  return { coordinator, store, events, counts: () => ({ importPolls, deletePolls }) };
+  return {
+    coordinator,
+    store,
+    events,
+    counts: () => ({ importPolls, deletePolls }),
+    ledgers: () => ({ uploadLedger: { jobs: [uploadJob] }, deleteLedger: { jobs: structuredClone(deleteJobs) } }),
+    advance: { confirmImport, transferDelete, confirmDelete },
+  };
 }
 
 function completeInput() {
@@ -367,4 +416,146 @@ test("restart recovery stamps a fully proven prior lifecycle without repeating p
   const replacement = state.projects[0].listings.find((listing) => listing.id === "replacement-a");
   assert.equal(replacement.productionLifecycle.lifecycleStage, ROTATION_LIFECYCLE_STAGE.COMPLETED);
   assert.ok(replacement.productionLifecycle.recoveredAt);
+});
+
+test("real race regression accepts a timer that finishes import, DELETE and source deletion before the next coordinator poll", async () => {
+  const fixture = coordinatorFixture({ backgroundDeleteConfirmed: true });
+  const result = await fixture.coordinator.complete(completeInput());
+  assert.equal(result.ok, true);
+  assert.equal(result.lifecycleStage, ROTATION_LIFECYCLE_STAGE.COMPLETED);
+  assert.deepEqual(fixture.counts(), { importPolls: 1, deletePolls: 0 });
+  assert.equal(fixture.events.filter((event) => event === "delete-transferred").length, 1);
+  assert.equal(fixture.events.filter((event) => event === "delete-confirmed").length, 1);
+  const state = (await fixture.store.load()).state;
+  const replacement = state.projects[0].listings.find((listing) => listing.id === "replacement-a");
+  assert.equal(replacement.productionLifecycle.lifecycleStage, ROTATION_LIFECYCLE_STAGE.COMPLETED);
+  assert.equal(replacement.productionLifecycle.reconciledForward, true);
+  assert.equal(replacement.productionLifecycle.reconciliationReason, "background_recovery_progress_ahead");
+  assert.equal(replacement.productionLifecycle.highestVerifiedStage, ROTATION_LIFECYCLE_VERIFIED_STAGE.SOURCE_DELETED);
+});
+
+test("published-ahead import proof is adopted and DELETE is performed once through the existing idempotent service", async () => {
+  const fixture = coordinatorFixture();
+  const result = await fixture.coordinator.complete(completeInput());
+  assert.equal(result.ok, true);
+  assert.deepEqual(fixture.counts(), { importPolls: 1, deletePolls: 1 });
+  assert.equal(fixture.events.filter((event) => event === "delete-transferred").length, 1);
+  assert.equal(fixture.ledgers().deleteLedger.jobs.length, 1);
+});
+
+test("delete-transferred-ahead waits for confirmation without sending a second DELETE", async () => {
+  const fixture = coordinatorFixture({ backgroundDeleteTransferred: true });
+  const result = await fixture.coordinator.complete(completeInput());
+  assert.equal(result.ok, true);
+  assert.deepEqual(fixture.counts(), { importPolls: 1, deletePolls: 1 });
+  assert.equal(fixture.events.filter((event) => event === "delete-transferred").length, 1);
+  assert.equal(fixture.ledgers().deleteLedger.jobs.length, 1);
+  assert.equal(fixture.ledgers().deleteLedger.jobs[0].status, PRODUCTION_DELETE_STATUS.CONFIRMED);
+});
+
+test("deleted-ahead at coordinator start completes without import polling or another DELETE", async () => {
+  const fixture = coordinatorFixture();
+  await fixture.advance.confirmImport();
+  await fixture.advance.confirmDelete();
+  await fixture.store.update((state) => ({
+    state: {
+      ...state,
+      projects: state.projects.map((project) => ({
+        ...project,
+        listings: project.listings.map((listing) => listing.id === "replacement-a"
+          ? {
+              ...listing,
+              productionLifecycle: {
+                ...listing.productionLifecycle,
+                lifecycleStage: ROTATION_LIFECYCLE_STAGE.AWAITING_DELETE_CONFIRMATION,
+              },
+            }
+          : listing),
+      })),
+    },
+  }));
+  const historyStart = fixture.store.history().length;
+  const result = await fixture.coordinator.complete(completeInput());
+  assert.equal(result.ok, true);
+  assert.deepEqual(fixture.counts(), { importPolls: 0, deletePolls: 0 });
+  assert.equal(fixture.events.filter((event) => event === "delete-transferred").length, 1);
+  assert.equal(fixture.ledgers().deleteLedger.jobs.length, 1);
+  const persistedStages = fixture.store.history().slice(historyStart).map((state) =>
+    state.projects[0].listings.find((listing) => listing.id === "replacement-a")
+      .productionLifecycle.lifecycleStage);
+  assert.ok(persistedStages.length > 0);
+  assert.ok(persistedStages.every((stage) => new Set([
+    ROTATION_LIFECYCLE_STAGE.AWAITING_DELETE_CONFIRMATION,
+    ROTATION_LIFECYCLE_STAGE.COMPLETED,
+  ]).has(stage)));
+});
+
+test("source deleted without exact positive delete proof fails closed and never advances the lifecycle", async () => {
+  const fixture = coordinatorFixture();
+  await updatePair(fixture.store, ({ source, replacement }) => ({
+    source: { ...source, status: WORKFLOW_STATUS.DELETED, externalDeletionPending: false },
+    replacement,
+    statePatch: {},
+  }), "2026-08-21T10:00:01.000Z");
+  await assert.rejects(
+    fixture.coordinator.complete(completeInput()),
+    { code: "LIFECYCLE_RECONCILIATION_REQUIRED" },
+  );
+  assert.deepEqual(fixture.counts(), { importPolls: 0, deletePolls: 0 });
+});
+
+test("replacement published without exact positive import provenance fails closed", async () => {
+  const fixture = coordinatorFixture();
+  await updatePair(fixture.store, ({ source, replacement }) => ({
+    source,
+    replacement: { ...replacement, status: WORKFLOW_STATUS.PUBLISHED },
+    statePatch: {},
+  }), "2026-08-21T10:00:01.000Z");
+  await assert.rejects(
+    fixture.coordinator.complete(completeInput()),
+    { code: "LIFECYCLE_RECONCILIATION_REQUIRED" },
+  );
+  assert.deepEqual(fixture.counts(), { importPolls: 0, deletePolls: 0 });
+});
+
+test("confirmed delete report with source persistence pending is finalized without a second transfer", async () => {
+  const fixture = coordinatorFixture({
+    backgroundDeleteConfirmed: true,
+    backgroundPersistDeleted: false,
+  });
+  const result = await fixture.coordinator.complete(completeInput());
+  assert.equal(result.ok, true);
+  assert.deepEqual(fixture.counts(), { importPolls: 1, deletePolls: 1 });
+  assert.equal(fixture.events.filter((event) => event === "delete-transferred").length, 1);
+  assert.equal(fixture.ledgers().deleteLedger.jobs.length, 1);
+  const state = (await fixture.store.load()).state;
+  const source = state.projects[0].listings.find((listing) => listing.id === "source-a");
+  assert.equal(source.status, WORKFLOW_STATUS.DELETED);
+});
+
+test("exact completed lifecycle reconciliation is internal and idempotent", async () => {
+  const fixture = coordinatorFixture();
+  await fixture.advance.confirmImport();
+  await fixture.advance.confirmDelete();
+  const before = (await fixture.store.load()).state;
+  const ledgers = fixture.ledgers();
+  const first = reconcileCompletedProductionLifecycleInState(
+    before,
+    completeInput(),
+    ledgers.uploadLedger,
+    ledgers.deleteLedger,
+    { now: "2026-08-21T10:01:00.000Z" },
+  );
+  assert.equal(first.result.status, "reconciled");
+  assert.equal(first.result.externalMutations, 0);
+  const second = reconcileCompletedProductionLifecycleInState(
+    first.state,
+    completeInput(),
+    ledgers.uploadLedger,
+    ledgers.deleteLedger,
+    { now: "2026-08-21T10:02:00.000Z" },
+  );
+  assert.equal(second.result.status, "idempotent");
+  assert.strictEqual(second.state, first.state);
+  assert.equal(fixture.events.filter((event) => event === "delete-transferred").length, 1);
 });

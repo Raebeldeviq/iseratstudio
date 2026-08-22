@@ -1,5 +1,53 @@
 # Änderungsprotokoll
 
+## Unreleased · Monotone Lifecycle-Reconciliation – 22. August 2026
+
+### Report
+
+- Die Race Condition zwischen seriellem Lifecycle-Koordinator und periodischem
+  Import-/DELETE-Recovery-Timer behoben. Der Koordinator rekonstruiert nun die
+  höchste sicher belegte Stufe und akzeptiert bereits weiter fortgeschrittene
+  Zustände, statt auf einen früheren, nicht mehr sichtbaren Zwischenzustand zu
+  warten.
+- Zentralisierte Evidenzprädikate für FTPS, positiven Import, DELETE-
+  Autorisierung, übertragenen DELETE, positiven Löschbericht und final
+  gelöschte Quelle ergänzt. Die Prüfung bindet weiterhin exakt Source,
+  Replacement, Schedulerlauf, Uploadjob, Importbericht, DELETE-Job und
+  Löschbericht zusammen.
+- Persistierte Lifecycle-Stufen ausschließlich monoton aktualisiert. Kein
+  bereits fortgeschrittener Katalogzustand wird zurückgesetzt; ein bestätigter
+  oder übertragener DELETE wird nie erneut übertragen.
+- Telemetrie um `observedStage`, `expectedStage`, `highestVerifiedStage`,
+  `reconciledForward` und `reconciliationReason` ergänzt.
+- Einen idempotenten, hart auf `30460-379797 → 30460-590537` begrenzten
+  internen Reconciliation-Befehl ergänzt. Er verlangt alle Betriebsmodi auf
+  `off`, einen konfliktfreien Katalog und vollständige vorhandene Evidenz und
+  führt ausdrücklich null externe Mutationen aus.
+- Regressionstests bilden den realen Timer-Race, `published`-ahead,
+  `delete_transferred`-ahead, `deleted`-ahead, widersprüchliche Evidenz,
+  Restart-Recovery, Persistenz nach bestätigtem DELETE und idempotente
+  Reconciliation ab.
+
+### Begründung
+
+Importbericht- und DELETE-Recovery müssen auch nach Helper-Neustarts unabhängig
+weiterarbeiten können. Deshalb bleiben beide Beobachter bestehen. Die sichere
+Korrektur ist eine monotone Evidenzordnung: Ein späterer vollständig belegter
+Zustand erfüllt frühere Lifecycle-Barrieren, ohne deren Sicherheitsnachweise zu
+überspringen.
+
+### Hürden und Risiken
+
+- Ein bloßes `published` oder `deleted` genügt weiterhin nicht. Fehlende oder
+  widersprüchliche Provenienz führt zu `LIFECYCLE_RECONCILIATION_REQUIRED` und
+  sperrt die nächste Rotation.
+- Upload- und DELETE-Einmaligkeit werden weiterhin durch bestehende Job-IDs,
+  Claims, CAS und Ledgers erzwungen. Der Fix fügt keine alternative externe
+  Mutation und keine allgemeine Bulk-Reconciliation hinzu.
+- Während Implementierung, Tests und interner Reconciliation bleiben Rotation,
+  Canary und Production-DELETE auf `off`; es wird kein neuer Produktionslauf
+  gestartet.
+
 ## Unreleased · Serielle Produktions-Lifecycle-Barriere – 21. August 2026
 
 ### Report

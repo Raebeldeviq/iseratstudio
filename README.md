@@ -391,15 +391,52 @@ fehlender Löschbestätigung im bestehenden Prüfzustand und wird nicht erneut
 Der stündliche Helper-Timer bleibt ausschließlich Recovery- und Catch-up-
 Mechanismus. Offene Produktionsketten sperren jeden neuen produktiven
 Schedulerstart, bis die vorhandenen Import-/DELETE-Dienste sie eindeutig
-abgeschlossen haben. Schedulerlauf und Rotationskopie protokollieren
+abgeschlossen haben. Lifecycle-Koordinator und Recovery-Timer dürfen denselben
+persistenten Zustand beobachten und die bestehenden idempotenten Dienste
+anstoßen. Externe FTPS- und DELETE-Mutationen bleiben weiterhin durch Job-ID,
+Claim, Ledger und CAS Single-Writer-geschützt.
+
+Der Koordinator rekonstruiert bei jedem Poll die höchste vollständig belegte
+Stufe aus Katalog, Uploadledger, Uploadhistorie, positivem Importbericht,
+DELETE-Ledger und positivem Löschbericht. Ist der Recovery-Timer bereits weiter
+fortgeschritten, wird dieser monotone Fortschritt übernommen: Ein final
+belegtes `source deleted` ist stärker als ein nicht mehr sichtbarer
+Zwischenzustand `delete authorized`. Kein Feld wird dabei zurückgesetzt und
+kein Transfer wiederholt. `published` ohne exakte Importprovenienz oder
+`deleted` ohne exakten bestätigten DELETE führen dagegen fail-closed zu
+`LIFECYCLE_RECONCILIATION_REQUIRED`.
+
+Schedulerlauf und Rotationskopie protokollieren
 Lifecycle-Index, Stufe, Start-/Endzeit, Dauer, Fehlercode, letzten Fehler sowie
-den finalen Ausgang. Fehlender Lifecycle-Koordinator, ausgeschalteter
+den finalen Ausgang. Beobachtungsmetriken enthalten zusätzlich
+`observedStage`, `expectedStage`, `highestVerifiedStage`,
+`reconciledForward` und `reconciliationReason`. Fehlender Lifecycle-Koordinator, ausgeschalteter
 Production-DELETE-Modus oder unvollständige Abschlussbelege sperren `active`
 fail-closed vor der nächsten Mutation. Zwischen positiver Importbestätigung
 und DELETE besitzt der Koordinator die eigene persistierte Stufe
 `post_import_pre_delete`. Spätere Portalstufen können genau dort eingefügt
 werden, ohne die serielle Reihenfolge oder die bestehenden Providerdienste
 umzubauen; eine Portalautomation ist damit noch nicht implementiert.
+
+Die einmalige interne Reconciliation des extern bereits vollständig
+abgeschlossenen Paars `30460-379797 → 30460-590537` ist hart auf diese beiden
+Objektnummern und ihre persistierten Listing-IDs begrenzt. Sie verlangt
+Rotation, Canary und Production-DELETE auf `off`, keine offenen Jobs, Claims
+oder Leases sowie exakt einen bestätigten Upload, Importbericht, DELETE und
+Löschbericht. Der Befehl erzeugt weder FTPS-, Mail- noch Portalaktionen und ist
+idempotent:
+
+```bash
+node listing-rotation-lifecycle-reconciliation-cli.mjs preflight \
+  --source-external-id 30460-379797 \
+  --replacement-external-id 30460-590537 \
+  --reason monotonic_external_completion_reconciliation
+
+node listing-rotation-lifecycle-reconciliation-cli.mjs reconcile \
+  --source-external-id 30460-379797 \
+  --replacement-external-id 30460-590537 \
+  --reason monotonic_external_completion_reconciliation
+```
 
 Neue Rotationskopien erhalten weiterhin eine kollisionsgeprüfte eindeutige
 Objektnummer. Ein `DELETE` ist ausschließlich für Kopien zulässig, die in einem
