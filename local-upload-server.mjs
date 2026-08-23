@@ -110,7 +110,14 @@ const uploadJobLedger = createUploadJobLedger(UPLOAD_JOB_LEDGER_PATH);
 const plotDailyUploadGuard = createPlotDailyUploadGuard(PLOT_DAILY_UPLOAD_GUARD_PATH);
 const plotSyncService = createPlotSyncService();
 const catalogStateStore = createCatalogStateStore();
-const listingSchedulerLease = createPersistentLease(LISTING_SCHEDULER_LOCK_PATH);
+const listingSchedulerLease = createPersistentLease(LISTING_SCHEDULER_LOCK_PATH, {
+  writeEvent: (event, details) => writeListingSchedulerLog(`lease-${event}`, {
+    runtimeCommit: RUNTIME_PROVENANCE.runtimeCommit,
+    runtimeRelease: RUNTIME_PROVENANCE.runtimeRelease,
+    helperStartedAt: HELPER_STARTED_AT,
+    ...details,
+  }),
+});
 const listingRotationOperatingModeStore = createListingRotationOperatingModeStore(LISTING_ROTATION_MODE_PATH);
 const listingRotationProductionPolicyStore = createListingRotationProductionPolicyStore(LISTING_ROTATION_PRODUCTION_POLICY_PATH);
 const productionBatchOverrideStore = createProductionBatchOverrideStore(PRODUCTION_BATCH_OVERRIDE_PATH);
@@ -551,6 +558,7 @@ const listingRotationSchedulerService = createListingRotationSchedulerService({
   productionPolicyStore: listingRotationProductionPolicyStore,
   batchOverrideStore: productionBatchOverrideStore,
   runtimeProvenance: RUNTIME_PROVENANCE,
+  helperIdentity: `${RUNTIME_PROVENANCE.runtimeRelease || "runtime-unknown"}:${HELPER_STARTED_AT}:${process.pid}`,
   lifecycleCoordinator: productionRotationLifecycleCoordinator,
   upload: automaticRotationUpload,
   writeRunLog: (event, details) => writeListingSchedulerLog(event, {

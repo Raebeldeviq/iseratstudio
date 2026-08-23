@@ -1,5 +1,60 @@
 # Änderungsprotokoll
 
+## Unreleased · Monotone Scheduler-Lease und abgeschlossener offener Lifecycle – 23. August 2026
+
+### Report
+
+- Die Ursache des `ENOENT listing-scheduler.lock` bei langen seriellen
+  Produktionsläufen behoben. `runIfDue` trennt nun den festen
+  Fälligkeit-/Startzeitpunkt von den laufenden Schrittzeitpunkten; spätere
+  Lease-Erneuerungen verwenden Live-Zeit und können die Ablaufzeit niemals auf
+  den Runstart zurücksetzen.
+- Das persistente Leaseformat um Scheduler-Run, Owner-PID, Runtime-Identität,
+  Revision und monotone Zeitfelder erweitert. Renewal schreibt atomar,
+  Besitzverlust ist explizit fatal und parallele Stale-Recovery wird durch
+  einen eigenen atomaren Recovery-Claim serialisiert.
+- Stale-Übernahme und kontrollierte Bereinigung verlangen abgelaufene Lease,
+  eindeutig inaktiven Owner, unveränderte Revision und einen persistent
+  nachgewiesenen unterbrochenen oder terminalen Scheduler-Run. Unklare
+  Prozessaktivität, unbekannter Runzustand und fehlender Owner-Lock bleiben
+  fail-closed.
+- Strukturiertes Lease-Audit sowie ein exaktes Wartungs-CLI für verwaiste
+  Scheduler-Claims ergänzt. Das CLI verlangt Rotation und Production-DELETE
+  auf `off` und bindet die Mutation an die vorab benannte Run-/Owner-Paarung.
+- Einen einmaligen, hart auf den unterbrochenen Lifecycle
+  `30460-261429 → 30460-918100` begrenzten Reconciliation-Vertrag ergänzt. Er
+  beweist genau einen bestehenden Upload, verhindert jeden Doppelupload und
+  jeden zweiten DELETE und finalisiert erst nach dem eindeutig positiven
+  Immoprofessional-Bericht.
+- Regressionstests decken 25 lange Lifecycle-Schritte, zurückdatierte
+  Renewals, parallele Stale-Contender, aktive und unbekannte Owner,
+  Lockverlust, exakten CLI-Vertrag, doppelte Uploadevidenz sowie idempotente
+  Lifecycle-Finalisierung ab.
+
+### Begründung
+
+Der periodische Helper-Timer hatte einen noch laufenden Scheduler-Claim als
+stale angesehen, weil der feste Startzeitpunkt bei späteren Item-Renewals die
+Lease rückwärts verkürzte. Die Korrektur trennt fachliche Startzeit und
+technische Fortschrittszeit und bindet jede Recovery zusätzlich an Prozess-,
+Runtime-, Revisions- und Katalogevidenz. Dadurch bleibt Restart-Recovery
+möglich, ohne einem parallelen Helper oder einer Zeitregression einen zweiten
+Writer zu erlauben.
+
+### Hürden und Risiken
+
+- Dateisystemoperationen besitzen keinen nativen Compare-and-Swap für
+  JSON-Dateien. Der separate atomare Recovery-Claim schließt deshalb das
+  Cross-Process-Fenster zwischen Stale-Prüfung und Lease-Ersatz; sein Owner-PID
+  wird bei einer verwaisten Recovery ebenfalls fail-closed geprüft.
+- Der historische One-Shot bleibt `consumed` und wird nicht neu armiert. Die
+  Reconciliation ist auf genau eine vorhandene Source-/Replacement-Kette
+  kompiliert und kein allgemeiner Produktions- oder Bulkpfad.
+- Rotation und globaler Production-DELETE blieben während der Bereinigung auf
+  `off`. Der einmalig autorisierte DELETE wurde exakt einmal übertragen; erst
+  der positive read-only Mailbericht finalisierte die Quelle. Der Ersatz blieb
+  unverändert veröffentlicht.
+
 ## Unreleased · Monotone Lifecycle-Reconciliation – 22. August 2026
 
 ### Report

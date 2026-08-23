@@ -1336,35 +1336,79 @@ test("active mode blocks every mutation when the staged runtime commit differs f
   assert.match(result.reason, /Runtime-Commit/iu);
 });
 
+test("runIfDue keeps the fixed detection timestamp but renews later lifecycle steps with live time", async () => {
+  const startedAt = "2026-08-14T09:00:00.000Z";
+  const refreshTimes = [];
+  let acquireInput;
+  const service = createListingRotationSchedulerService({
+    store: memoryStore(studioState(1)),
+    lease: {
+      async acquire(input) {
+        acquireInput = input;
+        return {
+          refresh: async ({ now }) => { refreshTimes.push(now); },
+          release: async () => undefined,
+        };
+      },
+    },
+    operatingModeStore: fixedOperatingMode("active"),
+    productionPolicyStore: fixedProductionPolicy(3),
+    runtimeProvenance: fixedRuntimeProvenance(),
+    upload: async ({ project: projectValue, listing: listingValue }) => ({
+      ok: true,
+      jobId: createUploadJobId(projectValue, listingValue),
+    }),
+  });
+
+  const result = await service.runIfDue({ now: startedAt });
+  assert.equal(result.ran, true);
+  assert.equal(acquireInput.now, startedAt);
+  assert.equal(refreshTimes[0], startedAt);
+  assert.ok(refreshTimes.some((value) => Date.parse(value) > Date.parse(startedAt)));
+});
+
 test("persistent scheduler claim blocks parallel helpers and recovers an expired crash lock", async () => {
   const directory = await mkdtemp(join(tmpdir(), "fpi-listing-scheduler-lock-"));
   const path = join(directory, "scheduler.lock");
-  const first = createPersistentLease(path, { leaseMs: 60_000, idFactory: ids("lease") });
-  const second = createPersistentLease(path, { leaseMs: 60_000, idFactory: ids("lease") });
-  const held = await first.acquire({ now: "2026-08-12T10:00:00.000Z", ownerId: "helper-a" });
+  const leaseOptions = {
+    leaseMs: 60_000,
+    idFactory: ids("lease"),
+    isOwnerActive: async (record) => record.ownerPid !== 50_001,
+    assessStaleOwner: async () => ({ recoverable: true, reason: "synthetic crashed helper" }),
+  };
+  const first = createPersistentLease(path, leaseOptions);
+  const second = createPersistentLease(path, leaseOptions);
+  const held = await first.acquire({ now: "2026-08-12T10:00:00.000Z", ownerId: "helper-a", ownerPid: 50_001 });
   await assert.rejects(
     second.acquire({ now: "2026-08-12T10:00:30.000Z", ownerId: "helper-b" }),
     (error) => error.code === "LISTING_SCHEDULER_LOCKED",
   );
-  const recovered = await second.acquire({ now: "2026-08-12T10:01:01.000Z", ownerId: "helper-b" });
+  const recovered = await second.acquire({ now: "2026-08-12T10:01:01.000Z", ownerId: "helper-b", ownerPid: 50_002 });
   assert.equal(recovered.record.ownerId, "helper-b");
   await recovered.release();
-  await held.release();
+  await assert.rejects(held.release(), (error) => error.code === "LISTING_SCHEDULER_LOCK_LOST");
 });
 
 test("a renewed scheduler claim cannot be taken over by a parallel long-running helper", async () => {
   const directory = await mkdtemp(join(tmpdir(), "fpi-listing-scheduler-heartbeat-"));
   const path = join(directory, "scheduler.lock");
-  const first = createPersistentLease(path, { leaseMs: 60_000, heartbeatMs: 60_000, idFactory: ids("lease") });
-  const second = createPersistentLease(path, { leaseMs: 60_000, heartbeatMs: 60_000, idFactory: ids("lease") });
-  const held = await first.acquire({ now: "2026-08-12T10:00:00.000Z", ownerId: "helper-a" });
+  const leaseOptions = {
+    leaseMs: 60_000,
+    heartbeatMs: 60_000,
+    idFactory: ids("lease"),
+    isOwnerActive: async (record) => record.ownerPid !== 50_003,
+    assessStaleOwner: async () => ({ recoverable: true, reason: "synthetic crashed helper" }),
+  };
+  const first = createPersistentLease(path, leaseOptions);
+  const second = createPersistentLease(path, leaseOptions);
+  const held = await first.acquire({ now: "2026-08-12T10:00:00.000Z", ownerId: "helper-a", ownerPid: 50_003 });
   await held.refresh({ now: "2026-08-12T10:00:45.000Z" });
   await assert.rejects(
     second.acquire({ now: "2026-08-12T10:01:01.000Z", ownerId: "helper-b" }),
     (error) => error.code === "LISTING_SCHEDULER_LOCKED",
   );
-  const recovered = await second.acquire({ now: "2026-08-12T10:01:46.000Z", ownerId: "helper-b" });
+  const recovered = await second.acquire({ now: "2026-08-12T10:01:46.000Z", ownerId: "helper-b", ownerPid: 50_004 });
   assert.equal(recovered.record.ownerId, "helper-b");
   await recovered.release();
-  await held.release();
+  await assert.rejects(held.release(), (error) => error.code === "LISTING_SCHEDULER_LOCK_LOST");
 });

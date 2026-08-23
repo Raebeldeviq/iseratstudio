@@ -446,6 +446,48 @@ exakt auf dieses Replacement verweist. Ein FTPS-Erfolg allein autorisiert keine
 Löschung. Scheduler-Protokoll und Lock liegen zusammen mit den übrigen lokalen
 Laufzeitdaten im Application-Support-Verzeichnis.
 
+### Scheduler-Lease bei langen seriellen Läufen
+
+Der Background-Helper bindet jeden Scheduler-Claim an Run-ID, Prozess-ID,
+Runtime-Identität und eine monotone Lease-Revision. Erneuerungen werden über
+eine temporäre Datei atomar ersetzt; ein älterer oder synthetisch fixierter
+Schrittzeitpunkt kann `updatedAt` und `expiresAt` niemals zurücksetzen oder
+verkürzen. `runIfDue` nutzt den übergebenen Zeitpunkt ausschließlich als
+Laufstart und für die Fälligkeitserkennung. Alle späteren Item-, Lifecycle- und
+Heartbeat-Schritte verwenden die aktuelle Laufzeit.
+
+Eine abgelaufene Lease darf nur übernommen werden, wenn ihr gebundener
+Owner-Prozess eindeutig nicht mehr existiert und der persistente Scheduler-Run
+eindeutig unterbrochen oder terminal ist. Die Stale-Recovery besitzt einen
+separaten atomaren Recovery-Claim; parallele Helper können deshalb nicht beide
+denselben abgelaufenen Lock übernehmen. Aktiver oder unklarer Owner,
+widersprüchliche Revision, unbekannter Runzustand und eine während des Besitzes
+fehlende Lockdatei bleiben mit `LISTING_SCHEDULER_LOCKED` beziehungsweise
+`LISTING_SCHEDULER_LOCK_LOST` fail-closed. Lease-Acquire, Renewal,
+Stale-Recovery, Verlust und Release werden strukturiert mit Runtime-Provenienz
+protokolliert.
+
+Ein verwaister Lock wird nicht allgemein gelöscht. Das Wartungs-CLI verlangt
+den exakten erwarteten Scheduler-Run und Owner, Rotation sowie
+Production-DELETE gültig auf `off`, eine abgelaufene Lease, einen inaktiven
+Prozess und einen passenden persistenten Runzustand:
+
+```bash
+node listing-scheduler-lock-cli.mjs status
+node listing-scheduler-lock-cli.mjs reconcile-stale \
+  --expected-run-id <EXAKTE-RUN-ID> \
+  --expected-owner-id <EXAKTE-OWNER-ID>
+```
+
+Für den historischen, nach einem bestätigten Einzelupload unterbrochenen
+Lifecycle `30460-261429 → 30460-918100` existiert zusätzlich ein hart
+kompilierter Reconciliation-Vertrag. Er prüft Source, Replacement, Plot,
+Schedulerlauf, Runtime, One-Shot-Provenienz, genau einen Uploadjob und höchstens
+einen DELETE-Job. Der Bestätigungslauf kann keinen zweiten DELETE übertragen;
+ohne eindeutigen positiven Providerbericht bleiben Quelle und Lifecycle im
+Prüfzustand. Dieser Wartungspfad ist nicht an Helper oder Scheduler angebunden
+und nicht auf andere Inserate übertragbar.
+
 ### Globaler fail-closed Betriebsmodus
 
 Die automatische Rotation besitzt zusätzlich einen persistenten globalen

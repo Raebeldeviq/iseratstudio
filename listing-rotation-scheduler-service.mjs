@@ -353,13 +353,52 @@ export function createListingRotationSchedulerService(options) {
   }
 
   async function run(input = {}) {
-    const startedAt = String(input.now || new Date().toISOString());
+    const startedAt = String(input.startedAt || input.now || new Date().toISOString());
     const stepTimestamp = () => String(input.stepNow?.() || input.now || new Date().toISOString());
     const runId = String(input.runId || idFactory());
     const trigger = String(input.trigger || "periodic");
     let lease;
     try {
-      lease = await options.lease.acquire({ now: startedAt, token: runId, ownerId: `listing-scheduler:${process.pid}` });
+      lease = await options.lease.acquire({
+        now: startedAt,
+        token: runId,
+        schedulerRunId: runId,
+        ownerId: `listing-scheduler:${process.pid}`,
+        ownerPid: process.pid,
+        runtimeIdentity: String(options.helperIdentity
+          || `${options.runtimeProvenance?.runtimeRelease || "runtime-unknown"}:${process.pid}`),
+        assessStaleOwner: async (current) => {
+          const snapshot = await options.store.load();
+          if (!snapshot?.stored || !snapshot.state) {
+            return {
+              recoverable: false,
+              reason: "Der persistente Katalogzustand des bisherigen Scheduler-Runs ist nicht lesbar.",
+            };
+          }
+          const scheduler = normalizeListingScheduler(snapshot.state.scheduler, { now: startedAt });
+          const previousRunId = String(current?.schedulerRunId || current?.token || "");
+          const previousRun = scheduler.runs.find((candidate) => candidate.id === previousRunId);
+          if (!previousRun) {
+            return {
+              recoverable: true,
+              reason: "Owner-Prozess inaktiv, Lease abgelaufen und kein persistierter mutierender Scheduler-Run vorhanden.",
+            };
+          }
+          const previousStatus = normalizeWorkflowStatus(previousRun.status, WORKFLOW_STATUS.FAILED);
+          const interrupted = previousStatus === WORKFLOW_STATUS.PROCESSING && !previousRun.endedAt;
+          const terminal = previousStatus !== WORKFLOW_STATUS.PROCESSING && Boolean(previousRun.endedAt);
+          return {
+            recoverable: interrupted || terminal,
+            reason: interrupted
+              ? "Owner-Prozess inaktiv und Lease abgelaufen; der persistierte unterbrochene Run wird nach dem neuen Claim idempotent recovered."
+              : terminal
+                ? "Owner-Prozess inaktiv, Lease abgelaufen und persistierter Scheduler-Run bereits terminal."
+                : "Owner-Prozess inaktiv und Lease abgelaufen, aber der persistierte Scheduler-Run ist nicht eindeutig terminal oder unterbrochen.",
+            persistentRunStatus: previousStatus,
+            persistentRunEndedAt: String(previousRun.endedAt || ""),
+          };
+        },
+      });
     } catch (error) {
       const abortReason = error instanceof Error ? error.message : "Scheduler-Claim fehlgeschlagen.";
       await writeRunLog("aborted", { runId, trigger, startedAt, endedAt: startedAt, abortReason, errorCount: 1 });
@@ -1099,7 +1138,15 @@ export function createListingRotationSchedulerService(options) {
     const blockingIssues = pending.length ? hardSchedulerIssues(windowIssues) : windowIssues;
     if (blockingIssues.length) return { ran: false, reason: blockingIssues.join(" · ") };
     if (!due.length && !pending.length) return { ran: false, reason: "nothing-due" };
-    return { ran: true, ...(await run({ ...input, now: at, trigger: input.trigger || "periodic" })) };
+    return {
+      ran: true,
+      ...(await run({
+        ...input,
+        now: undefined,
+        startedAt: at,
+        trigger: input.trigger || "periodic",
+      })),
+    };
   }
 
   async function inspect(input = {}) {
