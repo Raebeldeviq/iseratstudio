@@ -6,6 +6,7 @@ import { parseHouseVariant } from "./image-sequence.mjs";
 import { enforceListingCopy } from "./listing-copy.mjs";
 
 export const CREATIVE_PAYLOAD_MISMATCH = "CREATIVE_PAYLOAD_MISMATCH";
+export const PRODUCTION_CREATIVE_SELECTION_MISSING = "PRODUCTION_CREATIVE_SELECTION_MISSING";
 
 function text(value) {
   return String(value ?? "").trim();
@@ -152,6 +153,16 @@ export async function verifyCreativePayload(input) {
 }
 
 export async function assertCreativePayload(input) {
+  if (Number(input?.listing?.creativeSelection?.format) !== 1) {
+    const error = new Error("Produktiver Upload gesperrt: Eine gültige persistierte CreativeSelection fehlt.");
+    error.code = PRODUCTION_CREATIVE_SELECTION_MISSING;
+    error.diagnostics = {
+      rotationId: text(input?.listing?.id),
+      plotId: text(input?.project?.plotId),
+      sourceListingId: text(input?.listing?.rotationSourceListingId),
+    };
+    throw error;
+  }
   const result = await verifyCreativePayload(input);
   if (result.ok) return result;
   const error = new Error(`Creative-Payload-Prüfung fehlgeschlagen: ${result.errors.join(" ")}`);

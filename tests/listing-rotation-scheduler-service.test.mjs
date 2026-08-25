@@ -27,6 +27,9 @@ const RUNTIME_COMMIT = "a".repeat(40);
 function createListingRotationSchedulerService(options) {
   return createSchedulerService({
     ...options,
+    runtimeOwnershipGuard: options.runtimeOwnershipGuard || {
+      inspect: async () => ({ valid: true, portOwnerPids: [process.pid], helperProcessPids: [process.pid] }),
+    },
     lifecycleCoordinator: options.lifecycleCoordinator || {
       preflight: async () => ({ ok: true }),
       complete: async () => ({ ok: true }),
@@ -311,6 +314,7 @@ test("background catch-up ignores selectedPlotIds and works without a browser", 
     operatingModeStore: fixedOperatingMode("active"),
     productionPolicyStore: fixedProductionPolicy(),
     runtimeProvenance: fixedRuntimeProvenance(),
+    runtimeOwnershipGuard: { inspect: async () => ({ valid: true }) },
     idFactory: ids("run"),
     upload: async ({ project: projectValue, listing: listingValue }) => {
       uploads.push({ projectId: projectValue.id, listingId: listingValue.id, externalId: listingValue.externalId });
@@ -359,6 +363,7 @@ test("an identical repeated scheduler run does not recreate or re-upload copies"
     operatingModeStore: fixedOperatingMode("active"),
     productionPolicyStore: fixedProductionPolicy(),
     runtimeProvenance: fixedRuntimeProvenance(),
+    runtimeOwnershipGuard: { inspect: async () => ({ valid: true }) },
     idFactory: ids("run"),
     upload: async ({ project: projectValue, listing: listingValue }) => {
       uploadCount += 1;
@@ -533,6 +538,7 @@ test("active mode fails closed when the lifecycle coordinator is missing", async
     operatingModeStore: fixedOperatingMode("active"),
     productionPolicyStore: fixedProductionPolicy(),
     runtimeProvenance: fixedRuntimeProvenance(),
+    runtimeOwnershipGuard: { inspect: async () => ({ valid: true }) },
     upload: async () => { uploads += 1; return { ok: true, jobId: "unexpected" }; },
   });
   const result = await service.run({
@@ -554,6 +560,7 @@ test("helper restart recovery blocks every new active mutation while an older li
     operatingModeStore: fixedOperatingMode("active"),
     productionPolicyStore: fixedProductionPolicy(),
     runtimeProvenance: fixedRuntimeProvenance(),
+    runtimeOwnershipGuard: { inspect: async () => ({ valid: true }) },
     lifecycleCoordinator: {
       preflight: async () => ({
         ok: false,

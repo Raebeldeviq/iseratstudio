@@ -258,6 +258,85 @@ Ein dateibasierter, während der Verarbeitung erneuerter Scheduler-Claim
 verhindert parallele oder doppelte Läufe und kann nach einem Helper-Abbruch
 sicher übernommen werden.
 
+### Exakte 85er-Regressionsreparatur
+
+Der historische Fehlerbatch wird nicht über einen Hausnamen oder eine
+dynamische Suche bestimmt. `regression-85-repair.json` enthält nach expliziter
+Vorbereitung eine unveränderliche, gehashte Allowlist mit exakt 85 konkreten
+Rogue-Transfers von Prozess `4460`: 82 × `SOL 242 V4`, 2 × `SOL 204 V4`
+und 1 × `SOL 229 V3`. Zu jedem Eintrag werden Listing-/Objektnummer,
+ursprüngliche Source, Projekt und Plot, Schedulerlauf, Uploadjob und -zeit,
+Runtimebefund, tatsächliches Haus, Hero sowie der read-only Portalstatus
+gespeichert. Die deklarierte Europe/Berlin-Zeitspanne und die tatsächlichen
+ISO-Ereigniszeiten bleiben getrennt erhalten. Jede Abweichung von exakt 85,
+jede Dublette und jede nachträgliche Scopeänderung blockiert die Kampagne.
+
+Der Worker verarbeitet ausschließlich diese Allowlist und immer genau einen
+vollständigen Lifecycle:
+
+`Regression B → CreativeSelection → Ersatz C → Payload-Guard → FTPS`
+
+`→ positiver Importbericht → C published → Production-DELETE B`
+
+`→ positiver Löschbericht → B deleted → repair_completed`
+
+B bleibt bis zum bestätigten Import von C unverändert
+`transferred_pending_import`. Ein erfolgreicher FTPS-Transfer ist keine
+Importbestätigung; ein erfolgreicher DELETE-Transfer ist keine
+Löschbestätigung. Die neue Objektnummer und der Uploadjob sind deterministisch,
+Kampagnenzustand und Jobs persistent. Ein Neustart kann daher weder ein zweites
+Replacement noch einen zweiten Upload oder DELETE erzeugen. Der Daily-Plot-
+Guard gilt unverändert; ein heute bereits verwendetes Grundstück wartet bis
+zum nächsten Europe/Berlin-Kalendertag. Globale Fehler und fremde offene
+DELETE-Ketten pausieren die gesamte Kampagne fail-closed.
+
+Die Creative-Planung setzt B ausschließlich in einer In-Memory-Kopie auf den
+persistiert nachgewiesenen, vor der fehlerhaften Rotation belegten Hausplatz
+zurück. Anschließend wählt die normale Produktionsengine C. Der echte B-Zustand
+bleibt dabei unangetastet; legitime SOL-242-Inserate außerhalb der Allowlist
+werden weder ausgewählt noch verändert. `creativeSelection` und der vollständige
+ZIP-/OpenImmo-/Bildabgleich sind vor FTPS zwingend.
+
+Die Operatorbefehle sind absichtlich getrennt. `prepare-scope` ist nur aus
+der exakt freigegebenen sauberen Release-Runtime zulässig und startet noch
+keine Reparatur:
+
+```bash
+node regression-85-repair-cli.mjs prepare-scope --portal-snapshot <READ_ONLY-PORTALSTATUS.json>
+node regression-85-repair-cli.mjs preview
+node regression-85-repair-cli.mjs status
+node regression-85-repair-cli.mjs activate
+node regression-85-repair-cli.mjs pause
+node regression-85-repair-cli.mjs off
+```
+
+`activate` verlangt normale Rotation und Portalexport eindeutig `off`,
+Production-DELETE eindeutig `active`, eine passende Produktionsruntime, einen
+sauberen 85er-Preview und null fremde offene DELETE-Jobs. Während einer aktiven
+oder pausierten Kampagne blockiert der DELETE-Mutationsguard jede Kette
+außerhalb des aktuell seriell bearbeiteten Allowlist-Eintrags. Die alten 85
+werden als exakte Portal-Exclusion bereitgestellt; neue korrekte Nachfolger
+werden dadurch nicht dauerhaft ausgeschlossen.
+
+### Produktive Runtime-Ownership
+
+Commit-Provenienz allein reicht für produktive Mutationen nicht aus. Vor
+Schedulerstart und unmittelbar vor jedem Haus- oder DELETE-Transfer muss der
+laufende Prozess zusätzlich beweisen:
+
+- Code und Launcher liegen in genau einer sauberen `helper-runtime/release-*`;
+- Release-ID und erwarteter Git-Commit stimmen mit Manifest und Policy überein;
+- das Arbeitsverzeichnis ist das feste Helper-Arbeitsverzeichnis;
+- genau ein Helperprozess läuft;
+- genau dieser Prozess ist alleiniger Listener auf Port `43182`.
+
+Eine direkt per `node local-upload-server.mjs` aus einer Source-Arbeitskopie
+gestartete Instanz ist produktiv gesperrt. Ein fremder Port-Owner wird niemals
+automatisch beendet; die Mutation endet mit
+`PRODUCTION_RUNTIME_PORT_OWNER_MISMATCH` oder
+`PRODUCTION_RUNTIME_SOURCE_DIRECTORY_BLOCKED`. Dadurch kann eine alte
+Arbeitskopie den Produktionsscheduler nicht noch einmal unbemerkt übernehmen.
+
 Der automatische Umfang besteht aus allen aktiven, verwalteten Inseraten, für
 die `automaticUpdateEnabled` eingeschaltet ist. `selectedPlotIds` ist nur eine
 UI- und Arbeitsauswahl für manuelle Aktionen und beeinflusst den automatischen

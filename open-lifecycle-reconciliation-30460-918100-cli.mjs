@@ -179,6 +179,13 @@ export async function runOpenLifecycle30460918100Cli(argv, options = {}) {
     productionPolicyStore,
     batchOverrideStore,
     runtimeProvenance,
+    runtimeOwnershipGuard: options.runtimeOwnershipGuard || {
+      async assert() {
+        const error = new Error("Direkte produktive DELETE-Transfers außerhalb des alleinigen Release-Helpers sind gesperrt.");
+        error.code = "PRODUCTION_RUNTIME_PORT_OWNER_MISMATCH";
+        throw error;
+      },
+    },
     mailAdapter,
     upload,
     writeLog,

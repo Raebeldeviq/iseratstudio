@@ -8,6 +8,10 @@ import {
 import { normalizeListingScheduler, listingDueAt } from "./listing-scheduler.mjs";
 import { MAX_LISTING_GROUP_LOGS } from "./listing-rules.mjs";
 import { recordPromotionUsage } from "./promotion-images.mjs";
+import {
+  isRegressionRepairLifecycle,
+  REGRESSION_REPAIR_SOURCE_STATUS,
+} from "./listing-regression-repair.mjs";
 import { normalizeWorkflowStatus, WORKFLOW_STATUS } from "./workflow-status.mjs";
 
 export const IMPORT_REPORT_PROCESSING_STATUS = Object.freeze({
@@ -172,6 +176,7 @@ export function confirmImportReportInState(state, parsed, mail, uploadLedger, op
   const report = confirmationReport(parsed, mail, match, processedAt);
   const importedAt = parsed.providerImportAt;
   const productionLifecycle = match.listing.productionLifecycle;
+  const regressionRepair = isRegressionRepairLifecycle(productionLifecycle);
   const automaticDeleteAuthorized = productionLifecycle?.format === 1
     && productionLifecycle.automaticDeleteAuthorized === true
     && productionLifecycle.sourceListingId === match.source.id
@@ -195,8 +200,10 @@ export function confirmImportReportInState(state, parsed, mail, uploadLedger, op
   };
   const replacedSource = {
     ...match.source,
-    status: WORKFLOW_STATUS.PUBLISHED,
-    statusMessage: `Ersetzt · neues Objekt ${match.listing.externalId} · externe Löschung ausstehend`,
+    status: regressionRepair ? REGRESSION_REPAIR_SOURCE_STATUS : WORKFLOW_STATUS.PUBLISHED,
+    statusMessage: regressionRepair
+      ? `Regression-Replacement ersetzt · neues Objekt ${match.listing.externalId} bestätigt · externe Löschung ausstehend`
+      : `Ersetzt · neues Objekt ${match.listing.externalId} · externe Löschung ausstehend`,
     supersededByListingId: match.listing.id,
     replacementConfirmedAt: importedAt,
     externalDeletionPending: true,
@@ -211,7 +218,7 @@ export function confirmImportReportInState(state, parsed, mail, uploadLedger, op
   group = updateListingControl(group, replacedSource, {
     automaticUpdateEnabled: false,
     automaticDeletionEnabled: false,
-    status: WORKFLOW_STATUS.PUBLISHED,
+    status: regressionRepair ? REGRESSION_REPAIR_SOURCE_STATUS : WORKFLOW_STATUS.PUBLISHED,
     statusMessage: replacedSource.statusMessage,
     schedulerSelectionId: "",
     schedulerSelectedAt: "",

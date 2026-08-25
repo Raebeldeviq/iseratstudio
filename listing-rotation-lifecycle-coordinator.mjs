@@ -5,6 +5,10 @@ import {
   PRODUCTION_DELETE_STATUS,
 } from "./listing-rotation-production-delete.mjs";
 import { normalizeWorkflowStatus, WORKFLOW_STATUS } from "./workflow-status.mjs";
+import {
+  isRegressionRepairLifecycle,
+  REGRESSION_REPAIR_SOURCE_STATUS,
+} from "./listing-regression-repair.mjs";
 
 export const ROTATION_LIFECYCLE_STAGE = Object.freeze({
   AWAITING_IMPORT_CONFIRMATION: "awaiting_import_confirmation",
@@ -202,9 +206,14 @@ export function inspectProductionRotationLifecycle(state, input, uploadLedger = 
   }
   if (importReports.length > 1) reasons.push("import_report_evidence_ambiguous");
 
+  const sourceDeleteStatusAllowed = normalizeWorkflowStatus(source.status) === WORKFLOW_STATUS.PUBLISHED
+    || (
+      isRegressionRepairLifecycle(lifecycle)
+      && normalizeWorkflowStatus(source.status) === REGRESSION_REPAIR_SOURCE_STATUS
+    );
   const deleteAuthorized = Boolean(
     importConfirmed
-    && normalizeWorkflowStatus(source.status) === WORKFLOW_STATUS.PUBLISHED
+    && sourceDeleteStatusAllowed
     && source.externalDeletionPending === true
     && source.productionDeleteState === "authorized"
     && source.productionDeleteAuthorizedAt

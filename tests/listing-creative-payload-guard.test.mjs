@@ -167,6 +167,23 @@ test("a payload house or hero mismatch fails closed before transfer", async () =
   );
 });
 
+test("a missing persisted CreativeSelection has its own fail-closed production code", async () => {
+  const value = fixture("house");
+  const listing = { ...value.listing };
+  delete listing.creativeSelection;
+  await assert.rejects(
+    assertCreativePayload({
+      listing,
+      house: value.house,
+      project: value.input.project,
+      promotionImage: null,
+      packageResult: {},
+      archive: Buffer.alloc(0),
+    }),
+    (error) => error.code === "PRODUCTION_CREATIVE_SELECTION_MISSING",
+  );
+});
+
 test("the production upload awaits the Creative guard before credentials and FTPS", async () => {
   const source = await readFile(new URL("../local-upload-server.mjs", import.meta.url), "utf8");
   const functionStart = source.indexOf("async function automaticRotationUpload");

@@ -50,6 +50,12 @@ import {
   loadHelperRuntimeProvenance,
   verifyProductionRuntime,
 } from "./helper-runtime-provenance.mjs";
+import { createProductionRuntimeOwnershipGuard } from "./production-runtime-ownership.mjs";
+import { createRegression85CampaignStore } from "./regression-85-repair-scope.mjs";
+import {
+  createRegression85DeleteMutationGuard,
+  createRegression85RepairService,
+} from "./regression-85-repair-service.mjs";
 import { createCatalogStateStore } from "./catalog-state-store.mjs";
 import { createListingRotationSchedulerService } from "./listing-rotation-scheduler-service.mjs";
 import { createProductionRotationLifecycleCoordinator } from "./listing-rotation-lifecycle-coordinator.mjs";
@@ -93,9 +99,17 @@ const MAIL_RUNTIME_LOG_PATH = join(APPLICATION_DATA_DIRECTORY, "mail-runtime.log
 const PRODUCTION_DELETE_MODE_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-rotation-production-delete-mode.json");
 const PRODUCTION_DELETE_LEDGER_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-rotation-production-delete-jobs.json");
 const PRODUCTION_DELETE_LOG_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-rotation-production-delete.log");
+const REGRESSION_85_CAMPAIGN_PATH = join(APPLICATION_DATA_DIRECTORY, "regression-85-repair.json");
+const REGRESSION_85_LOCK_PATH = join(APPLICATION_DATA_DIRECTORY, "regression-85-repair.lock");
+const REGRESSION_85_LOG_PATH = join(APPLICATION_DATA_DIRECTORY, "regression-85-repair.log");
+const PORTAL_EXPORT_MODE_PATH = join(APPLICATION_DATA_DIRECTORY, "immoprofessional-portal-export-mode.json");
 const SESSION_TOKEN = String(process.env.FPI_SESSION_TOKEN || randomBytes(32).toString("hex"));
 const HELPER_STARTED_AT = new Date().toISOString();
 const RUNTIME_PROVENANCE = await loadHelperRuntimeProvenance();
+const runtimeOwnershipGuard = createProductionRuntimeOwnershipGuard({
+  provenance: RUNTIME_PROVENANCE,
+  port: PORT,
+});
 const allowedOrigins = new Set([
   "http://localhost:43181",
   "http://127.0.0.1:43181",
@@ -106,6 +120,7 @@ const writeListingSchedulerLog = createStructuredFileLogger(LISTING_SCHEDULER_LO
 const writeImportReportLog = createStructuredFileLogger(IMPORT_REPORT_LOG_PATH, { jobType: "immoprofessional-import-report" });
 const writeMailRuntimeLog = createStructuredFileLogger(MAIL_RUNTIME_LOG_PATH, { jobType: "mail-runtime-probe" });
 const writeProductionDeleteLog = createStructuredFileLogger(PRODUCTION_DELETE_LOG_PATH, { jobType: "listing-rotation-production-delete" });
+const writeRegression85Log = createStructuredFileLogger(REGRESSION_85_LOG_PATH, { jobType: "regression-85-repair" });
 const uploadJobLedger = createUploadJobLedger(UPLOAD_JOB_LEDGER_PATH);
 const plotDailyUploadGuard = createPlotDailyUploadGuard(PLOT_DAILY_UPLOAD_GUARD_PATH);
 const plotSyncService = createPlotSyncService();
@@ -123,6 +138,11 @@ const listingRotationProductionPolicyStore = createListingRotationProductionPoli
 const productionBatchOverrideStore = createProductionBatchOverrideStore(PRODUCTION_BATCH_OVERRIDE_PATH);
 const productionDeleteModeStore = createProductionDeleteModeStore(PRODUCTION_DELETE_MODE_PATH);
 const productionDeleteLedger = createProductionDeleteLedger(PRODUCTION_DELETE_LEDGER_PATH);
+const regression85CampaignStore = createRegression85CampaignStore(REGRESSION_85_CAMPAIGN_PATH);
+const regression85Lease = createPersistentLease(REGRESSION_85_LOCK_PATH, {
+  writeEvent: (event, details) => writeRegression85Log(`lease-${event}`, details),
+});
+const regression85DeleteMutationGuard = createRegression85DeleteMutationGuard(regression85CampaignStore);
 const importReportMailAdapter = createAppleMailImportReportAdapter();
 const productionDeleteMailAdapter = createAppleMailDeleteReportAdapter();
 const importReportService = createImmoprofessionalImportReportService({
@@ -324,6 +344,7 @@ async function persistedUploadContext(projectId, listingId) {
 async function automaticRotationUpload({ state, project, listing, runId, batchOverrideId = "", batchSchedulerRunId = "", effectiveMaxRunItems = null }) {
   const productionPolicy = await listingRotationProductionPolicyStore.load();
   const runtimeGuard = assertProductionRuntime(RUNTIME_PROVENANCE, productionPolicy);
+  const runtimeOwnership = await runtimeOwnershipGuard.assert(productionPolicy);
   const lifecycle = listing.productionLifecycle;
   if (batchOverrideId) {
     const authorization = await productionBatchOverrideStore.authorize({
@@ -421,6 +442,8 @@ async function automaticRotationUpload({ state, project, listing, runId, batchOv
       externalId: listing.externalId,
       status: WORKFLOW_STATUS.PROCESSING,
       ...runtimeGuard,
+      runtimeOwnershipValid: runtimeOwnership.valid,
+      runtimePortOwnerPid: runtimeOwnership.portOwnerPids[0],
       ...creativeGuard.diagnostics,
     });
     const vault = await credentialVault();
@@ -507,6 +530,8 @@ async function automaticRotationUpload({ state, project, listing, runId, batchOv
 }
 
 async function automaticProductionDeleteUpload({ archive, filename }) {
+  const productionPolicy = await listingRotationProductionPolicyStore.load();
+  await runtimeOwnershipGuard.assert(productionPolicy);
   const vault = await credentialVault();
   const ftp = vault.credentials;
   if (!ftp.ftpHost || !ftp.ftpUser || !ftp.ftpPassword) {
@@ -524,6 +549,23 @@ async function automaticProductionDeleteUpload({ archive, filename }) {
   }
 }
 
+const regression85PortalModeStore = Object.freeze({
+  async load() {
+    try {
+      const value = JSON.parse(await readFile(PORTAL_EXPORT_MODE_PATH, "utf8"));
+      if (value?.format !== 1 || value?.mode !== "off") {
+        return { valid: false, mode: String(value?.mode || "off"), fallbackReason: "Portalexport ist nicht eindeutig off." };
+      }
+      return { valid: true, mode: "off", fallbackReason: "" };
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        return { valid: true, mode: "off", fallbackReason: "Portalexport-Worker ist in dieser Runtime nicht installiert." };
+      }
+      return { valid: false, mode: "off", fallbackReason: "Portalexport-Modus ist beschädigt oder nicht lesbar." };
+    }
+  },
+});
+
 const productionDeleteService = createProductionDeleteService({
   store: catalogStateStore,
   modeStore: productionDeleteModeStore,
@@ -531,6 +573,8 @@ const productionDeleteService = createProductionDeleteService({
   productionPolicyStore: listingRotationProductionPolicyStore,
   batchOverrideStore: productionBatchOverrideStore,
   runtimeProvenance: RUNTIME_PROVENANCE,
+  runtimeOwnershipGuard,
+  mutationGuard: regression85DeleteMutationGuard,
   mailAdapter: productionDeleteMailAdapter,
   upload: automaticProductionDeleteUpload,
   writeLog: (event, details) => writeProductionDeleteLog(event, details),
@@ -558,10 +602,35 @@ const listingRotationSchedulerService = createListingRotationSchedulerService({
   productionPolicyStore: listingRotationProductionPolicyStore,
   batchOverrideStore: productionBatchOverrideStore,
   runtimeProvenance: RUNTIME_PROVENANCE,
+  runtimeOwnershipGuard,
   helperIdentity: `${RUNTIME_PROVENANCE.runtimeRelease || "runtime-unknown"}:${HELPER_STARTED_AT}:${process.pid}`,
   lifecycleCoordinator: productionRotationLifecycleCoordinator,
   upload: automaticRotationUpload,
   writeRunLog: (event, details) => writeListingSchedulerLog(event, {
+    runtimeCommit: RUNTIME_PROVENANCE.runtimeCommit,
+    runtimeRelease: RUNTIME_PROVENANCE.runtimeRelease,
+    helperStartedAt: HELPER_STARTED_AT,
+    ...details,
+  }),
+});
+
+const regression85RepairService = createRegression85RepairService({
+  campaignStore: regression85CampaignStore,
+  catalogStore: catalogStateStore,
+  lease: regression85Lease,
+  rotationModeStore: listingRotationOperatingModeStore,
+  portalModeStore: regression85PortalModeStore,
+  productionDeleteModeStore,
+  productionPolicyStore: listingRotationProductionPolicyStore,
+  runtimeOwnershipGuard,
+  runtimeIdentity: `${RUNTIME_PROVENANCE.runtimeRelease || "runtime-unknown"}:${HELPER_STARTED_AT}:${process.pid}`,
+  uploadJobLedger,
+  productionDeleteLedger,
+  plotDailyUploadGuard,
+  upload: automaticRotationUpload,
+  importReportService,
+  productionDeleteService,
+  writeLog: (event, details) => writeRegression85Log(event, {
     runtimeCommit: RUNTIME_PROVENANCE.runtimeCommit,
     runtimeRelease: RUNTIME_PROVENANCE.runtimeRelease,
     helperStartedAt: HELPER_STARTED_AT,
@@ -1164,6 +1233,11 @@ async function startLocalHelper() {
     } catch (error) {
       console.error(`Grundstücksabgleich: ${error instanceof Error ? error.message : "Start fehlgeschlagen."}`);
     }
+    try {
+      await regression85RepairService.runOnce({ trigger: "startup-catchup" });
+    } catch (error) {
+      console.error(`85er-Reparatur: ${error instanceof Error ? error.message : "Fail-closed Startprüfung fehlgeschlagen."}`);
+    }
   })();
   const syncTimer = setInterval(() => {
     void plotSyncService.runIfDue().catch((error) => {
@@ -1179,10 +1253,31 @@ async function startLocalHelper() {
     });
   }, 60_000);
   listingSchedulerTimer.unref();
+  const regression85Timer = setInterval(() => {
+    void regression85RepairService.runOnce({ trigger: "periodic" }).catch((error) => {
+      if (error?.code !== "LISTING_SCHEDULER_LOCKED") {
+        console.error(`85er-Reparatur: ${error instanceof Error ? error.message : "Serieller Reparaturlauf fehlgeschlagen."}`);
+      }
+    });
+  }, 60_000);
+  regression85Timer.unref();
   const importReportTimer = setInterval(() => {
     void (async () => {
+      const repair = await regression85CampaignStore.load();
+      if (repair.valid === true && new Set(["active", "paused"]).has(repair.mode)) return;
+      let deleteReconciliation;
+      try {
+        deleteReconciliation = await productionDeleteService.runOnce({
+          trigger: "periodic-reconciliation",
+          reconcileOnly: true,
+        });
+      } catch (error) {
+        console.error(`Immoprofessional-DELETE-Bestätigung: ${error instanceof Error ? error.message : "Read-only Bestätigungsprüfung fehlgeschlagen."}`);
+      }
       await importReportService.runOnce({ trigger: "periodic" });
-      await productionDeleteService.runOnce({ trigger: "periodic" });
+      if (!deleteReconciliation?.ran || deleteReconciliation.pendingConfirmationCount === 0) {
+        await productionDeleteService.runOnce({ trigger: "periodic" });
+      }
     })().catch((error) => {
       console.error(`Immoprofessional-Lebenszyklus: ${error instanceof Error ? error.message : "Berichts- oder Deleteprüfung fehlgeschlagen."}`);
     });

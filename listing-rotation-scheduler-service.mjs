@@ -242,11 +242,14 @@ function updateSourceControl(state, projectId, listingId, patch, at) {
   return replaceProject(state, { ...project, listingGroup: group });
 }
 
-function updatePreparedCopyAfterUpload(state, projectId, copyId, result, at) {
+export function updatePreparedCopyAfterUpload(state, projectId, copyId, result, at) {
   const project = state.projects.find((candidate) => candidate.id === projectId);
   const copy = project?.listings.find((candidate) => candidate.id === copyId);
   if (!project || !copy) return state;
   const source = project.listings.find((candidate) => candidate.id === copy.rotationSourceListingId);
+  const repairSourceStatus = copy.productionLifecycle?.regressionRepair?.format === 1
+    ? copy.productionLifecycle.regressionRepair.sourceOriginalStatus
+    : "";
   const succeeded = result.ok === true;
   const copyStatus = succeeded ? WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT : WORKFLOW_STATUS.PREPARED;
   const copyMessage = succeeded
@@ -264,10 +267,14 @@ function updatePreparedCopyAfterUpload(state, projectId, copyId, result, at) {
   }, { now: at });
   if (source) {
     group = updateListingControl(group, source, {
-      status: WORKFLOW_STATUS.PUBLISHED,
-      statusMessage: succeeded
-        ? "Veröffentlicht · Ersatz wurde übertragen, Importbestätigung ausstehend"
-        : "Veröffentlicht · Ersatzübertragung fehlgeschlagen",
+      status: repairSourceStatus || WORKFLOW_STATUS.PUBLISHED,
+      statusMessage: repairSourceStatus
+        ? (succeeded
+            ? "Regression-Replacement unverändert · korrekter Ersatzimport ausstehend"
+            : "Regression-Replacement unverändert · Ersatzübertragung fehlgeschlagen")
+        : (succeeded
+            ? "Veröffentlicht · Ersatz wurde übertragen, Importbestätigung ausstehend"
+            : "Veröffentlicht · Ersatzübertragung fehlgeschlagen"),
       pendingRotationListingId: copy.id,
       pendingRotationJobId: String(result.jobId || ""),
       schedulerSelectionId: "",
@@ -330,6 +337,25 @@ export function createListingRotationSchedulerService(options) {
   if (typeof options.upload !== "function") throw new Error("Dem Inserat-Scheduler fehlt die Upload-Jobübergabe.");
   const idFactory = options.idFactory || uid;
   const writeRunLog = options.writeRunLog || (async () => undefined);
+
+  async function inspectRuntimeOwnership(productionPolicy) {
+    if (!options.runtimeOwnershipGuard?.inspect) {
+      return {
+        valid: false,
+        fallbackReason: "Der produktiven Inseratrotation fehlt der verpflichtende Runtime-Ownership-Guard.",
+      };
+    }
+    try {
+      return await options.runtimeOwnershipGuard.inspect(productionPolicy);
+    } catch (error) {
+      return {
+        valid: false,
+        fallbackReason: error instanceof Error
+          ? error.message
+          : "Der Runtime-Ownership-Guard konnte nicht sicher geprüft werden.",
+      };
+    }
+  }
 
   async function finalizeRun(runId, details, at) {
     return options.store.update((state) => {
@@ -411,6 +437,9 @@ export function createListingRotationSchedulerService(options) {
     const productionPolicy = await loadProductionPolicy(options.productionPolicyStore);
     const runtimeGuard = verifyProductionRuntime(options.runtimeProvenance, productionPolicy);
     const productiveMode = operatingMode === "active" || operatingMode === "canary";
+    const runtimeOwnership = productiveMode
+      ? await inspectRuntimeOwnership(productionPolicy)
+      : { valid: false, fallbackReason: "Betriebsmodus off; keine produktive Ownership-Prüfung erforderlich." };
     const productionPolicyBlocked = productiveMode && (
       productionPolicy.valid !== true
       || !Number.isInteger(productionPolicy.maxRunItems)
@@ -418,13 +447,14 @@ export function createListingRotationSchedulerService(options) {
       || productionPolicy.maxRunItems > 3
     );
     const runtimeGuardBlocked = productiveMode && runtimeGuard.valid !== true;
+    const runtimeOwnershipBlocked = productiveMode && runtimeOwnership.valid !== true;
     const lifecycleCoordinatorBlocked = operatingMode === "active" && (
       typeof options.lifecycleCoordinator?.preflight !== "function"
       || typeof options.lifecycleCoordinator?.complete !== "function"
     );
     let lifecyclePreflightAbortReason = "";
     let lifecyclePreflightCode = "";
-    if (operatingMode === "active" && !lifecycleCoordinatorBlocked && !productionPolicyBlocked && !runtimeGuardBlocked) {
+    if (operatingMode === "active" && !lifecycleCoordinatorBlocked && !productionPolicyBlocked && !runtimeGuardBlocked && !runtimeOwnershipBlocked) {
       try {
         const lifecyclePreflight = await options.lifecycleCoordinator.preflight({
           schedulerRunId: runId,
@@ -458,6 +488,7 @@ export function createListingRotationSchedulerService(options) {
       operatingMode === "active"
       && !productionPolicyBlocked
       && !runtimeGuardBlocked
+      && !runtimeOwnershipBlocked
       && !lifecyclePreflightAbortReason
       && options.batchOverrideStore?.load
       && options.batchOverrideStore?.claim
@@ -541,6 +572,10 @@ export function createListingRotationSchedulerService(options) {
         lifecyclePreflightAbortReason,
         canaryListingIds: operatingMode === "canary" ? operatingPolicy.canaryListingIds : [],
         ...runtimeGuard,
+        runtimeOwnershipValid: runtimeOwnership.valid,
+        runtimeOwnershipFallbackReason: runtimeOwnership.fallbackReason || "",
+        runtimePortOwnerPids: runtimeOwnership.portOwnerPids || [],
+        runtimeHelperProcessPids: runtimeOwnership.helperProcessPids || [],
       });
       await lease.refresh?.({ now: startedAt });
       const initialized = await options.store.update((rawState) => {
@@ -578,7 +613,7 @@ export function createListingRotationSchedulerService(options) {
         }
         const pendingLimitExceeded = operatingMode === "active" && pending.length > activeRunLimit;
         const blockingIssues = pending.length ? hardSchedulerIssues(windowIssues) : windowIssues;
-        const selection = operatingMode === "off" || productionPolicyBlocked || runtimeGuardBlocked || lifecyclePreflightAbortReason || batchOverrideAbortReason || pendingLimitExceeded || blockingIssues.length || windowIssues.length
+        const selection = operatingMode === "off" || productionPolicyBlocked || runtimeGuardBlocked || runtimeOwnershipBlocked || lifecyclePreflightAbortReason || batchOverrideAbortReason || pendingLimitExceeded || blockingIssues.length || windowIssues.length
           ? { selections: [], skipped: [], issues: windowIssues, scheduler }
           : selectSchedulerListings({ ...state, scheduler }, startedAt, {
               ignoreTimeWindow: effectiveIgnoreTimeWindow,
@@ -625,6 +660,8 @@ export function createListingRotationSchedulerService(options) {
           abortReason = productionPolicy.fallbackReason || "Produktions-Rollout-Policy ist ungültig; active ist fail-closed gesperrt.";
         } else if (runtimeGuardBlocked) {
           abortReason = runtimeGuard.fallbackReason;
+        } else if (runtimeOwnershipBlocked) {
+          abortReason = runtimeOwnership.fallbackReason;
         } else if (lifecyclePreflightAbortReason) {
           abortReason = lifecyclePreflightAbortReason;
         } else if (batchOverrideAbortReason) {
@@ -1130,6 +1167,14 @@ export function createListingRotationSchedulerService(options) {
           ...(await inspect({ ...input, now: at, trigger: input.trigger || "periodic-runtime-blocked", writeLog: false })),
         };
       }
+      const runtimeOwnership = await inspectRuntimeOwnership(productionPolicy);
+      if (!runtimeOwnership.valid) {
+        return {
+          ran: false,
+          reason: runtimeOwnership.fallbackReason,
+          ...(await inspect({ ...input, now: at, trigger: input.trigger || "periodic-runtime-owner-blocked", writeLog: false })),
+        };
+      }
     }
     const scheduler = normalizeListingScheduler(snapshot.state.scheduler, { now: at });
     const windowIssues = schedulerWindowBlockReasons(scheduler, at);
@@ -1156,6 +1201,10 @@ export function createListingRotationSchedulerService(options) {
     const operatingPolicy = await loadOperatingMode(options.operatingModeStore);
     const productionPolicy = await loadProductionPolicy(options.productionPolicyStore);
     const runtimeGuard = verifyProductionRuntime(options.runtimeProvenance, productionPolicy);
+    const productiveMode = operatingPolicy.mode === "active" || operatingPolicy.mode === "canary";
+    const runtimeOwnership = productiveMode
+      ? await inspectRuntimeOwnership(productionPolicy)
+      : { valid: false, fallbackReason: "Betriebsmodus off; keine produktive Ownership-Prüfung erforderlich." };
     const scheduler = normalizeListingScheduler(snapshot.state.scheduler, { now: at });
     const due = schedulerDueListings({ ...snapshot.state, scheduler }, at);
     const pending = pendingRotationCopies(snapshot.state);
@@ -1174,6 +1223,10 @@ export function createListingRotationSchedulerService(options) {
       expectedProductionCommit: runtimeGuard.expectedProductionCommit,
       runtimeRelease: runtimeGuard.runtimeRelease,
       runtimeGuardValid: runtimeGuard.valid,
+      runtimeOwnershipValid: runtimeOwnership.valid,
+      runtimeOwnershipFallbackReason: runtimeOwnership.fallbackReason || "",
+      runtimePortOwnerPids: runtimeOwnership.portOwnerPids || [],
+      runtimeHelperProcessPids: runtimeOwnership.helperProcessPids || [],
       dueCount: due.length,
       pendingCount: pending.length,
       schedulerIssues: schedulerWindowBlockReasons(scheduler, at),

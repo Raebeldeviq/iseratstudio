@@ -12,7 +12,7 @@ import {
   buildProductionDeletePayload,
   createProductionDeleteLedger,
   createProductionDeleteModeStore,
-  createProductionDeleteService,
+  createProductionDeleteService as createProductionDeleteServiceUnderTest,
   productionDeleteCandidates,
   productionDeleteIdentity,
   PRODUCTION_DELETE_STATUS,
@@ -25,6 +25,13 @@ const NOW = "2026-08-14T12:00:00.000Z";
 const SOURCE_EXTERNAL_ID = "30460-654321";
 const REPLACEMENT_EXTERNAL_ID = "30460-654322";
 const RUNTIME_COMMIT = "a".repeat(40);
+
+function createProductionDeleteService(options) {
+  return createProductionDeleteServiceUnderTest({
+    runtimeOwnershipGuard: { assert: async () => ({ valid: true }) },
+    ...options,
+  });
+}
 
 function ids() {
   let value = 0;
@@ -274,6 +281,35 @@ test("production service transfers serially, waits for a report and finalizes id
   const repeated = await service.runOnce({ trigger: "test-repeat" });
   assert.equal(repeated.transferred.length, 0);
   assert.equal(uploads, 1);
+});
+
+test("reconciliation-only confirms pending DELETEs but never transfers an authorized source", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fpi-production-delete-reconcile-only-"));
+  const store = memoryStore(productionStateWithSecondPair());
+  const ledger = createProductionDeleteLedger(join(directory, "jobs.json"));
+  let uploads = 0;
+  const service = createProductionDeleteService({
+    store,
+    modeStore: fixedMode("active"),
+    ledger,
+    productionPolicyStore: fixedPolicy(),
+    mailAdapter: {
+      readOnly: true,
+      async findCandidates() { return []; },
+      async readRawMessage() { throw new Error("unexpected"); },
+    },
+    upload: async () => { uploads += 1; },
+    now: () => NOW,
+  });
+
+  const result = await service.runOnce({ trigger: "test-reconciliation", reconcileOnly: true });
+  assert.equal(result.ok, true);
+  assert.equal(result.reconcileOnly, true);
+  assert.equal(result.selectedCount, 0);
+  assert.deepEqual(result.transferred, []);
+  assert.equal(uploads, 0);
+  assert.equal((await ledger.read()).jobs.length, 0);
+  assert.equal(productionDeleteCandidates((await store.load()).state).length, 2);
 });
 
 test("manual exact production run selects only its authorized target and remains single-flight", async () => {

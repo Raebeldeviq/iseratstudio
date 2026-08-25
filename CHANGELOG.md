@@ -1,5 +1,63 @@
 # Änderungsprotokoll
 
+## Unreleased · Exakte 85er-Regressionsreparatur und Runtime-Ownership – 25. August 2026
+
+### Report
+
+- Den vollständig belegten Rogue-Batch als unveränderliche Allowlist mit exakt
+  85 Listing-/Objektnummern, Prozess `4460`, Uploadjob-, Scheduler-, Plot-,
+  Haus-, Hero- und read-only Portalprovenienz modelliert. 84, 86, Dubletten,
+  fehlende Portalzeilen und eine abweichende Hausverteilung blockieren
+  fail-closed.
+- Einen persistenten seriellen B→C-Reparaturworker ergänzt. Er verwendet die
+  bestehende Creative-/Rotationsengine, den Daily-Plot-Guard, das Uploadledger,
+  die positive Importbestätigung und den bestehenden Production-DELETE. Erst
+  nach bestätigtem Ersatzimport darf B gelöscht werden; erst der positive
+  Löschbericht schließt einen Datensatz ab.
+- Produktionsmutationen zusätzlich an genau eine saubere staged
+  `helper-runtime/release-*`-Runtime, deren Manifest-Commit, Launcher,
+  Arbeitsverzeichnis, alleinigen Helperprozess und alleinigen Port-Owner auf
+  `43182` gebunden. Alte oder direkt aus einer Source-Arbeitskopie gestartete
+  Helper bleiben mit `PRODUCTION_RUNTIME_PORT_OWNER_MISMATCH` beziehungsweise
+  `PRODUCTION_RUNTIME_SOURCE_DIRECTORY_BLOCKED` gesperrt.
+- Den Creative-Payload-Vertrag verschärft: Eine fehlende persistierte
+  `creativeSelection` blockiert jeden produktiven Transfer mit
+  `PRODUCTION_CREATIVE_SELECTION_MISSING`; die vorhandene ZIP-/XML-/Bildprüfung
+  bleibt danach unverändert verpflichtend.
+- Einen reinen Production-DELETE-Bestätigungslauf ergänzt. Der Helper prüft
+  bereits übertragene DELETEs vor neuen Import-/DELETE-Aktionen und darf bei
+  noch offener Bestätigung keinen weiteren DELETE starten.
+- Read-only Gesamtpreview, persistente Kampagnenstufen, atomaren
+  Kampagnen-Claim, Scheduler-Lease, Restart-/Deduplizierungslogik, Checkpoints
+  nach 5/10/20/40/60/80 und exakte Portal-Exclusions für die alten 85 ergänzt.
+
+### Begründung
+
+Die Regression entstand nicht in der Creative-Auswahl, sondern durch einen
+veralteten, manuell im Hintergrund gestarteten Helper aus einer alten
+Arbeitskopie. Eine reine Datenkorrektur hätte deshalb die Wiederholung nicht
+verhindert. Der neue Vertrag verbindet Prozess-Ownership und unveränderliche
+Scope-Provenienz mit einem vollständig seriellen Replacement-first-Lifecycle.
+Die fehlerhafte B-Kopie wird für die Creative-Verteilung am nachgewiesenen
+ursprünglichen Hausplatz simuliert; dadurch werden keine legitimen
+SOL-242-Inserate außerhalb der Allowlist angefasst.
+
+### Hürden und Risiken
+
+- Die deklarierte Europe/Berlin-Zeitspanne und die tatsächlichen ISO-Belege
+  weichen am Ende voneinander ab. Der Scope wird deshalb ausschließlich aus
+  den 85 konkreten erfolgreichen Jobs von Prozess `4460` gebildet; beide
+  Zeitangaben bleiben getrennt auditierbar.
+- Die Immoprofessional-Sammelansicht zeigte einen Zähler von 85, renderte aber
+  nur 73 Zeilen. Die fehlenden zwölf Objektnummern wurden einzeln read-only
+  nachgeschlagen und ebenfalls als nicht übertragen belegt.
+- Die bereits übertragene DELETE-Kette `30460-325676 → 30460-819458` bleibt
+  ohne positiven Löschbericht offen. Die Kampagne kann deshalb nicht aktiviert
+  werden, bis diese fremde offene Kette eindeutig reconciliert ist.
+- Der Reparaturcode führt vor Maintainer-Integration und Bau einer neuen
+  sauberen Release-Runtime keine Live-Reparatur, keinen FTPS-Transfer und keine
+  Portalmutation aus.
+
 ## Unreleased · Monotone Scheduler-Lease und abgeschlossener offener Lifecycle – 23. August 2026
 
 ### Report

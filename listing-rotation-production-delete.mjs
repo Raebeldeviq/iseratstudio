@@ -8,6 +8,11 @@ import { APP_VERSION } from "./app/lib/app-version.mjs";
 import { parseImmoprofessionalDeleteReport } from "./immoprofessional-delete-report-parser.mjs";
 import { listingControl, normalizeListingGroup, updateListingControl } from "./listing-groups.mjs";
 import {
+  isRegressionRepairLifecycle,
+  regressionRepairIdentity,
+  REGRESSION_REPAIR_SOURCE_STATUS,
+} from "./listing-regression-repair.mjs";
+import {
   PRODUCTION_BATCH_OVERRIDE_MAX_ITEMS,
   PRODUCTION_BATCH_OVERRIDE_MIN_ITEMS,
 } from "./production-batch-override.mjs";
@@ -234,6 +239,9 @@ export function productionDeleteIdentity(source, replacement) {
   const batchOverrideId = clean(lifecycle?.batchOverrideId, 200);
   const batchOverrideMaxRunItems = Math.max(0, Math.trunc(Number(lifecycle?.batchOverrideMaxRunItems) || 0));
   const runtimeCommit = clean(lifecycle?.runtimeCommit, 40).toLowerCase();
+  const regressionRepair = isRegressionRepairLifecycle(lifecycle)
+    ? regressionRepairIdentity(lifecycle)
+    : null;
   const batchValuesPresent = Boolean(batchOverrideId || batchOverrideMaxRunItems || runtimeCommit);
   if (batchValuesPresent && (
     !batchOverrideId
@@ -250,6 +258,13 @@ export function productionDeleteIdentity(source, replacement) {
       `batchOverrideId=${batchOverrideId}`,
       `batchOverrideMaxRunItems=${batchOverrideMaxRunItems}`,
       `runtimeCommit=${runtimeCommit}`,
+    ] : []),
+    ...(regressionRepair ? [
+      "repairContract=regression-85-repair-v1",
+      `repairCampaignId=${regressionRepair.campaignId}`,
+      `repairScopeHash=${regressionRepair.scopeHash}`,
+      `repairScopeItemId=${regressionRepair.scopeItemId}`,
+      `repairOriginalStatus=${regressionRepair.sourceOriginalStatus}`,
     ] : []),
     `sourceListingId=${source.id}`,
     `sourceExternalId=${source.externalId}`,
@@ -285,6 +300,7 @@ export function resolveProductionDeleteEligibility(state, projectId, sourceListi
   const sourceControl = listingControl(group, source);
   const replacementControl = listingControl(group, replacement);
   const lifecycle = replacement.productionLifecycle;
+  const regressionRepair = isRegressionRepairLifecycle(lifecycle);
   const report = (state.importReports || []).find((entry) =>
     entry.reportId === replacement.importReportId
     && entry.importResult === "success"
@@ -292,7 +308,9 @@ export function resolveProductionDeleteEligibility(state, projectId, sourceListi
     && entry.matchedListingId === replacement.id
     && entry.externalObjectNumber === replacement.externalId);
   const reasons = [];
-  if (source.status !== WORKFLOW_STATUS.PUBLISHED || source.externalDeletionPending !== true || source.productionDeleteState !== "authorized") reasons.push("source_not_authorized");
+  const sourceStatusAllowed = source.status === WORKFLOW_STATUS.PUBLISHED
+    || (regressionRepair && source.status === REGRESSION_REPAIR_SOURCE_STATUS);
+  if (!sourceStatusAllowed || source.externalDeletionPending !== true || source.productionDeleteState !== "authorized") reasons.push("source_not_authorized");
   if (!source.productionDeleteAuthorizedAt || !source.productionRotationRunId) reasons.push("production_authorization_missing");
   if (replacement.status !== WORKFLOW_STATUS.PUBLISHED || replacementControl.status !== WORKFLOW_STATUS.PUBLISHED) reasons.push("replacement_not_published");
   if (!replacement.importConfirmedAt || !report) reasons.push("positive_import_confirmation_missing");
@@ -373,7 +391,9 @@ function markDeleteTransferredInState(state, eligibility, job, now) {
   group = updateListingControl(group, source, {
     automaticUpdateEnabled: false,
     automaticDeletionEnabled: false,
-    status: WORKFLOW_STATUS.PUBLISHED,
+    status: isRegressionRepairLifecycle(currentReplacement.productionLifecycle)
+      ? REGRESSION_REPAIR_SOURCE_STATUS
+      : WORKFLOW_STATUS.PUBLISHED,
     statusMessage: `Ersetzt · DELETE übertragen · Bericht für ${source.externalId} ausstehend`,
   }, { now });
   const nextProject = { ...project, listings: project.listings.map((listing) => listing.id === source.id ? source : listing), listingGroup: group };
@@ -452,6 +472,7 @@ export function createProductionDeleteService(options) {
   if (!options?.store?.load || !options?.store?.update) throw new Error("Dem Produktions-Deletedienst fehlt der persistente Katalogspeicher.");
   if (!options?.modeStore?.load || !options?.ledger?.read) throw new Error("Dem Produktions-Deletedienst fehlen Modus oder Ledger.");
   if (!options?.productionPolicyStore?.load) throw new Error("Dem Produktions-Deletedienst fehlt das persistente Produktionslimit.");
+  if (!options?.runtimeOwnershipGuard?.assert) throw new Error("Dem Produktions-Deletedienst fehlt der verpflichtende Runtime-Ownership-Guard.");
   if (typeof options.upload !== "function") throw new Error("Dem Produktions-Deletedienst fehlt der FTPS-Transferadapter.");
   if (!options?.mailAdapter?.findCandidates || !options?.mailAdapter?.readRawMessage || options.mailAdapter.readOnly !== true) throw new Error("Dem Produktions-Deletedienst fehlt der read-only Löschberichtadapter.");
   const writeLog = options.writeLog || (async () => undefined);
@@ -616,9 +637,18 @@ export function createProductionDeleteService(options) {
       let claimed;
       let identity;
       try {
+        const currentPolicy = await options.productionPolicyStore.load();
+        await options.runtimeOwnershipGuard.assert(currentPolicy);
         const currentSnapshot = await options.store.load();
         const currentLedger = await options.ledger.read();
         const eligibility = resolveProductionDeleteEligibility(currentSnapshot.state, candidate.projectId, candidate.sourceListingId, currentLedger);
+        await options.mutationGuard?.assert?.({
+          projectId: eligibility.project.id,
+          sourceListingId: eligibility.source.id,
+          sourceExternalId: eligibility.source.externalId,
+          replacementListingId: eligibility.replacement.id,
+          replacementExternalId: eligibility.replacement.externalId,
+        });
         identity = productionDeleteIdentity(eligibility.source, eligibility.replacement);
         const currentContext = await authorizeDeleteIdentity(identity);
         if (currentContext.key !== context.key) throw productionError("PRODUCTION_DELETE_CONTEXT_CHANGED", "Die Deletekette wechselte während der Verarbeitung ihren Produktionskontext.");
@@ -713,6 +743,13 @@ export function createProductionDeleteService(options) {
       return { ran: false, reason: policy.fallbackReason || "production-policy-invalid", transferred: [], confirmed: [], mailMutations: 0 };
     }
     const trigger = clean(input.trigger || "periodic", 100);
+    const reconcileOnly = input.reconcileOnly === true;
+    if (input.reconcileOnly !== undefined && typeof input.reconcileOnly !== "boolean") {
+      throw productionError(
+        "PRODUCTION_DELETE_RECONCILE_ONLY_INVALID",
+        "Der reine DELETE-Bestätigungslauf verlangt einen eindeutigen booleschen Vertrag.",
+      );
+    }
     const targetExternalObjectNumber = clean(input.targetExternalObjectNumber, 40);
     const manualExact = trigger === "manual-exact";
     const schedulerLifecycleExact = trigger === "scheduler-lifecycle" && Boolean(targetExternalObjectNumber);
@@ -756,6 +793,31 @@ export function createProductionDeleteService(options) {
     const ledgerAfterConfirmation = await options.ledger.read();
     const snapshotAfterConfirmation = await options.store.load();
     const resolved = await resolveDeleteContexts(snapshotAfterConfirmation.state, ledgerAfterConfirmation);
+    if (reconcileOnly) {
+      await writeLog("reconciliation-only", {
+        trigger,
+        pendingConfirmationCount: resolved.totalPending,
+        reportCandidateCount: confirmation.candidateCount,
+        confirmedCount: confirmation.confirmed.length,
+        transferredCount: 0,
+      });
+      return {
+        ran: true,
+        trigger,
+        reconcileOnly: true,
+        maxRunItems: policy.maxRunItems,
+        candidateCount: resolved.candidates.length,
+        selectedCount: 0,
+        skippedCount: resolved.candidates.length,
+        transferred: [],
+        errors: [],
+        pendingConfirmationCount: resolved.totalPending,
+        reportCandidateCount: confirmation.candidateCount,
+        confirmed: confirmation.confirmed,
+        mailMutations: 0,
+        ok: true,
+      };
+    }
     const contextsWithCandidates = [...resolved.contexts.values()].filter((context) => context.candidates.length);
     let selectedContext = null;
     let targetCandidateSelected = false;
