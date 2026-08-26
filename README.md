@@ -264,45 +264,58 @@ Der historische Fehlerbatch wird nicht über einen Hausnamen oder eine
 dynamische Suche bestimmt. `regression-85-repair.json` enthält nach expliziter
 Vorbereitung eine unveränderliche, gehashte Allowlist mit exakt 85 konkreten
 Rogue-Transfers von Prozess `4460`: 82 × `SOL 242 V4`, 2 × `SOL 204 V4`
-und 1 × `SOL 229 V3`. Zu jedem Eintrag werden Listing-/Objektnummer,
-ursprüngliche Source, Projekt und Plot, Schedulerlauf, Uploadjob und -zeit,
-Runtimebefund, tatsächliches Haus, Hero sowie der read-only Portalstatus
-gespeichert. Die deklarierte Europe/Berlin-Zeitspanne und die tatsächlichen
-ISO-Ereigniszeiten bleiben getrennt erhalten. Jede Abweichung von exakt 85,
-jede Dublette und jede nachträgliche Scopeänderung blockiert die Kampagne.
+und 1 × `SOL 229 V3`. Der freigegebene Scope-Hash ist fest
+`abcf59c654f573bc13906e555badeb13e090eb67d9c971cfb0216b5a4abace58`;
+zusätzlich bindet ein neu berechneter Evidenz-Hash die tatsächlich rekonstruierten
+Listing-, Objekt-, A→B-, Projekt-, Plot-, Scheduler- und Uploadjobdaten. Mutable
+Portalbeobachtungen sind absichtlich nicht Teil der Allowlist-Identität. Jede
+Abweichung von exakt 85, jede Dublette und jede nachträgliche Scopeänderung
+blockiert die Kampagne.
 
-Der Worker verarbeitet ausschließlich diese Allowlist und immer genau einen
-vollständigen Lifecycle:
+Vor jeder Katalog- oder Providermutation wird jeder A→B-Vorgang read-only mit
+externer Source-Präsenz, positivem B-Importbericht, A-Deleteevidenz und den
+Portalstatuswerten für Immowelt, Kleinanzeigen und ImmoScout24 klassifiziert:
 
-`Regression B → CreativeSelection → Ersatz C → Payload-Guard → FTPS`
+- `ROLLBACK_ELIGIBLE`: A ist weiterhin published und extern vorhanden; B wird
+  über den bestehenden Production-DELETE entfernt. A bleibt bestehen, erhält
+  erst nach dem positiven B-Löschbericht wieder den sauberen Scheduler-Owner-
+  Zustand und benötigt keinen FTPS-Hausupload.
+- `REPLACEMENT_REQUIRED`: A ist mit exaktem positiven Löschbericht wirklich
+  gelöscht; nur dann läuft B → CreativeSelection → C → FTPS → positiver
+  Importbericht → Production-DELETE B.
+- `AMBIGUOUS`: keine Mutation. Der Eintrag bleibt mit Evidenz-Hash und Grund
+  persistent blockiert, während eindeutig klassifizierte Einträge seriell
+  weiterverarbeitet werden können.
 
-`→ positiver Importbericht → C published → Production-DELETE B`
+Klassifikation, Grund, Evidenz-Hash, Zeitpunkt, Strategie und Repairzustand
+werden restart-sicher gespeichert. Eine veränderte UI-Beobachtung darf eine
+persistierte Klassifikation nicht still ersetzen. Ein erfolgreicher FTPS-
+Transfer ist weiterhin keine Importbestätigung; ein erfolgreicher DELETE-
+Transfer ist keine Löschbestätigung. Deterministische Jobs, Campaign-Claim,
+Scheduler-Lease und der bestehende DELETE-Guard verhindern doppelte Uploads
+und Löschungen nach Neustarts.
 
-`→ positiver Löschbericht → B deleted → repair_completed`
+Das Operational Gate akzeptiert die 85 bekannten `externalDeletionPending`-
+Marker ausschließlich auf den 85 ursprünglichen A-Listings. Ein einziger
+fremder Marker, eine fehlende Source oder ein fremder offener DELETE-Job
+blockiert. Bei belegten `REPLACEMENT_REQUIRED`-Fällen darf statt des Markers
+nur die exakt bestätigte gelöschte A-Source stehen. Portalexport und normale
+Rotation bleiben während der Kampagne `off`.
 
-B bleibt bis zum bestätigten Import von C unverändert
-`transferred_pending_import`. Ein erfolgreicher FTPS-Transfer ist keine
-Importbestätigung; ein erfolgreicher DELETE-Transfer ist keine
-Löschbestätigung. Die neue Objektnummer und der Uploadjob sind deterministisch,
-Kampagnenzustand und Jobs persistent. Ein Neustart kann daher weder ein zweites
-Replacement noch einen zweiten Upload oder DELETE erzeugen. Der Daily-Plot-
-Guard gilt unverändert; ein heute bereits verwendetes Grundstück wartet bis
-zum nächsten Europe/Berlin-Kalendertag. Globale Fehler und fremde offene
-DELETE-Ketten pausieren die gesamte Kampagne fail-closed.
-
-Die Creative-Planung setzt B ausschließlich in einer In-Memory-Kopie auf den
-persistiert nachgewiesenen, vor der fehlerhaften Rotation belegten Hausplatz
-zurück. Anschließend wählt die normale Produktionsengine C. Der echte B-Zustand
-bleibt dabei unangetastet; legitime SOL-242-Inserate außerhalb der Allowlist
-werden weder ausgewählt noch verändert. `creativeSelection` und der vollständige
-ZIP-/OpenImmo-/Bildabgleich sind vor FTPS zwingend.
+Die Creative-Planung läuft ausschließlich für `REPLACEMENT_REQUIRED`. Sie setzt
+B in einer In-Memory-Kopie auf den nachgewiesenen früheren Hausplatz zurück und
+verwendet anschließend die normale Produktionsengine für C. Der Daily-Plot-
+Guard gilt nur für diese echten Neuuploads. `ROLLBACK_ELIGIBLE` verbraucht weder
+den Guard noch eine neue CreativeSelection.
 
 Die Operatorbefehle sind absichtlich getrennt. `prepare-scope` ist nur aus
 der exakt freigegebenen sauberen Release-Runtime zulässig und startet noch
 keine Reparatur:
 
 ```bash
-node regression-85-repair-cli.mjs prepare-scope --portal-snapshot <READ_ONLY-PORTALSTATUS.json>
+node regression-85-repair-cli.mjs prepare-scope
+node regression-85-repair-cli.mjs classification-preview --evidence-snapshot <READ_ONLY-A-B-EVIDENZ.json>
+node regression-85-repair-cli.mjs classify --evidence-snapshot <READ_ONLY-A-B-EVIDENZ.json>
 node regression-85-repair-cli.mjs preview
 node regression-85-repair-cli.mjs status
 node regression-85-repair-cli.mjs activate
@@ -312,7 +325,8 @@ node regression-85-repair-cli.mjs off
 
 `activate` verlangt normale Rotation und Portalexport eindeutig `off`,
 Production-DELETE eindeutig `active`, eine passende Produktionsruntime, einen
-sauberen 85er-Preview und null fremde offene DELETE-Jobs. Während einer aktiven
+vollständigen 85er-Klassifikations- und Repairpreview sowie null fremde Marker
+und offene DELETE-Jobs. Während einer aktiven
 oder pausierten Kampagne blockiert der DELETE-Mutationsguard jede Kette
 außerhalb des aktuell seriell bearbeiteten Allowlist-Eintrags. Die alten 85
 werden als exakte Portal-Exclusion bereitgestellt; neue korrekte Nachfolger

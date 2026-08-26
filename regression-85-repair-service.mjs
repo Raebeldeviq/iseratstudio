@@ -3,13 +3,17 @@ import { recordHouseRotation } from "./house-distribution.mjs";
 import { inspectProductionRotationLifecycle, ROTATION_LIFECYCLE_STAGE } from "./listing-rotation-lifecycle-coordinator.mjs";
 import {
   assertRegressionRepairPayloadSource,
+  finalizeRegressionRollbackInState,
+  prepareRegressionRollbackDeleteInState,
   prepareRegressionRepairRotationInState,
 } from "./listing-regression-repair.mjs";
 import { updatePreparedCopyAfterUpload } from "./listing-rotation-scheduler-service.mjs";
 import {
   assertRegression85Campaign,
+  REGRESSION_85_CLASSIFICATIONS,
   REGRESSION_85_EXPECTED_COUNT,
   REGRESSION_85_REPAIR_STAGES,
+  REGRESSION_85_REPAIR_STRATEGIES,
 } from "./regression-85-repair-scope.mjs";
 import { collectPlotUploadEvidence } from "./plot-daily-upload-guard.mjs";
 import { PRODUCTION_DELETE_STATUS } from "./listing-rotation-production-delete.mjs";
@@ -17,7 +21,7 @@ import { WORKFLOW_STATUS } from "./workflow-status.mjs";
 
 export const REGRESSION_85_CHECKPOINTS = Object.freeze([5, 10, 20, 40, 60, 80]);
 
-const STAGE_ORDER = Object.freeze([
+const REPLACEMENT_STAGE_ORDER = Object.freeze([
   REGRESSION_85_REPAIR_STAGES.IDENTIFIED,
   REGRESSION_85_REPAIR_STAGES.WAITING_DAILY_PLOT_WINDOW,
   REGRESSION_85_REPAIR_STAGES.CREATIVE_SELECTED,
@@ -26,6 +30,14 @@ const STAGE_ORDER = Object.freeze([
   REGRESSION_85_REPAIR_STAGES.REPLACEMENT_PUBLISHED,
   REGRESSION_85_REPAIR_STAGES.OLD_DELETE_PENDING,
   REGRESSION_85_REPAIR_STAGES.OLD_DELETED,
+  REGRESSION_85_REPAIR_STAGES.REPAIR_COMPLETED,
+]);
+
+const ROLLBACK_STAGE_ORDER = Object.freeze([
+  REGRESSION_85_REPAIR_STAGES.IDENTIFIED,
+  REGRESSION_85_REPAIR_STAGES.ROLLBACK_DELETE_AUTHORIZED,
+  REGRESSION_85_REPAIR_STAGES.ROLLBACK_DELETE_PENDING,
+  REGRESSION_85_REPAIR_STAGES.ROLLBACK_ROGUE_DELETED,
   REGRESSION_85_REPAIR_STAGES.REPAIR_COMPLETED,
 ]);
 
@@ -40,12 +52,18 @@ function serviceError(code, message, details = {}) {
   return error;
 }
 
-function rank(stage) {
-  return STAGE_ORDER.indexOf(stage);
+function stageOrder(progress) {
+  return progress?.repairStrategy === REGRESSION_85_REPAIR_STRATEGIES.ROLLBACK
+    ? ROLLBACK_STAGE_ORDER
+    : REPLACEMENT_STAGE_ORDER;
 }
 
-function monotonicStage(current, requested) {
-  return rank(current) > rank(requested) ? current : requested;
+function rank(progress, stage) {
+  return stageOrder(progress).indexOf(stage);
+}
+
+function monotonicStage(progress, requested) {
+  return rank(progress, progress.stage) > rank(progress, requested) ? progress.stage : requested;
 }
 
 function projectAndSource(state, scopeItem) {
@@ -94,8 +112,35 @@ export function previewRegression85Repair(stateValue, campaignValue, options = {
   const baseTime = Date.parse(options.now || new Date().toISOString());
   if (!Number.isFinite(baseTime)) throw serviceError("REGRESSION_85_PREVIEW_TIME_INVALID", "Der Preview-Zeitpunkt ist ungültig.");
   const items = [];
-  for (let index = 0; index < campaign.scope.items.length; index += 1) {
-    const scopeItem = campaign.scope.items[index];
+  const rollback = [];
+  const ambiguous = [];
+  const replacementProgress = campaign.progress.filter((progress) => progress.classification === REGRESSION_85_CLASSIFICATIONS.REPLACEMENT_REQUIRED);
+  for (const progress of campaign.progress) {
+    const scopeItem = campaign.scope.items.find((item) => item.scopeItemId === progress.scopeItemId);
+    if (progress.classification === REGRESSION_85_CLASSIFICATIONS.ROLLBACK_ELIGIBLE) {
+      const project = (state.projects || []).find((candidate) => candidate.id === scopeItem.projectId);
+      const originalSource = project?.listings.find((listing) => listing.id === scopeItem.originalSourceListingId);
+      rollback.push({
+        scopeItemId: scopeItem.scopeItemId,
+        originalSourceListingId: scopeItem.originalSourceListingId,
+        originalSourceExternalId: originalSource?.externalId || "",
+        regressionListingId: scopeItem.regressionListingId,
+        regressionExternalId: scopeItem.regressionExternalId,
+        plan: "A bleibt | B wird gelöscht",
+      });
+    }
+    if (progress.classification === REGRESSION_85_CLASSIFICATIONS.AMBIGUOUS) {
+      ambiguous.push({
+        scopeItemId: scopeItem.scopeItemId,
+        regressionExternalId: scopeItem.regressionExternalId,
+        reason: progress.classificationReason,
+        plan: "keine Mutation",
+      });
+    }
+  }
+  for (let index = 0; index < replacementProgress.length; index += 1) {
+    const progress = replacementProgress[index];
+    const scopeItem = campaign.scope.items.find((item) => item.scopeItemId === progress.scopeItemId);
     const at = new Date(baseTime + index).toISOString();
     const schedulerRunId = `preview:${campaign.campaignId}:${scopeItem.scopeItemId}`;
     const result = prepareRegressionRepairRotationInState(state, scopeItem, {
@@ -124,6 +169,7 @@ export function previewRegression85Repair(stateValue, campaignValue, options = {
       houseReason: copy.creativeSelection.houseReason,
       heroReason: copy.creativeSelection.heroReason,
       diagnostics: copy.creativeSelection.diagnostics || [],
+      plan: "A bleibt deleted | B wird ersetzt durch C",
     });
     state = result.state;
     state = {
@@ -139,27 +185,38 @@ export function previewRegression85Repair(stateValue, campaignValue, options = {
       ),
     };
   }
-  if (items.length !== REGRESSION_85_EXPECTED_COUNT) {
-    throw serviceError("REGRESSION_85_SCOPE_MISMATCH", "Die Reparaturvorschau enthält nicht exakt 85 Objekte.");
+  if (items.length + rollback.length + ambiguous.length !== REGRESSION_85_EXPECTED_COUNT) {
+    throw serviceError("REGRESSION_85_SCOPE_MISMATCH", "Die klassifizierte Reparaturvorschau enthält nicht exakt 85 Objekte.");
   }
   return {
     generatedAt: new Date(baseTime).toISOString(),
     campaignId: campaign.campaignId,
     scopeHash: campaign.scopeHash,
     readOnly: true,
-    items,
+    rollback,
+    replacements: items,
+    ambiguous,
+    items: [...rollback, ...items, ...ambiguous],
+    counts: {
+      [REGRESSION_85_CLASSIFICATIONS.ROLLBACK_ELIGIBLE]: rollback.length,
+      [REGRESSION_85_CLASSIFICATIONS.REPLACEMENT_REQUIRED]: items.length,
+      [REGRESSION_85_CLASSIFICATIONS.AMBIGUOUS]: ambiguous.length,
+    },
     summary: creativeSummary(items),
   };
 }
 
 function progressSummary(campaign) {
-  const counts = Object.fromEntries(STAGE_ORDER.map((stage) => [stage, 0]));
-  for (const item of campaign.progress) counts[item.stage] += 1;
+  const counts = Object.fromEntries(Object.values(REGRESSION_85_REPAIR_STAGES).map((stage) => [stage, 0]));
+  for (const item of campaign.progress) counts[item.stage] = (counts[item.stage] || 0) + 1;
+  const completed = counts[REGRESSION_85_REPAIR_STAGES.REPAIR_COMPLETED];
+  const ambiguousBlocked = counts[REGRESSION_85_REPAIR_STAGES.AMBIGUOUS_BLOCKED];
   return {
     total: campaign.progress.length,
-    completed: counts[REGRESSION_85_REPAIR_STAGES.REPAIR_COMPLETED],
+    completed,
+    ambiguousBlocked,
     waitingDailyPlotWindow: counts[REGRESSION_85_REPAIR_STAGES.WAITING_DAILY_PLOT_WINDOW],
-    pending: campaign.progress.length - counts[REGRESSION_85_REPAIR_STAGES.REPAIR_COMPLETED],
+    pending: campaign.progress.length - completed - ambiguousBlocked,
     counts,
   };
 }
@@ -172,7 +229,10 @@ function currentProgress(campaign) {
     }
     return active;
   }
-  return campaign.progress.find((item) => item.stage !== REGRESSION_85_REPAIR_STAGES.REPAIR_COMPLETED) || null;
+  return campaign.progress.find((item) => !new Set([
+    REGRESSION_85_REPAIR_STAGES.REPAIR_COMPLETED,
+    REGRESSION_85_REPAIR_STAGES.AMBIGUOUS_BLOCKED,
+  ]).has(item.stage)) || null;
 }
 
 function scopeItemFor(campaign, progress) {
@@ -243,6 +303,16 @@ export function createRegression85RepairService(options) {
     if (campaign.scope.items.length !== REGRESSION_85_EXPECTED_COUNT) {
       throw serviceError("REGRESSION_85_SCOPE_MISMATCH", "Vor jeder Mutation müssen exakt 85 Allowlist-Objekte vorliegen.");
     }
+    if (
+      campaign.progress.some((item) => !item.classification || !item.evidenceHash || !item.repairStrategy)
+      || campaign.classificationSummary?.total !== REGRESSION_85_EXPECTED_COUNT
+    ) {
+      throw serviceError("REGRESSION_85_CLASSIFICATION_REQUIRED", "Vor jeder Mutation muss die vollständige persistierte 85er-Klassifikation vorliegen.");
+    }
+    const active = campaign.progress.find((item) => item.scopeItemId === campaign.activeScopeItemId);
+    if (active?.classification === REGRESSION_85_CLASSIFICATIONS.AMBIGUOUS) {
+      throw serviceError("REGRESSION_85_AMBIGUOUS_MUTATION_BLOCKED", "Ein AMBIGUOUS-Vorgang darf keine Mutation auslösen.");
+    }
     const [rotationMode, portalMode, deleteMode, productionPolicy] = await Promise.all([
       options.rotationModeStore.load(),
       options.portalModeStore.load(),
@@ -254,6 +324,44 @@ export function createRegression85RepairService(options) {
     if (deleteMode.valid !== true || deleteMode.mode !== "active") throw serviceError("REGRESSION_85_DELETE_MODE_NOT_ACTIVE", "Production-DELETE muss für den seriellen Repair-Lifecycle eindeutig aktiv sein.");
     if (productionPolicy.valid !== true) throw serviceError("REGRESSION_85_PRODUCTION_POLICY_INVALID", "Die Produktionspolicy ist nicht eindeutig gültig.");
     const ownership = await options.runtimeOwnershipGuard.assert(productionPolicy);
+    const snapshot = await options.catalogStore.load();
+    const rows = (snapshot.state.projects || []).flatMap((project) => (project.listings || []).map((listing) => ({ project, listing })));
+    const originalIds = new Set(campaign.scope.items.map((item) => item.originalSourceListingId));
+    const regressionIds = new Set(campaign.scope.items.map((item) => item.regressionListingId));
+    const foreignMarkers = rows.filter(({ listing }) =>
+      listing.externalDeletionPending === true
+      && !originalIds.has(listing.id)
+      && !regressionIds.has(listing.id));
+    if (foreignMarkers.length) {
+      throw serviceError("REGRESSION_85_FOREIGN_MARKER_PRESENT", "Während der 85er-Reparatur existiert ein externalDeletionPending-Marker außerhalb der exakten A→B-Allowlist.", {
+        listingIds: foreignMarkers.map(({ listing }) => listing.id),
+      });
+    }
+    for (const progress of campaign.progress) {
+      const scopeItem = scopeItemFor(campaign, progress);
+      const project = snapshot.state.projects.find((candidate) => candidate.id === scopeItem.projectId);
+      const originalSource = project?.listings.find((listing) => listing.id === scopeItem.originalSourceListingId);
+      const regression = project?.listings.find((listing) => listing.id === scopeItem.regressionListingId);
+      if (!originalSource || !regression) throw serviceError("REGRESSION_85_SCOPE_ITEM_MISMATCH", "Eine A→B-Allowlistbeziehung fehlt im aktuellen Katalog.");
+      if (
+        progress.classification === REGRESSION_85_CLASSIFICATIONS.ROLLBACK_ELIGIBLE
+        && progress.stage !== REGRESSION_85_REPAIR_STAGES.REPAIR_COMPLETED
+        && originalSource.externalDeletionPending !== true
+      ) throw serviceError("REGRESSION_85_ROLLBACK_MARKER_CHANGED", "Der A-Marker wurde vor bestätigtem Rollbackabschluss verändert.");
+      if (
+        progress.classification === REGRESSION_85_CLASSIFICATIONS.REPLACEMENT_REQUIRED
+        && (originalSource.status !== WORKFLOW_STATUS.DELETED || originalSource.productionDeleteState !== "confirmed")
+      ) throw serviceError("REGRESSION_85_REPLACEMENT_SOURCE_NOT_CONFIRMED_DELETED", "Eine Replacement-Klassifikation verlor ihre positive A-Löschprovenienz.");
+      if (
+        regression.externalDeletionPending === true
+        && (
+          campaign.activeScopeItemId !== progress.scopeItemId
+          || progress.classification === REGRESSION_85_CLASSIFICATIONS.AMBIGUOUS
+          || progress.stage === REGRESSION_85_REPAIR_STAGES.IDENTIFIED
+          || progress.stage === REGRESSION_85_REPAIR_STAGES.REPAIR_COMPLETED
+        )
+      ) throw serviceError("REGRESSION_85_ROGUE_MARKER_OUTSIDE_ACTIVE_LIFECYCLE", "Ein B-Marker liegt außerhalb des aktuell seriell aktiven Repair-Lifecycles.");
+    }
     return { rotationMode, portalMode, deleteMode, productionPolicy, ownership };
   }
 
@@ -265,7 +373,7 @@ export function createRegression85RepairService(options) {
       const updated = {
         ...progress,
         ...patch,
-        stage: monotonicStage(progress.stage, requestedStage),
+        stage: monotonicStage(progress, requestedStage),
         updatedAt: input.now || now(),
       };
       return {
@@ -308,6 +416,31 @@ export function createRegression85RepairService(options) {
   function observedStage(state, campaign, scopeItem, progress, uploadLedger, deleteLedger) {
     const { project, source } = projectAndSource(state, scopeItem);
     const replacement = replacementFor(project, progress);
+    if (progress.repairStrategy === REGRESSION_85_REPAIR_STRATEGIES.ROLLBACK) {
+      const originalSource = project.listings.find((listing) => listing.id === scopeItem.originalSourceListingId);
+      if (!originalSource || source.rotationSourceListingId !== originalSource.id) {
+        throw serviceError("REGRESSION_85_ROLLBACK_RELATION_MISMATCH", "Die persistierte Rollback-Beziehung A→B ist nicht mehr eindeutig.");
+      }
+      let stage = progress.stage;
+      if (source.productionDeleteState === "authorized" && source.supersededByListingId === originalSource.id) {
+        stage = REGRESSION_85_REPAIR_STAGES.ROLLBACK_DELETE_AUTHORIZED;
+      }
+      if (source.productionDeleteState === "pending_confirmation") {
+        stage = REGRESSION_85_REPAIR_STAGES.ROLLBACK_DELETE_PENDING;
+      }
+      if (source.status === WORKFLOW_STATUS.DELETED && source.productionDeleteState === "confirmed") {
+        stage = originalSource.externalDeletionPending === false
+          ? REGRESSION_85_REPAIR_STAGES.REPAIR_COMPLETED
+          : REGRESSION_85_REPAIR_STAGES.ROLLBACK_ROGUE_DELETED;
+      }
+      return {
+        stage: monotonicStage(progress, stage),
+        project,
+        source,
+        replacement: originalSource,
+        assessment: null,
+      };
+    }
     if (!replacement) return { stage: progress.stage, project, source, replacement: null, assessment: null };
     assertRegressionRepairPayloadSource(state, scopeItem, replacement);
     let stage = REGRESSION_85_REPAIR_STAGES.REPLACEMENT_CREATED;
@@ -330,7 +463,7 @@ export function createRegression85RepairService(options) {
         stage = REGRESSION_85_REPAIR_STAGES.REPAIR_COMPLETED;
       }
     }
-    return { stage: monotonicStage(progress.stage, stage), project, source, replacement, assessment };
+    return { stage: monotonicStage(progress, stage), project, source, replacement, assessment };
   }
 
   async function verifyNoForeignOpenDelete(deleteLedger, activeScopeItemId = "") {
@@ -422,7 +555,7 @@ export function createRegression85RepairService(options) {
       ]);
       await verifyNoForeignOpenDelete(deleteLedger, activeScopeItemId);
       const observed = observedStage(snapshot.state, campaign, scopeItem, progress, uploadLedger, deleteLedger);
-      if (rank(observed.stage) > rank(progress.stage)) {
+      if (rank(progress, observed.stage) > rank(progress, progress.stage)) {
         campaign = await updateProgress(activeScopeItemId, {
           stage: observed.stage,
           replacementListingId: observed.replacement?.id || progress.replacementListingId,
@@ -434,7 +567,109 @@ export function createRegression85RepairService(options) {
         progress = campaign.progress.find((item) => item.scopeItemId === activeScopeItemId);
       }
 
-      if ([REGRESSION_85_REPAIR_STAGES.IDENTIFIED, REGRESSION_85_REPAIR_STAGES.WAITING_DAILY_PLOT_WINDOW].includes(progress.stage)) {
+      if (progress.repairStrategy === REGRESSION_85_REPAIR_STRATEGIES.ROLLBACK) {
+        if (progress.stage === REGRESSION_85_REPAIR_STAGES.IDENTIFIED) {
+          const prepared = await options.catalogStore.update((state) => {
+            const result = prepareRegressionRollbackDeleteInState(state, scopeItem, progress, {
+              campaignId: campaign.campaignId,
+              scopeHash: campaign.scopeHash,
+              now: runAt,
+            });
+            return {
+              state: result.state,
+              result: {
+                originalSource: result.originalSource,
+                regression: result.regression,
+                idempotent: result.idempotent,
+              },
+            };
+          }, { now: runAt });
+          campaign = await updateProgress(activeScopeItemId, {
+            stage: REGRESSION_85_REPAIR_STAGES.ROLLBACK_DELETE_AUTHORIZED,
+            replacementListingId: prepared.result.originalSource.id,
+            replacementExternalId: prepared.result.originalSource.externalId,
+            repairState: "rollback_delete_authorized",
+          }, { now: runAt });
+          await writeLog("rollback-delete-authorized", {
+            campaignId: campaign.campaignId,
+            scopeHash: campaign.scopeHash,
+            scopeItemId: activeScopeItemId,
+            originalSourceExternalId: prepared.result.originalSource.externalId,
+            regressionExternalId: prepared.result.regression.externalId,
+            classificationEvidenceHash: progress.evidenceHash,
+            idempotent: prepared.result.idempotent,
+          });
+          return { ran: true, ok: true, stage: REGRESSION_85_REPAIR_STAGES.ROLLBACK_DELETE_AUTHORIZED, scopeItemId: activeScopeItemId, summary: progressSummary(campaign) };
+        }
+
+        if (new Set([
+          REGRESSION_85_REPAIR_STAGES.ROLLBACK_DELETE_AUTHORIZED,
+          REGRESSION_85_REPAIR_STAGES.ROLLBACK_DELETE_PENDING,
+        ]).has(progress.stage)) {
+          await assertMutationGuards(campaign);
+          const result = await options.productionDeleteService.runOnce({
+            trigger: "scheduler-lifecycle",
+            targetExternalObjectNumber: scopeItem.regressionExternalId,
+            candidateIsolation: "regression-85-active-item",
+          });
+          if (result?.errors?.length) throw serviceError("REGRESSION_85_ROLLBACK_DELETE_TRANSFER_FAILED", result.errors[0].message || "Der exakte Rogue-DELETE ist fehlgeschlagen.");
+          const current = await options.catalogStore.load();
+          const { source } = projectAndSource(current.state, scopeItem);
+          if (source.status === WORKFLOW_STATUS.DELETED && source.productionDeleteState === "confirmed") {
+            campaign = await updateProgress(activeScopeItemId, {
+              stage: REGRESSION_85_REPAIR_STAGES.ROLLBACK_ROGUE_DELETED,
+              deleteJobId: source.deleteJobId || source.productionDeleteJobId,
+              deleteReportId: `delete-report-${clean(source.deleteReportHash, 64).slice(0, 32)}`,
+              repairState: "rollback_rogue_deleted",
+            }, { now: now() });
+          } else if (source.productionDeleteState === "pending_confirmation") {
+            campaign = await updateProgress(activeScopeItemId, {
+              stage: REGRESSION_85_REPAIR_STAGES.ROLLBACK_DELETE_PENDING,
+              deleteJobId: source.productionDeleteJobId,
+              repairState: "rollback_delete_pending",
+            }, { now: now() });
+          } else {
+            return { ran: true, ok: true, waiting: true, reason: "rollback_delete_not_yet_transferred", scopeItemId: activeScopeItemId, summary: progressSummary(campaign) };
+          }
+          return { ran: true, ok: true, stage: campaign.progress.find((item) => item.scopeItemId === activeScopeItemId).stage, scopeItemId: activeScopeItemId, summary: progressSummary(campaign) };
+        }
+
+        if (progress.stage === REGRESSION_85_REPAIR_STAGES.ROLLBACK_ROGUE_DELETED) {
+          const completedAt = now();
+          const finalized = await options.catalogStore.update((state) => {
+            const result = finalizeRegressionRollbackInState(state, scopeItem, progress, { now: completedAt });
+            return { state: result.state, result: { originalSource: result.originalSource, regression: result.regression, deleteReport: result.deleteReport } };
+          }, { now: completedAt });
+          campaign = await updateProgress(activeScopeItemId, {
+            stage: REGRESSION_85_REPAIR_STAGES.REPAIR_COMPLETED,
+            deleteJobId: finalized.result.regression.deleteJobId,
+            deleteReportId: finalized.result.deleteReport.reportId,
+            completedAt,
+            repairState: "repair_completed",
+          }, { now: completedAt });
+          campaign = await checkpointIfDue(campaign);
+          const summary = progressSummary(campaign);
+          if (summary.pending === 0) {
+            campaign = await options.campaignStore.update((currentCampaign) => ({ ...currentCampaign, mode: "completed", completedAt, activeScopeItemId: "" }), { now: completedAt });
+          }
+          await writeLog("rollback-repair-completed", {
+            campaignId: campaign.campaignId,
+            scopeHash: campaign.scopeHash,
+            scopeItemId: activeScopeItemId,
+            originalSourceExternalId: finalized.result.originalSource.externalId,
+            regressionExternalId: finalized.result.regression.externalId,
+            deleteReportId: finalized.result.deleteReport.reportId,
+          });
+          return { ran: true, ok: true, stage: REGRESSION_85_REPAIR_STAGES.REPAIR_COMPLETED, scopeItemId: activeScopeItemId, summary: progressSummary(campaign) };
+        }
+
+        throw serviceError("REGRESSION_85_ROLLBACK_STAGE_UNSUPPORTED", `Der Rollbackstatus ${progress.stage} kann nicht sicher fortgesetzt werden.`);
+      }
+
+      if (
+        progress.repairStrategy === REGRESSION_85_REPAIR_STRATEGIES.REPLACEMENT
+        && [REGRESSION_85_REPAIR_STAGES.IDENTIFIED, REGRESSION_85_REPAIR_STAGES.WAITING_DAILY_PLOT_WINDOW].includes(progress.stage)
+      ) {
         const evidence = collectPlotUploadEvidence(snapshot.state, uploadLedger, runAt);
         const daily = await options.plotDailyUploadGuard.inspect({ plotId: scopeItem.plotId }, { now: runAt, evidence });
         if (daily.consumed) {
@@ -527,6 +762,7 @@ export function createRegression85RepairService(options) {
         const result = await options.productionDeleteService.runOnce({
           trigger: "scheduler-lifecycle",
           targetExternalObjectNumber: scopeItem.regressionExternalId,
+          candidateIsolation: "regression-85-active-item",
         });
         if (result?.errors?.length) throw serviceError("REGRESSION_85_DELETE_TRANSFER_FAILED", result.errors[0].message || "Der exakte Regression-DELETE ist fehlgeschlagen.");
         const current = await options.catalogStore.load();
@@ -546,6 +782,7 @@ export function createRegression85RepairService(options) {
           await options.productionDeleteService.runOnce({
             trigger: "scheduler-lifecycle",
             targetExternalObjectNumber: scopeItem.regressionExternalId,
+            candidateIsolation: "regression-85-active-item",
           });
         }
         const current = await options.catalogStore.load();
@@ -581,10 +818,11 @@ export function createRegression85RepairService(options) {
           deleteJobId: source.deleteJobId,
           deleteReportId: `delete-report-${clean(source.deleteReportHash, 64).slice(0, 32)}`,
           completedAt,
+          repairState: "repair_completed",
         }, { now: completedAt });
         campaign = await checkpointIfDue(campaign);
         const summary = progressSummary(campaign);
-        if (summary.completed === REGRESSION_85_EXPECTED_COUNT) {
+        if (summary.pending === 0) {
           campaign = await options.campaignStore.update((currentCampaign) => ({ ...currentCampaign, mode: "completed", completedAt, activeScopeItemId: "" }), { now: completedAt });
         }
         await writeLog("repair-completed", { campaignId: campaign.campaignId, scopeHash: campaign.scopeHash, scopeItemId: activeScopeItemId, regressionExternalId: scopeItem.regressionExternalId, replacementExternalId: replacement.externalId, completed: progressSummary(campaign).completed });
@@ -632,12 +870,20 @@ export function createRegression85DeleteMutationGuard(campaignStore) {
         return { guarded: false };
       }
       const progress = campaign.progress.find((item) => item.scopeItemId === scopeItem.scopeItemId);
+      const replacementDeleteAllowed = progress?.repairStrategy === REGRESSION_85_REPAIR_STRATEGIES.REPLACEMENT
+        && rank(progress, progress.stage) >= rank(progress, REGRESSION_85_REPAIR_STAGES.REPLACEMENT_PUBLISHED)
+        && rank(progress, progress.stage) < rank(progress, REGRESSION_85_REPAIR_STAGES.REPAIR_COMPLETED);
+      const rollbackDeleteAllowed = progress?.repairStrategy === REGRESSION_85_REPAIR_STRATEGIES.ROLLBACK
+        && new Set([
+          REGRESSION_85_REPAIR_STAGES.ROLLBACK_DELETE_AUTHORIZED,
+          REGRESSION_85_REPAIR_STAGES.ROLLBACK_DELETE_PENDING,
+          REGRESSION_85_REPAIR_STAGES.ROLLBACK_ROGUE_DELETED,
+        ]).has(progress.stage);
       if (
         !campaignOpen
         || campaign.activeScopeItemId !== scopeItem.scopeItemId
         || progress?.replacementListingId !== replacementListingId
-        || rank(progress?.stage) < rank(REGRESSION_85_REPAIR_STAGES.REPLACEMENT_PUBLISHED)
-        || rank(progress?.stage) >= rank(REGRESSION_85_REPAIR_STAGES.REPAIR_COMPLETED)
+        || (!replacementDeleteAllowed && !rollbackDeleteAllowed)
       ) {
         throw serviceError("REGRESSION_85_DELETE_SCOPE_BLOCKED", "Das Regression-DELETE gehört nicht zum aktuell seriell freigegebenen Repair-Lifecycle.");
       }

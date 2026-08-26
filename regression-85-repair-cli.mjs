@@ -17,6 +17,11 @@ import {
 } from "./regression-85-repair-scope.mjs";
 import { previewRegression85Repair } from "./regression-85-repair-service.mjs";
 import { createUploadJobLedger } from "./upload-job-ledger.mjs";
+import {
+  applyRegression85Classifications,
+  classifyRegression85Scope,
+  inspectRegression85OperationalGate,
+} from "./regression-85-classification.mjs";
 
 const CAMPAIGN_PATH = join(APPLICATION_DATA_DIRECTORY, "regression-85-repair.json");
 const UPLOAD_LOG_PATH = join(APPLICATION_DATA_DIRECTORY, "upload.log");
@@ -29,17 +34,17 @@ const PRODUCTION_POLICY_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-rotatio
 
 function parseArguments(argv) {
   const [command = "status", ...rest] = argv;
-  let portalSnapshotPath = "";
+  let evidenceSnapshotPath = "";
   for (let index = 0; index < rest.length; index += 1) {
-    if (rest[index] === "--portal-snapshot") portalSnapshotPath = String(rest[++index] || "").trim();
+    if (rest[index] === "--evidence-snapshot") evidenceSnapshotPath = String(rest[++index] || "").trim();
     else throw new Error(`Unbekanntes Argument: ${rest[index]}`);
   }
-  if (!new Set(["status", "prepare-scope", "preview", "activate", "pause", "off"]).has(command)) {
-    throw new Error("Verwendung: node regression-85-repair-cli.mjs status|prepare-scope|preview|activate|pause|off [--portal-snapshot <json>]");
+  if (!new Set(["status", "prepare-scope", "classification-preview", "classify", "preview", "activate", "pause", "off"]).has(command)) {
+    throw new Error("Verwendung: node regression-85-repair-cli.mjs status|prepare-scope|classification-preview|classify|preview|activate|pause|off [--evidence-snapshot <json>]");
   }
-  if (command === "prepare-scope" && !portalSnapshotPath) throw new Error("prepare-scope benötigt den read-only Portalstatus über --portal-snapshot.");
-  if (command !== "prepare-scope" && portalSnapshotPath) throw new Error("--portal-snapshot ist ausschließlich für prepare-scope zulässig.");
-  return { command, portalSnapshotPath };
+  if (new Set(["classification-preview", "classify"]).has(command) && !evidenceSnapshotPath) throw new Error(`${command} benötigt --evidence-snapshot <json>.`);
+  if (!new Set(["classification-preview", "classify"]).has(command) && evidenceSnapshotPath) throw new Error("--evidence-snapshot ist ausschließlich für classification-preview und classify zulässig.");
+  return { command, evidenceSnapshotPath };
 }
 
 async function readJson(path) {
@@ -53,7 +58,7 @@ async function readJsonLines(path) {
 async function readPortalMode() {
   try {
     const value = await readJson(PORTAL_MODE_PATH);
-    return { valid: value?.format === 1 && value?.mode === "off", mode: String(value?.mode || "off") };
+    return { valid: new Set([1, 2]).has(value?.format) && value?.mode === "off", mode: String(value?.mode || "off") };
   } catch (error) {
     if (error?.code === "ENOENT") return { valid: true, mode: "off", reason: "Portalfeature nicht produktiv installiert." };
     return { valid: false, mode: "off", reason: "Portalmodus ist beschädigt oder nicht lesbar." };
@@ -63,15 +68,19 @@ async function readPortalMode() {
 function summary(campaign) {
   if (campaign.valid !== true) return { valid: false, mode: "off", reason: campaign.fallbackReason };
   const completed = campaign.progress.filter((item) => item.stage === "repair_completed").length;
+  const ambiguousBlocked = campaign.progress.filter((item) => item.stage === "ambiguous_blocked").length;
   return {
     valid: true,
     campaignId: campaign.campaignId,
     scopeHash: campaign.scopeHash,
+    scopeEvidenceHash: campaign.scopeEvidenceHash,
     scopeCount: campaign.scope.items.length,
     mode: campaign.mode,
     activeScopeItemId: campaign.activeScopeItemId || null,
     completed,
-    pending: campaign.progress.length - completed,
+    ambiguousBlocked,
+    pending: campaign.progress.length - completed - ambiguousBlocked,
+    classificationCounts: campaign.classificationSummary?.counts || null,
     lastErrorCode: campaign.lastErrorCode || null,
     lastError: campaign.lastError || null,
   };
@@ -92,23 +101,38 @@ export async function runRegression85RepairCli(argv, options = {}) {
   if (args.command === "status") return summary(await campaignStore.load());
 
   if (args.command === "prepare-scope") {
-    const [snapshot, ledger, uploadEvents, portalSnapshot, policy, provenance] = await Promise.all([
+    const [snapshot, ledger, uploadEvents, policy, provenance] = await Promise.all([
       catalogStore.load(),
       uploadLedger.read(),
       (options.readUploadEvents || (() => readJsonLines(UPLOAD_LOG_PATH)))(),
-      (options.readPortalSnapshot || (() => readJson(args.portalSnapshotPath)))(),
       productionPolicyStore.load(),
       (options.loadRuntimeProvenance || loadHelperRuntimeProvenance)(),
     ]);
     assertProductionRuntime(provenance, policy);
-    const portalStatuses = Array.isArray(portalSnapshot) ? portalSnapshot : portalSnapshot?.items;
-    const derived = deriveRegression85Scope(snapshot.state, uploadEvents, ledger, { portalStatuses });
-    const campaign = await campaignStore.initialize(derived.scope, derived.scopeHash, { now: now() });
+    const derived = deriveRegression85Scope(snapshot.state, uploadEvents, ledger);
+    const campaign = await campaignStore.initialize(derived.scope, derived.scopeHash, derived.scopeEvidenceHash, { now: now() });
     return { ...summary(campaign), idempotent: campaign.idempotent, houseDistribution: campaign.scope.houseDistribution, observedIsoEvidence: campaign.scope.observedIsoEvidence };
   }
 
   const campaign = await campaignStore.load();
   if (campaign.valid !== true || campaign.scope.items.length !== REGRESSION_85_EXPECTED_COUNT) throw new Error(campaign.fallbackReason || "Die exakte 85er-Kampagne fehlt.");
+  if (new Set(["classification-preview", "classify"]).has(args.command)) {
+    const [snapshot, ledger, deletes, evidenceSnapshot] = await Promise.all([
+      catalogStore.load(),
+      uploadLedger.read(),
+      deleteLedger.read(),
+      (options.readEvidenceSnapshot || (() => readJson(args.evidenceSnapshotPath)))(),
+    ]);
+    const classification = classifyRegression85Scope(snapshot.state, campaign.scope, ledger, deletes, evidenceSnapshot, { now: now() });
+    if (args.command === "classification-preview") return classification;
+    const [policy, provenance] = await Promise.all([
+      productionPolicyStore.load(),
+      (options.loadRuntimeProvenance || loadHelperRuntimeProvenance)(),
+    ]);
+    assertProductionRuntime(provenance, policy);
+    const updated = await campaignStore.update((current) => applyRegression85Classifications(current, classification), { now: now() });
+    return { ...summary(updated), readOnlyClassification: true, classification: classification.counts };
+  }
   if (args.command === "preview") {
     const snapshot = await catalogStore.load();
     return previewRegression85Repair(snapshot.state, campaign, { now: now() });
@@ -133,13 +157,19 @@ export async function runRegression85RepairCli(argv, options = {}) {
       PRODUCTION_DELETE_STATUS.TRANSFER_UNCERTAIN,
     ].includes(job.status));
     if (openDeletes.length) throw new Error("Vor Aktivierung muss jede bereits begonnene DELETE-Kette eindeutig abgeschlossen sein.");
+    if (campaign.classificationSummary?.total !== REGRESSION_85_EXPECTED_COUNT) throw new Error("Vor Aktivierung muss die vollständige persistierte 85er-Klassifikation vorliegen.");
+    const operationalGate = inspectRegression85OperationalGate(snapshot.state, campaign.scope, {
+      deleteLedger: deletes,
+      classifications: campaign.progress,
+    });
+    if (!operationalGate.allowed) throw new Error(`Das 85er-Operational-Gate ist blockiert: ${operationalGate.reasons.join(", ")}.`);
     const provenance = await (options.loadRuntimeProvenance || loadHelperRuntimeProvenance)();
     assertProductionRuntime(provenance, policy);
     const preview = previewRegression85Repair(snapshot.state, campaign, { now: now() });
     if (
       preview.summary.candidateCount !== REGRESSION_85_EXPECTED_COUNT
-      || preview.summary.distinctHouseCount < 2
-      || preview.summary.mostFrequentHouse?.count >= 80
+      || (preview.replacements.length > 1 && preview.summary.distinctHouseCount < 2)
+      || (preview.replacements.length > 0 && preview.summary.mostFrequentHouse?.count >= 80)
     ) throw new Error("Die 85er-Creative-Preview erfüllt die Mindestvariation nicht.");
     const updatedAt = now();
     const active = await campaignStore.update((current) => ({
@@ -150,6 +180,12 @@ export async function runRegression85RepairCli(argv, options = {}) {
       completedAt: "",
       lastErrorCode: "",
       lastError: "",
+      operationalGate: {
+        validatedAt: updatedAt,
+        scopeMarkerCount: operationalGate.scopeMarkerCount,
+        foreignMarkerCount: operationalGate.foreignMarkerCount,
+        foreignOpenDeleteJobCount: operationalGate.foreignOpenDeleteJobCount,
+      },
     }), { now: updatedAt });
     return { ...summary(active), previewSummary: preview.summary };
   }

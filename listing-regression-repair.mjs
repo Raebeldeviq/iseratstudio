@@ -13,6 +13,7 @@ import { WORKFLOW_STATUS } from "./workflow-status.mjs";
 
 export const REGRESSION_REPAIR_PROVENANCE_FORMAT = 1;
 export const REGRESSION_REPAIR_SOURCE_STATUS = WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT;
+export const REGRESSION_ROLLBACK_PROVENANCE_FORMAT = 1;
 
 function clean(value, maximum = 500) {
   return String(value ?? "").trim().slice(0, maximum);
@@ -59,8 +60,12 @@ export function isRegressionRepairLifecycle(lifecycle) {
     && clean(repair.campaignId, 200)
     && /^[a-f0-9]{64}$/u.test(clean(repair.scopeHash, 64).toLowerCase())
     && clean(repair.scopeItemId, 200)
-    && repair.sourceOriginalStatus === REGRESSION_REPAIR_SOURCE_STATUS,
+    && new Set([REGRESSION_REPAIR_SOURCE_STATUS, WORKFLOW_STATUS.PUBLISHED]).has(repair.sourceOriginalStatus),
   );
+}
+
+export function regressionRepairSourceStatus(lifecycle) {
+  return regressionRepairIdentity(lifecycle).sourceOriginalStatus;
 }
 
 export function regressionRepairIdentity(lifecycle) {
@@ -71,6 +76,288 @@ export function regressionRepairIdentity(lifecycle) {
     );
   }
   return lifecycle.regressionRepair;
+}
+
+export function isRegressionRollbackLifecycle(lifecycle) {
+  const rollback = lifecycle?.regressionRollback;
+  return Boolean(
+    lifecycle?.format === 1
+    && lifecycle?.automaticDeleteAuthorized === true
+    && rollback?.format === REGRESSION_ROLLBACK_PROVENANCE_FORMAT
+    && rollback?.strategy === "delete_rogue_keep_original"
+    && clean(rollback.campaignId, 200)
+    && /^[a-f0-9]{64}$/u.test(clean(rollback.scopeHash, 64).toLowerCase())
+    && clean(rollback.scopeItemId, 200)
+    && clean(rollback.originalSourceListingId, 200)
+    && clean(rollback.regressionListingId, 200)
+    && /^[a-f0-9]{64}$/u.test(clean(rollback.classificationEvidenceHash, 64).toLowerCase()),
+  );
+}
+
+export function regressionRollbackIdentity(lifecycle) {
+  if (!isRegressionRollbackLifecycle(lifecycle)) {
+    throw repairError("REGRESSION_85_ROLLBACK_PROVENANCE_INVALID", "Der Rollback-DELETE besitzt keine vollständige persistente Klassifikationsprovenienz.");
+  }
+  return lifecycle.regressionRollback;
+}
+
+export function deterministicRegressionRollbackRunId(campaignId, scopeItemId) {
+  const digest = createHash("sha256")
+    .update(`regression-85-rollback-v1\n${clean(campaignId, 200)}\n${clean(scopeItemId, 200)}`)
+    .digest("hex")
+    .slice(0, 24);
+  return `regression-85-rollback-${digest}`;
+}
+
+function exactRegressionImportReport(state, originalSource, regression) {
+  const reports = (state.importReports || []).filter((report) =>
+    report?.importResult === "success"
+    && report?.sourceListingId === originalSource.id
+    && report?.matchedListingId === regression.id
+    && report?.externalObjectNumber === regression.externalId);
+  if (reports.length !== 1 || regression.importReportId !== reports[0].reportId || !regression.importConfirmedAt) {
+    throw repairError("REGRESSION_85_ROLLBACK_IMPORT_PROVENANCE_INVALID", "Das Rogue-Replacement besitzt keine eindeutige positive Importbestätigung.");
+  }
+  return reports[0];
+}
+
+/**
+ * Autorisiert ausschließlich B als bestehendes Production-DELETE-Ziel und
+ * hält A bis zur positiven B-Löschbestätigung unverändert als published.
+ * Der A-Marker bleibt absichtlich bestehen und wird erst in der finalen
+ * Rollback-Finalisierung bereinigt.
+ */
+export function prepareRegressionRollbackDeleteInState(stateValue, scopeItem, progress, options = {}) {
+  const at = clean(options.now || new Date().toISOString(), 50);
+  const campaignId = clean(options.campaignId, 200);
+  const scopeHash = clean(options.scopeHash, 64).toLowerCase();
+  const classificationEvidenceHash = clean(progress?.evidenceHash, 64).toLowerCase();
+  if (
+    progress?.classification !== "ROLLBACK_ELIGIBLE"
+    || progress?.repairStrategy !== "delete_rogue_keep_original"
+    || !campaignId
+    || !/^[a-f0-9]{64}$/u.test(scopeHash)
+    || !/^[a-f0-9]{64}$/u.test(classificationEvidenceHash)
+  ) {
+    throw repairError("REGRESSION_85_ROLLBACK_CLASSIFICATION_INVALID", "Der Rollback darf nur mit persistierter ROLLBACK_ELIGIBLE-Evidenz autorisiert werden.");
+  }
+  const project = (stateValue.projects || []).find((candidate) => candidate.id === scopeItem.projectId);
+  const regression = project?.listings.find((candidate) => candidate.id === scopeItem.regressionListingId);
+  const originalSource = project?.listings.find((candidate) => candidate.id === scopeItem.originalSourceListingId);
+  if (!project || !regression || !originalSource || regression.rotationSourceListingId !== originalSource.id) {
+    throw repairError("REGRESSION_85_ROLLBACK_RELATION_MISMATCH", "A und B sind für den Rollback nicht mehr eindeutig verbunden.");
+  }
+  assertScopeItem(scopeItem, project, regression);
+  if (
+    originalSource.status !== WORKFLOW_STATUS.PUBLISHED
+    || originalSource.externalDeletionPending !== true
+    || !new Set(["", "authorized"]).has(clean(originalSource.productionDeleteState, 100))
+    || regression.status !== WORKFLOW_STATUS.PUBLISHED
+    || regression.productionDeleteState === "confirmed"
+  ) {
+    throw repairError("REGRESSION_85_ROLLBACK_STATE_CHANGED", "Der persistierte A→B-Zustand ist nicht mehr rollbackfähig.");
+  }
+  const importReport = exactRegressionImportReport(stateValue, originalSource, regression);
+  const schedulerRunId = deterministicRegressionRollbackRunId(campaignId, scopeItem.scopeItemId);
+  const existingRollback = originalSource.productionLifecycle?.regressionRollback;
+  if (existingRollback) {
+    const exact = isRegressionRollbackLifecycle(originalSource.productionLifecycle)
+      && existingRollback.scopeHash === scopeHash
+      && existingRollback.scopeItemId === scopeItem.scopeItemId
+      && existingRollback.classificationEvidenceHash === classificationEvidenceHash
+      && regression.supersededByListingId === originalSource.id
+      && regression.productionDeleteState === "authorized";
+    if (!exact) throw repairError("REGRESSION_85_ROLLBACK_PROVENANCE_CONFLICT", "Eine abweichende Rollback-Provenienz ist bereits im Katalog vorhanden.");
+    return { state: stateValue, idempotent: true, originalSource, regression, schedulerRunId };
+  }
+  const rollback = {
+    format: REGRESSION_ROLLBACK_PROVENANCE_FORMAT,
+    strategy: "delete_rogue_keep_original",
+    campaignId,
+    scopeHash,
+    scopeItemId: scopeItem.scopeItemId,
+    originalSourceListingId: originalSource.id,
+    originalSourceExternalId: originalSource.externalId,
+    regressionListingId: regression.id,
+    regressionExternalId: regression.externalId,
+    originalRegressionImportReportId: importReport.reportId,
+    classificationEvidenceHash,
+    classifiedAt: clean(progress.classifiedAt, 50),
+    authorizedAt: at,
+    originalProductionLifecycle: originalSource.productionLifecycle
+      ? structuredClone(originalSource.productionLifecycle)
+      : null,
+  };
+  const restoredOriginal = {
+    ...originalSource,
+    status: WORKFLOW_STATUS.PUBLISHED,
+    statusMessage: `Rollback vorbereitet · Rogue-Objekt ${regression.externalId} wird gelöscht`,
+    productionDeleteState: "",
+    productionDeleteAuthorizedAt: "",
+    productionRotationRunId: "",
+    productionDeleteJobId: "",
+    productionDeleteTransferredAt: "",
+    productionDeleteError: "",
+    productionLifecycle: {
+      format: 1,
+      schedulerRunId,
+      sourceListingId: regression.id,
+      automaticDeleteAuthorized: true,
+      preparedAt: at,
+      effectiveMaxRunItems: 1,
+      regressionRollback: rollback,
+    },
+  };
+  const deleteTarget = {
+    ...regression,
+    status: WORKFLOW_STATUS.PUBLISHED,
+    statusMessage: `Rogue-Replacement · DELETE autorisiert · ursprüngliches Objekt ${originalSource.externalId} bleibt bestehen`,
+    supersededByListingId: originalSource.id,
+    externalDeletionPending: true,
+    productionDeleteState: "authorized",
+    productionDeleteAuthorizedAt: at,
+    productionRotationRunId: schedulerRunId,
+    productionDeleteJobId: "",
+    productionDeleteTransferredAt: "",
+    productionDeleteError: "",
+    regressionRepairCampaignId: campaignId,
+    regressionRepairScopeHash: scopeHash,
+    regressionRepairScopeItemId: scopeItem.scopeItemId,
+  };
+  let group = normalizeListingGroup(project.listingGroup, project.id, { now: at });
+  group = updateListingControl(group, restoredOriginal, {
+    automaticUpdateEnabled: true,
+    automaticDeletionEnabled: false,
+    status: WORKFLOW_STATUS.PUBLISHED,
+    statusMessage: restoredOriginal.statusMessage,
+    schedulerSelectionId: "",
+    schedulerSelectedAt: "",
+    pendingRotationListingId: "",
+    pendingRotationJobId: "",
+    processLease: null,
+    lastError: "",
+  }, { now: at });
+  group = updateListingControl(group, deleteTarget, {
+    automaticUpdateEnabled: false,
+    automaticDeletionEnabled: false,
+    status: WORKFLOW_STATUS.PUBLISHED,
+    statusMessage: deleteTarget.statusMessage,
+    schedulerSelectionId: "",
+    schedulerSelectedAt: "",
+    pendingRotationListingId: "",
+    pendingRotationJobId: "",
+    processLease: null,
+    lastError: "",
+  }, { now: at });
+  const nextProject = {
+    ...project,
+    listings: project.listings.map((listing) => {
+      if (listing.id === restoredOriginal.id) return restoredOriginal;
+      if (listing.id === deleteTarget.id) return deleteTarget;
+      return listing;
+    }),
+    listingGroup: group,
+  };
+  return {
+    state: replaceProject(stateValue, nextProject),
+    idempotent: false,
+    originalSource: restoredOriginal,
+    regression: deleteTarget,
+    schedulerRunId,
+  };
+}
+
+export function finalizeRegressionRollbackInState(stateValue, scopeItem, progress, options = {}) {
+  const at = clean(options.now || new Date().toISOString(), 50);
+  const project = (stateValue.projects || []).find((candidate) => candidate.id === scopeItem.projectId);
+  const regression = project?.listings.find((candidate) => candidate.id === scopeItem.regressionListingId);
+  const originalSource = project?.listings.find((candidate) => candidate.id === scopeItem.originalSourceListingId);
+  if (!project || !regression || !originalSource || regression.rotationSourceListingId !== originalSource.id) {
+    throw repairError("REGRESSION_85_ROLLBACK_RELATION_MISMATCH", "A und B sind für die Rollback-Finalisierung nicht mehr eindeutig verbunden.");
+  }
+  if (
+    regression.status !== WORKFLOW_STATUS.DELETED
+    || regression.productionDeleteState !== "confirmed"
+    || !regression.deleteJobId
+    || !regression.deleteReportHash
+    || originalSource.status !== WORKFLOW_STATUS.PUBLISHED
+    || originalSource.externalDeletionPending !== true
+  ) {
+    throw repairError("REGRESSION_85_ROLLBACK_COMPLETION_EVIDENCE_MISSING", "Der Rollback darf ohne positiven exakten B-Löschbericht und unverändertes A nicht finalisiert werden.");
+  }
+  const deleteReport = (stateValue.deleteReports || []).find((report) =>
+    report?.result === "success"
+    && report?.sourceListingId === regression.id
+    && report?.replacementListingId === originalSource.id
+    && report?.externalObjectNumber === regression.externalId
+    && report?.rawHash === regression.deleteReportHash);
+  if (!deleteReport) throw repairError("REGRESSION_85_ROLLBACK_COMPLETION_EVIDENCE_MISSING", "Der positive B-Löschbericht fehlt im Katalog.");
+  if (
+    progress?.classification !== "ROLLBACK_ELIGIBLE"
+    || progress?.repairStrategy !== "delete_rogue_keep_original"
+    || originalSource.productionLifecycle?.regressionRollback?.classificationEvidenceHash !== progress.evidenceHash
+  ) {
+    throw repairError("REGRESSION_85_ROLLBACK_PROVENANCE_CONFLICT", "Die Rollback-Finalisierung stimmt nicht mit der persistierten Klassifikation überein.");
+  }
+  const restoredOriginal = {
+    ...originalSource,
+    status: WORKFLOW_STATUS.PUBLISHED,
+    statusMessage: `Rollback abgeschlossen · ursprüngliches Objekt ${originalSource.externalId} bleibt aktiv`,
+    externalDeletionPending: false,
+    supersededByListingId: "",
+    replacementConfirmedAt: "",
+    productionDeleteState: "",
+    productionDeleteAuthorizedAt: "",
+    productionRotationRunId: "",
+    productionDeleteJobId: "",
+    productionDeleteTransferredAt: "",
+    productionDeleteError: "",
+    productionLifecycle: originalSource.productionLifecycle.regressionRollback.originalProductionLifecycle || undefined,
+    regressionRepairCampaignId: "",
+    regressionRepairScopeHash: "",
+    regressionRepairScopeItemId: "",
+  };
+  const regressionVariant = normalizeListingGroup(project.listingGroup, project.id, { now: at }).variants
+    .find((variant) => variant.listing?.id === regression.id);
+  const house = (stateValue.houses || []).find((candidate) => candidate.id === restoredOriginal.templateId);
+  if (!regressionVariant || !house) throw repairError("REGRESSION_85_ROLLBACK_VARIANT_RESTORE_FAILED", "Der ursprüngliche Variantenplatz oder Haustyp ist für A nicht mehr eindeutig vorhanden.");
+  let group = assignListingGroupVariant(project.listingGroup, regressionVariant.id, house, restoredOriginal, { now: at });
+  const assignedOriginal = group.variants.find((variant) => variant.id === regressionVariant.id).listing;
+  group = updateListingControl(group, assignedOriginal, {
+    automaticUpdateEnabled: true,
+    automaticDeletionEnabled: false,
+    status: WORKFLOW_STATUS.PUBLISHED,
+    statusMessage: assignedOriginal.statusMessage,
+    schedulerSelectionId: "",
+    schedulerSelectedAt: "",
+    pendingRotationListingId: "",
+    pendingRotationJobId: "",
+    processLease: null,
+    lastError: "",
+  }, { now: at });
+  group = updateListingControl(group, regression, {
+    automaticUpdateEnabled: false,
+    automaticDeletionEnabled: false,
+    status: WORKFLOW_STATUS.DELETED,
+    statusMessage: regression.statusMessage,
+    schedulerSelectionId: "",
+    schedulerSelectedAt: "",
+    pendingRotationListingId: "",
+    pendingRotationJobId: "",
+    processLease: null,
+  }, { now: at });
+  const nextProject = {
+    ...project,
+    listings: project.listings.map((listing) => listing.id === assignedOriginal.id ? assignedOriginal : listing),
+    listingGroup: group,
+    selectedHouseIds: group.variants.filter((variant) => variant.active && variant.templateId).map((variant) => variant.templateId),
+  };
+  return {
+    state: replaceProject(stateValue, nextProject),
+    originalSource: assignedOriginal,
+    regression,
+    deleteReport,
+  };
 }
 
 export function deterministicRegressionRepairCopyId(scopeHash, regressionListingId) {
@@ -154,7 +441,7 @@ export function prepareRegressionRepairRotationInState(stateValue, scopeItem, op
   if (!project || !source) throw repairError("REGRESSION_85_LISTING_MISSING", "Das Regression-Inserat ist im Katalog nicht mehr eindeutig vorhanden.");
   assertScopeItem(scopeItem, project, source);
   if (
-    source.status !== REGRESSION_REPAIR_SOURCE_STATUS
+    !new Set([REGRESSION_REPAIR_SOURCE_STATUS, WORKFLOW_STATUS.PUBLISHED]).has(source.status)
     || source.listingOrigin !== "rotation-copy"
     || source.creativeSelection?.format === 1
   ) {
@@ -233,7 +520,7 @@ export function prepareRegressionRepairRotationInState(stateValue, scopeItem, op
     scopeItemId,
     regressionListingId: source.id,
     regressionExternalId: source.externalId,
-    sourceOriginalStatus: REGRESSION_REPAIR_SOURCE_STATUS,
+    sourceOriginalStatus: source.status,
     rootProcessId: Math.max(0, Math.trunc(Number(scopeItem.rootProcessId) || 0)),
     originalUploadJobId: clean(scopeItem.uploadJobId, 500),
     distributionRemovedHouseId: clean(scopeItem.distributionRemovedHouseId, 200),
@@ -253,7 +540,7 @@ export function prepareRegressionRepairRotationInState(stateValue, scopeItem, op
     },
   }, at);
   nextState = patchProjectListing(nextState, project.id, source.id, {
-    status: REGRESSION_REPAIR_SOURCE_STATUS,
+    status: source.status,
     statusMessage: "Regression-Replacement bleibt bis zum bestätigten Ersatzimport unverändert",
     regressionRepairCampaignId: campaignId,
     regressionRepairScopeHash: scopeHash,
@@ -266,7 +553,7 @@ export function prepareRegressionRepairRotationInState(stateValue, scopeItem, op
   nextGroup = updateListingControl(nextGroup, nextSource, {
     automaticUpdateEnabled: false,
     automaticDeletionEnabled: false,
-    status: REGRESSION_REPAIR_SOURCE_STATUS,
+    status: source.status,
     statusMessage: nextSource.statusMessage,
     pendingRotationListingId: nextCopy.id,
     pendingRotationJobId: createUploadJobId(nextProject, nextCopy),

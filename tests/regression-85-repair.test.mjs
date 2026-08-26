@@ -26,9 +26,17 @@ import {
 import {
   createRegression85CampaignStore,
   deriveRegression85Scope,
+  REGRESSION_85_APPROVED_SCOPE_HASH,
+  REGRESSION_85_CLASSIFICATIONS,
   REGRESSION_85_EXPECTED_COUNT,
   REGRESSION_85_REPAIR_STAGES,
+  REGRESSION_85_REPAIR_STRATEGIES,
 } from "../regression-85-repair-scope.mjs";
+import {
+  applyRegression85Classifications,
+  classifyRegression85Scope,
+  inspectRegression85OperationalGate,
+} from "../regression-85-classification.mjs";
 import { runRegression85RepairCli } from "../regression-85-repair-cli.mjs";
 import {
   createRegression85DeleteMutationGuard,
@@ -230,40 +238,93 @@ function buildFixture() {
 
 function derivedFixture() {
   const fixture = buildFixture();
-  const derived = deriveRegression85Scope(fixture.state, fixture.events, fixture.ledger, { portalStatuses: fixture.portalStatuses });
+  const derived = deriveRegression85Scope(fixture.state, fixture.events, fixture.ledger);
   return { ...fixture, ...derived };
 }
 
+function classifiedProgress(item, classification = REGRESSION_85_CLASSIFICATIONS.REPLACEMENT_REQUIRED) {
+  const ambiguous = classification === REGRESSION_85_CLASSIFICATIONS.AMBIGUOUS;
+  return {
+    scopeItemId: item.scopeItemId,
+    stage: ambiguous ? REGRESSION_85_REPAIR_STAGES.AMBIGUOUS_BLOCKED : REGRESSION_85_REPAIR_STAGES.IDENTIFIED,
+    classification,
+    classificationReason: ambiguous ? "synthetic_ambiguous" : "synthetic_exact_positive_evidence",
+    evidenceHash: item.scopeItemId.replace(/[^a-f0-9]/gu, "a").padEnd(64, "b").slice(0, 64),
+    classifiedAt: NOW,
+    repairStrategy: ambiguous
+      ? REGRESSION_85_REPAIR_STRATEGIES.NONE
+      : classification === REGRESSION_85_CLASSIFICATIONS.ROLLBACK_ELIGIBLE
+        ? REGRESSION_85_REPAIR_STRATEGIES.ROLLBACK
+        : REGRESSION_85_REPAIR_STRATEGIES.REPLACEMENT,
+    repairState: ambiguous ? "blocked_ambiguous" : "classified",
+    updatedAt: NOW,
+    earliestEligibleAt: "",
+    replacementListingId: "",
+    replacementExternalId: "",
+    uploadJobId: "",
+    importReportId: "",
+    deleteJobId: "",
+    deleteReportId: "",
+    lastErrorCode: "",
+    lastError: "",
+  };
+}
+
+function campaignFor(fixture, classifications = fixture.scope.items.map(() => REGRESSION_85_CLASSIFICATIONS.REPLACEMENT_REQUIRED)) {
+  const progress = fixture.scope.items.map((item, index) => classifiedProgress(item, classifications[index]));
+  return {
+    format: 2,
+    campaignId: "campaign-test",
+    scopeHash: fixture.scopeHash,
+    scopeEvidenceHash: fixture.scopeEvidenceHash,
+    scope: fixture.scope,
+    mode: "off",
+    activeScopeItemId: "",
+    createdAt: NOW,
+    updatedAt: NOW,
+    activatedAt: "",
+    pausedAt: "",
+    completedAt: "",
+    lastErrorCode: "",
+    lastError: "",
+    checkpointHistory: [],
+    classificationSummary: {
+      classifiedAt: NOW,
+      snapshotObservedAt: NOW,
+      total: 85,
+      counts: Object.fromEntries(Object.values(REGRESSION_85_CLASSIFICATIONS).map((value) => [value, classifications.filter((item) => item === value).length])),
+    },
+    progress,
+  };
+}
+
 test("derives one immutable exact 85 allowlist with the proven 82/2/1 distribution", () => {
-  const { scope, scopeHash } = derivedFixture();
+  const { scope, scopeHash, scopeEvidenceHash } = derivedFixture();
   assert.equal(scope.items.length, 85);
   assert.equal(new Set(scope.items.map((item) => item.regressionListingId)).size, 85);
   assert.deepEqual(scope.houseDistribution, { "SOL 204 V4": 2, "SOL 229 V3": 1, "SOL 242 V4": 82 });
-  assert.match(scopeHash, /^[a-f0-9]{64}$/u);
+  assert.equal(scopeHash, REGRESSION_85_APPROVED_SCOPE_HASH);
+  assert.match(scopeEvidenceHash, /^[a-f0-9]{64}$/u);
   assert.equal(scope.items.every((item) => item.rootProcessId === 4460), true);
-  assert.equal(scope.items.every((item) => item.portalStatus === "not_transferred"), true);
+  assert.equal(scope.items.every((item) => item.importState === WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT), true);
 });
 
-test("84, 86, duplicate evidence and incomplete portal snapshots fail closed", () => {
+test("84, 86 and duplicate transfer evidence fail closed", () => {
   const fixture = buildFixture();
   assert.throws(
-    () => deriveRegression85Scope(fixture.state, fixture.events.slice(0, 84), fixture.ledger, { portalStatuses: fixture.portalStatuses }),
+    () => deriveRegression85Scope(fixture.state, fixture.events.slice(0, 84), fixture.ledger),
     (error) => error.code === "REGRESSION_85_SCOPE_MISMATCH",
   );
   assert.throws(
-    () => deriveRegression85Scope(fixture.state, [...fixture.events, fixture.events[0]], fixture.ledger, { portalStatuses: fixture.portalStatuses }),
+    () => deriveRegression85Scope(fixture.state, [...fixture.events, fixture.events[0]], fixture.ledger),
     (error) => error.code === "REGRESSION_85_SCOPE_MISMATCH",
   );
   assert.throws(
     () => deriveRegression85Scope(fixture.state, [
       ...fixture.events,
       { ...fixture.events[0], jobId: "rogue-extra-job", listingId: "rogue-extra-listing", externalId: "30460-999999" },
-    ], fixture.ledger, { portalStatuses: fixture.portalStatuses }),
+    ], fixture.ledger),
     (error) => error.code === "REGRESSION_85_SCOPE_MISMATCH",
-  );
-  assert.throws(
-    () => deriveRegression85Scope(fixture.state, fixture.events, fixture.ledger, { portalStatuses: fixture.portalStatuses.slice(0, 84) }),
-    (error) => error.code === "REGRESSION_85_PORTAL_SNAPSHOT_INCOMPLETE",
   );
 });
 
@@ -317,7 +378,8 @@ test("repair preparation keeps B pending, creates exactly one deterministic C an
 });
 
 test("the complete 85 preview is read-only, varied and keeps unrelated SOL 242 untouched", () => {
-  const { state, scope, scopeHash } = derivedFixture();
+  const fixture = derivedFixture();
+  const { state } = fixture;
   const foreignSol242 = {
     ...structuredClone(state.projects[0].listings[1]),
     id: "foreign-legitimate-sol-242",
@@ -328,36 +390,7 @@ test("the complete 85 preview is read-only, varied and keeps unrelated SOL 242 u
     marker: "outside-regression-85-scope",
   };
   state.projects[0].listings.push(foreignSol242);
-  const campaign = {
-    format: 1,
-    campaignId: "campaign-preview",
-    scopeHash,
-    scope,
-    mode: "off",
-    activeScopeItemId: "",
-    createdAt: NOW,
-    updatedAt: NOW,
-    activatedAt: "",
-    pausedAt: "",
-    completedAt: "",
-    lastErrorCode: "",
-    lastError: "",
-    checkpointHistory: [],
-    progress: scope.items.map((item) => ({
-      scopeItemId: item.scopeItemId,
-      stage: REGRESSION_85_REPAIR_STAGES.IDENTIFIED,
-      updatedAt: NOW,
-      earliestEligibleAt: "",
-      replacementListingId: "",
-      replacementExternalId: "",
-      uploadJobId: "",
-      importReportId: "",
-      deleteJobId: "",
-      deleteReportId: "",
-      lastErrorCode: "",
-      lastError: "",
-    })),
-  };
+  const campaign = { ...campaignFor(fixture), campaignId: "campaign-preview" };
   const original = structuredClone(state);
   const preview = previewRegression85Repair(state, campaign, { now: NOW });
   assert.equal(preview.items.length, 85);
@@ -374,12 +407,13 @@ test("the complete 85 preview is read-only, varied and keeps unrelated SOL 242 u
 });
 
 test("campaign store is fail-closed, immutable and restart-stable", async () => {
-  const { scope, scopeHash } = derivedFixture();
+  const fixture = derivedFixture();
+  const { scope, scopeHash, scopeEvidenceHash } = fixture;
   const directory = await mkdtemp(join(tmpdir(), "regression-85-store-"));
   const path = join(directory, "campaign.json");
   const firstStore = createRegression85CampaignStore(path);
   assert.equal((await firstStore.load()).mode, "off");
-  const initialized = await firstStore.initialize(scope, scopeHash, { now: NOW });
+  const initialized = await firstStore.initialize(scope, scopeHash, scopeEvidenceHash, { now: NOW });
   assert.equal(initialized.mode, "off");
   const active = await firstStore.update((campaign) => ({ ...campaign, mode: "active", activeScopeItemId: campaign.scope.items[0].scopeItemId }), { now: NOW });
   const restartedStore = createRegression85CampaignStore(path);
@@ -390,6 +424,18 @@ test("campaign store is fail-closed, immutable and restart-stable", async () => 
     () => restartedStore.update((campaign) => ({ ...campaign, scope: { ...campaign.scope, items: campaign.scope.items.slice(1) } }), { now: NOW }),
     (error) => error.code === "REGRESSION_85_SCOPE_IMMUTABLE",
   );
+  await assert.rejects(
+    () => restartedStore.update(() => {
+      const classified = campaignFor(fixture);
+      return {
+        ...classified,
+        progress: classified.progress.map((item, index) => index === 0
+          ? { ...item, repairStrategy: REGRESSION_85_REPAIR_STRATEGIES.ROLLBACK }
+          : item),
+      };
+    }, { now: NOW }),
+    (error) => error.code === "REGRESSION_85_CAMPAIGN_CORRUPT",
+  );
 });
 
 test("scope preparation is blocked outside the exact approved release runtime", async () => {
@@ -397,12 +443,11 @@ test("scope preparation is blocked outside the exact approved release runtime", 
   const directory = await mkdtemp(join(tmpdir(), "regression-85-cli-runtime-"));
   const campaignStore = createRegression85CampaignStore(join(directory, "campaign.json"));
   await assert.rejects(
-    () => runRegression85RepairCli(["prepare-scope", "--portal-snapshot", "unused.json"], {
+    () => runRegression85RepairCli(["prepare-scope"], {
       campaignStore,
       catalogStore: { async load() { return { state: fixture.state }; } },
       uploadLedger: { async read() { return fixture.ledger; } },
       readUploadEvents: async () => fixture.events,
-      readPortalSnapshot: async () => fixture.portalStatuses,
       productionPolicyStore: {
         async load() { return { valid: true, expectedRuntimeCommit: "a".repeat(40) }; },
       },
@@ -420,10 +465,12 @@ test("scope preparation is blocked outside the exact approved release runtime", 
 });
 
 test("DELETE guard permits only the current serial scope item and blocks foreign or inactive sources", async () => {
-  const { scope, scopeHash } = derivedFixture();
+  const fixture = derivedFixture();
+  const { scope, scopeHash, scopeEvidenceHash } = fixture;
   const directory = await mkdtemp(join(tmpdir(), "regression-85-delete-guard-"));
   const store = createRegression85CampaignStore(join(directory, "campaign.json"));
-  await store.initialize(scope, scopeHash, { now: NOW });
+  await store.initialize(scope, scopeHash, scopeEvidenceHash, { now: NOW });
+  await store.update(() => campaignFor(fixture), { now: NOW });
   const current = scope.items[0];
   await store.update((campaign) => ({
     ...campaign,
@@ -447,11 +494,27 @@ test("DELETE guard permits only the current serial scope item and blocks foreign
 });
 
 test("serial worker survives restart, respects the daily guard and performs replacement-first exactly once", async () => {
-  const { state: initialState, scope, scopeHash, ledger: rogueLedger } = derivedFixture();
+  const fixture = derivedFixture();
+  const { state: initialState, scope, scopeHash, scopeEvidenceHash, ledger: rogueLedger } = fixture;
+  for (let index = 0; index < scope.items.length; index += 1) {
+    const scopeItem = scope.items[index];
+    const project = initialState.projects.find((candidate) => candidate.id === scopeItem.projectId);
+    const regression = project.listings.find((candidate) => candidate.id === scopeItem.regressionListingId);
+    project.listings.push({
+      ...structuredClone(regression),
+      id: scopeItem.originalSourceListingId,
+      externalId: `30460-${String(600_000 + index).padStart(6, "0")}`,
+      status: WORKFLOW_STATUS.DELETED,
+      externalDeletionPending: false,
+      productionDeleteState: "confirmed",
+      listingOrigin: "group-source",
+      rotationSourceListingId: "",
+    });
+  }
   const directory = await mkdtemp(join(tmpdir(), "regression-85-worker-"));
   const campaignStore = createRegression85CampaignStore(join(directory, "campaign.json"));
-  await campaignStore.initialize(scope, scopeHash, { now: NOW });
-  await campaignStore.update((campaign) => ({ ...campaign, mode: "active", activatedAt: NOW }), { now: NOW });
+  await campaignStore.initialize(scope, scopeHash, scopeEvidenceHash, { now: NOW });
+  await campaignStore.update(() => ({ ...campaignFor(fixture), mode: "active", activatedAt: NOW }), { now: NOW });
   let catalogState = structuredClone(initialState);
   const catalogStore = {
     async load() { return { stored: true, savedAt: NOW, state: catalogState }; },
@@ -636,4 +699,275 @@ test("serial worker survives restart, respects the daily guard and performs repl
   assert.equal(uploadCount, 1);
   assert.equal((await deleteLedger.read()).jobs.length, 1);
   assert.equal((await campaignStore.load()).progress[0].stage, REGRESSION_85_REPAIR_STAGES.REPAIR_COMPLETED);
+});
+
+function buildPublishedClassificationFixture() {
+  const fixture = buildFixture();
+  fixture.state.importReports = [];
+  for (let index = 0; index < fixture.state.projects.length; index += 1) {
+    const project = fixture.state.projects[index];
+    const regression = project.listings[0];
+    const originalHouse = fixture.state.houses[3 + (index % 19)];
+    const original = listing(
+      originalHouse,
+      regression.rotationSourceListingId,
+      `30460-${String(700_000 + index).padStart(6, "0")}`,
+      WORKFLOW_STATUS.PUBLISHED,
+    );
+    original.externalDeletionPending = true;
+    original.productionDeleteState = "";
+    original.supersededByListingId = regression.id;
+    original.replacementConfirmedAt = NOW;
+    regression.status = WORKFLOW_STATUS.PUBLISHED;
+    regression.statusMessage = "Import bestätigt";
+    regression.version = 2;
+    regression.importConfirmedAt = NOW;
+    regression.lastUploadedAt = NOW;
+    regression.importReportId = `import-report-${index + 1}`;
+    const importReport = {
+      reportId: regression.importReportId,
+      importResult: "success",
+      sourceListingId: original.id,
+      matchedListingId: regression.id,
+      externalObjectNumber: regression.externalId,
+      rawHash: String(index + 1).padStart(64, "a").slice(-64),
+    };
+    fixture.state.importReports.push(importReport);
+    project.listings.push(original);
+    let group = normalizeListingGroup(project.listingGroup, project.id, { now: NOW });
+    group = updateListingControl(group, regression, {
+      automaticUpdateEnabled: true,
+      status: WORKFLOW_STATUS.PUBLISHED,
+      statusMessage: regression.statusMessage,
+    }, { now: NOW });
+    group = updateListingControl(group, original, {
+      automaticUpdateEnabled: false,
+      status: WORKFLOW_STATUS.PUBLISHED,
+      statusMessage: "Ersetzt · externe Löschung ausstehend",
+    }, { now: NOW });
+    group = {
+      ...group,
+      variants: group.variants.map((variant) => variant.listing?.id === regression.id
+        ? { ...variant, listing: regression }
+        : variant),
+    };
+    project.listingGroup = group;
+  }
+  const derived = deriveRegression85Scope(fixture.state, fixture.events, fixture.ledger);
+  const evidenceSnapshot = {
+    format: 1,
+    observedAt: NOW,
+    channel: "synthetic-read-only",
+    items: derived.scope.items.map((item) => {
+      const project = fixture.state.projects.find((candidate) => candidate.id === item.projectId);
+      const source = project.listings.find((candidate) => candidate.id === item.originalSourceListingId);
+      return {
+        scopeItemId: item.scopeItemId,
+        sourceExternalId: source.externalId,
+        regressionExternalId: item.regressionExternalId,
+        sourcePresence: "present",
+        portalStatuses: {
+          immowelt: "not_transferred",
+          kleinanzeigen: "not_transferred",
+          immoscout24: "not_transferred",
+        },
+      };
+    }),
+  };
+  return { ...fixture, ...derived, evidenceSnapshot, deleteLedger: { format: 1, jobs: [] } };
+}
+
+test("classifies all exact published A→B pairs as rollback eligible and persists immutable provenance", () => {
+  const fixture = buildPublishedClassificationFixture();
+  const classification = classifyRegression85Scope(
+    fixture.state,
+    fixture.scope,
+    fixture.ledger,
+    fixture.deleteLedger,
+    fixture.evidenceSnapshot,
+    { now: NOW },
+  );
+  assert.deepEqual(classification.counts, {
+    ROLLBACK_ELIGIBLE: 85,
+    REPLACEMENT_REQUIRED: 0,
+    AMBIGUOUS: 0,
+  });
+  assert.equal(classification.items.every((item) => item.evidenceHash.match(/^[a-f0-9]{64}$/u)), true);
+  const campaign = campaignFor(fixture);
+  delete campaign.classificationSummary;
+  campaign.progress = campaign.progress.map((progress) => ({
+    ...progress,
+    classification: "",
+    classificationReason: "",
+    evidenceHash: "",
+    classifiedAt: "",
+    repairStrategy: "",
+    repairState: "unclassified",
+  }));
+  const applied = applyRegression85Classifications(campaign, classification);
+  assert.equal(applied.progress.every((item) => item.repairStrategy === REGRESSION_85_REPAIR_STRATEGIES.ROLLBACK), true);
+  const changed = structuredClone(classification);
+  changed.items[0].evidenceHash = "f".repeat(64);
+  assert.throws(
+    () => applyRegression85Classifications(applied, changed),
+    (error) => error.code === "REGRESSION_85_CLASSIFICATION_IMMUTABLE",
+  );
+});
+
+test("operational gate accepts exactly 85 in-scope markers and blocks every foreign or incomplete marker set", () => {
+  const fixture = buildPublishedClassificationFixture();
+  assert.equal(inspectRegression85OperationalGate(fixture.state, fixture.scope, { deleteLedger: fixture.deleteLedger }).allowed, true);
+  const foreign = structuredClone(fixture.state);
+  foreign.projects[0].listings.push({ ...foreign.projects[0].listings.at(-1), id: "foreign-marker", externalId: "30460-999998", externalDeletionPending: true });
+  let result = inspectRegression85OperationalGate(foreign, fixture.scope, { deleteLedger: fixture.deleteLedger });
+  assert.equal(result.allowed, false);
+  assert.equal(result.foreignMarkerCount, 1);
+  const incomplete = structuredClone(fixture.state);
+  const firstSourceId = fixture.scope.items[0].originalSourceListingId;
+  incomplete.projects[0].listings.find((item) => item.id === firstSourceId).externalDeletionPending = false;
+  incomplete.projects[0].listings.push({ ...incomplete.projects[0].listings.at(-1), id: "foreign-marker", externalId: "30460-999997", externalDeletionPending: true });
+  result = inspectRegression85OperationalGate(incomplete, fixture.scope, { deleteLedger: fixture.deleteLedger });
+  assert.equal(result.allowed, false);
+  assert.equal(result.scopeMarkerCount, 84);
+  assert.equal(result.foreignMarkerCount, 1);
+});
+
+test("a deleted A with exact positive delete evidence requires replacement while absence without that evidence stays ambiguous", () => {
+  const fixture = buildPublishedClassificationFixture();
+  const scopeItem = fixture.scope.items[0];
+  const project = fixture.state.projects.find((candidate) => candidate.id === scopeItem.projectId);
+  const source = project.listings.find((candidate) => candidate.id === scopeItem.originalSourceListingId);
+  const reportHash = "d".repeat(64);
+  const deleteJobId = "production-delete:confirmed-source-a";
+  source.status = WORKFLOW_STATUS.DELETED;
+  source.externalDeletionPending = false;
+  source.productionDeleteState = "confirmed";
+  source.deleteReportHash = reportHash;
+  source.deleteJobId = deleteJobId;
+  fixture.state.deleteReports = [{
+    reportId: "delete-report-source-a",
+    sourceListingId: source.id,
+    replacementListingId: scopeItem.regressionListingId,
+    externalObjectNumber: source.externalId,
+    rawHash: reportHash,
+    result: "success",
+  }];
+  fixture.deleteLedger.jobs.push({
+    deleteJobId,
+    sourceListingId: source.id,
+    replacementListingId: scopeItem.regressionListingId,
+    externalObjectNumber: source.externalId,
+    reportHash,
+    status: PRODUCTION_DELETE_STATUS.CONFIRMED,
+  });
+  fixture.evidenceSnapshot.items[0].sourcePresence = "absent";
+  let classification = classifyRegression85Scope(fixture.state, fixture.scope, fixture.ledger, fixture.deleteLedger, fixture.evidenceSnapshot, { now: NOW });
+  assert.equal(classification.items[0].classification, REGRESSION_85_CLASSIFICATIONS.REPLACEMENT_REQUIRED);
+  assert.deepEqual(classification.counts, { ROLLBACK_ELIGIBLE: 84, REPLACEMENT_REQUIRED: 1, AMBIGUOUS: 0 });
+
+  source.status = WORKFLOW_STATUS.PUBLISHED;
+  source.productionDeleteState = "authorized";
+  delete fixture.state.deleteReports;
+  fixture.deleteLedger.jobs = [];
+  classification = classifyRegression85Scope(fixture.state, fixture.scope, fixture.ledger, fixture.deleteLedger, fixture.evidenceSnapshot, { now: NOW });
+  assert.equal(classification.items[0].classification, REGRESSION_85_CLASSIFICATIONS.AMBIGUOUS);
+  assert.equal(classification.items[0].classificationReason, "original_source_absent_without_exact_positive_delete_confirmation");
+});
+
+test("rollback deletes only B, keeps A published, clears A marker only after confirmation and never uploads C", async () => {
+  const fixture = buildPublishedClassificationFixture();
+  const classification = classifyRegression85Scope(fixture.state, fixture.scope, fixture.ledger, fixture.deleteLedger, fixture.evidenceSnapshot, { now: NOW });
+  const directory = await mkdtemp(join(tmpdir(), "regression-85-rollback-worker-"));
+  const campaignStore = createRegression85CampaignStore(join(directory, "campaign.json"));
+  await campaignStore.initialize(fixture.scope, fixture.scopeHash, fixture.scopeEvidenceHash, { now: NOW });
+  await campaignStore.update((campaign) => ({
+    ...applyRegression85Classifications(campaign, classification),
+    mode: "active",
+    activatedAt: NOW,
+  }), { now: NOW });
+  let catalogState = structuredClone(fixture.state);
+  const catalogStore = {
+    async load() { return { stored: true, savedAt: NOW, state: catalogState }; },
+    async update(mutator) {
+      const mutation = await mutator(catalogState);
+      catalogState = mutation?.state || mutation;
+      return { stored: true, state: catalogState, result: mutation?.result, changed: true };
+    },
+  };
+  const deleteLedger = createProductionDeleteLedger(join(directory, "delete-jobs.json"));
+  const runtimeOwnershipGuard = { async assert() { return { valid: true, portOwnerPids: [process.pid] }; } };
+  const deleteMutationGuard = createRegression85DeleteMutationGuard(campaignStore);
+  let deleteReportAvailable = false;
+  const productionDeleteService = createProductionDeleteService({
+    store: catalogStore,
+    modeStore: { async load() { return { valid: true, mode: "active" }; } },
+    ledger: deleteLedger,
+    productionPolicyStore: { async load() { return { valid: true, maxRunItems: 3 }; } },
+    runtimeOwnershipGuard,
+    mutationGuard: deleteMutationGuard,
+    upload: async () => { deleteReportAvailable = true; },
+    mailAdapter: {
+      readOnly: true,
+      async findCandidates() { return deleteReportAvailable ? [{ mailboxName: "reports", transportId: "rollback-1" }] : []; },
+      async readRawMessage() { return { rawSource: "synthetic rollback delete report" }; },
+    },
+    parseReport: (_raw, input) => ({
+      externalObjectNumber: input.expectedTarget,
+      deleteResult: "success",
+      messageId: `<rollback-delete-${input.expectedTarget}@example.invalid>`,
+      rawHash: input.expectedTarget.replace(/\D/gu, "").padEnd(64, "c").slice(0, 64),
+      providerProcessedAt: NOW,
+    }),
+    now: () => NOW,
+  });
+  let uploadCount = 0;
+  const serviceOptions = {
+    campaignStore,
+    catalogStore,
+    lease: { async acquire() { return { async release() {} }; } },
+    rotationModeStore: { async load() { return { valid: true, mode: "off" }; } },
+    portalModeStore: { async load() { return { valid: true, mode: "off" }; } },
+    productionDeleteModeStore: { async load() { return { valid: true, mode: "active" }; } },
+    productionPolicyStore: { async load() { return { valid: true, maxRunItems: 3 }; } },
+    runtimeOwnershipGuard,
+    uploadJobLedger: { async read() { return fixture.ledger; } },
+    productionDeleteLedger: deleteLedger,
+    plotDailyUploadGuard: { async inspect() { throw new Error("Rollback must not consume daily upload guard"); } },
+    upload: async () => { uploadCount += 1; throw new Error("Rollback must not upload"); },
+    importReportService: { async runOnce() { throw new Error("Rollback must not wait for import report"); } },
+    productionDeleteService,
+    now: () => NOW,
+  };
+  let worker = createRegression85RepairService(serviceOptions);
+  let result = await worker.runOnce({ runId: "rollback-authorize" });
+  assert.equal(result.stage, REGRESSION_85_REPAIR_STAGES.ROLLBACK_DELETE_AUTHORIZED);
+  const scopeItem = fixture.scope.items[0];
+  let project = catalogState.projects.find((candidate) => candidate.id === scopeItem.projectId);
+  let original = project.listings.find((candidate) => candidate.id === scopeItem.originalSourceListingId);
+  let regression = project.listings.find((candidate) => candidate.id === scopeItem.regressionListingId);
+  assert.equal(original.status, WORKFLOW_STATUS.PUBLISHED);
+  assert.equal(original.externalDeletionPending, true);
+  assert.equal(regression.productionDeleteState, "authorized");
+
+  worker = createRegression85RepairService(serviceOptions);
+  result = await worker.runOnce({ runId: "rollback-delete-transfer" });
+  assert.equal(result.stage, REGRESSION_85_REPAIR_STAGES.ROLLBACK_DELETE_PENDING);
+  worker = createRegression85RepairService(serviceOptions);
+  result = await worker.runOnce({ runId: "rollback-delete-confirm" });
+  assert.equal(result.stage, REGRESSION_85_REPAIR_STAGES.ROLLBACK_ROGUE_DELETED);
+  worker = createRegression85RepairService(serviceOptions);
+  result = await worker.runOnce({ runId: "rollback-finalize" });
+  assert.equal(result.stage, REGRESSION_85_REPAIR_STAGES.REPAIR_COMPLETED);
+  project = catalogState.projects.find((candidate) => candidate.id === scopeItem.projectId);
+  original = project.listings.find((candidate) => candidate.id === scopeItem.originalSourceListingId);
+  regression = project.listings.find((candidate) => candidate.id === scopeItem.regressionListingId);
+  assert.equal(original.status, WORKFLOW_STATUS.PUBLISHED);
+  assert.equal(original.externalDeletionPending, false);
+  assert.equal(original.productionDeleteState, "");
+  assert.equal(listingControl(normalizeListingGroup(project.listingGroup, project.id), original).automaticUpdateEnabled, true);
+  assert.equal(project.listingGroup.variants.some((variant) => variant.listing?.id === original.id && variant.active), true);
+  assert.equal(project.selectedHouseIds.includes(original.templateId), true);
+  assert.equal(regression.status, WORKFLOW_STATUS.DELETED);
+  assert.equal(uploadCount, 0);
+  assert.equal((await deleteLedger.read()).jobs.length, 1);
 });

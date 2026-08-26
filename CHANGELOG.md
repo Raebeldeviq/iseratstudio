@@ -1,5 +1,63 @@
 # Änderungsprotokoll
 
+## Unreleased · Klassifizierter 85er-Rollback/Replacement-Repair – 26. August 2026
+
+### Report
+
+- Die exakte 85er-Allowlist auf den freigegebenen Scope-Hash
+  `abcf59c654f573bc13906e555badeb13e090eb67d9c971cfb0216b5a4abace58`
+  festgelegt und zusätzlich mit einem unveränderlichen Hash der rekonstruierten
+  A→B-, Listing-, Plot-, Scheduler- und Uploadprovenienz gebunden.
+- Monotone Rogue-Replacements im Zustand `published` werden ausschließlich bei
+  exakt positivem Importbericht und passendem ursprünglichem Uploadjob als
+  gültige Scope-Mitglieder akzeptiert. Außerhalb dieses 85er-Vertrags wurde
+  keine Statuslockerung eingeführt.
+- Einen vollständigen read-only Klassifikator für `ROLLBACK_ELIGIBLE`,
+  `REPLACEMENT_REQUIRED` und `AMBIGUOUS` ergänzt. Klassifikation, Grund,
+  Evidenz-Hash, Zeitpunkt, Strategie und Repairzustand werden persistent und
+  nachträglich unveränderlich gespeichert.
+- Das Operational Gate akzeptiert exakt die bekannten In-Scope-Marker, sperrt
+  84/86 sowie jeden Fremdmarker und erlaubt eine fehlende Markierung nur bei
+  einer als `REPLACEMENT_REQUIRED` klassifizierten, positiv bestätigt
+  gelöschten A-Source.
+- Für Rollbackfälle den bestehenden Production-DELETE-Vertrag eng auf B
+  erweitert: A bleibt published, B ist das einzige DELETE-Ziel, A wird erst
+  nach positivem B-Löschbericht wieder Scheduler-Owner und es entstehen weder
+  C, FTPS-Hausupload noch Daily-Plot-Guard-Verbrauch.
+- Der bisherige B→C-Pfad bleibt ausschließlich für nachweislich gelöschte A
+  erhalten. AMBIGUOUS-Einträge sind terminal blockiert und lösen keine
+  Katalog-, Upload-, Portal- oder DELETE-Mutation aus.
+- Tests für 85/86/84+Fremdmarker, vollständige A→B-Provenienz, externe
+  Abwesenheit ohne Deleteconfirmation, positive Replacement-Evidenz,
+  Rollback-DELETE, positive Bestätigung, Restart/Idempotenz und null neue
+  Rollback-Uploads ergänzt.
+
+### Begründung
+
+Die 85 Marker gehören zum bekannten Rogue-Batch und sind deshalb kein
+unbekannter Fremdzustand. Gleichzeitig wäre ein pauschales Zurücksetzen der
+Marker oder ein drittes Inserat für jeden Vorgang unnötig und riskant. Die
+Klassifikation trennt die unveränderliche technische A→B-Provenienz von der
+zeitabhängigen externen Präsenzbeobachtung. Damit kann der kleinste sichere
+Repair gewählt werden: B löschen und A behalten, sofern A eindeutig noch
+existiert; B nur dann durch C ersetzen, wenn A nachweislich gelöscht wurde.
+
+### Hürden und Risiken
+
+- Die externe A-Präsenz und die drei B-Portalstatuswerte benötigen eine
+  authentifizierte read-only Immoprofessional-Sitzung. Ohne diese Original-
+  beobachtung bleibt der jeweilige Vorgang `AMBIGUOUS`; lokale Katalogwerte
+  werden nicht als Ersatz für externe Präsenz ausgegeben.
+- Beim Rollback tragen zunächst 85 alte A-Marker die historische A→B-Kette.
+  Der exakte DELETE-Pfad filtert daher vor der Identitätsbildung auf das eine
+  freigegebene B-Ziel; der Mutationsguard und die serielle Campaign-Lease
+  bleiben zusätzlich verbindlich.
+- Ein Marker wird erst nach positivem B-Löschbericht bereinigt. Transferfehler,
+  Mailfehler oder widersprüchliche Evidenz lassen A und alle übrigen Einträge
+  fail-closed unverändert.
+- Dieser Branch führt vor QA, Commit, Maintainer-Fast-Forward und neuer staged
+  Release-Runtime keinerlei Live-Upload, DELETE oder Portalmutation aus.
+
 ## Unreleased · Exakte 85er-Regressionsreparatur und Runtime-Ownership – 25. August 2026
 
 ### Report

@@ -553,7 +553,7 @@ const regression85PortalModeStore = Object.freeze({
   async load() {
     try {
       const value = JSON.parse(await readFile(PORTAL_EXPORT_MODE_PATH, "utf8"));
-      if (value?.format !== 1 || value?.mode !== "off") {
+      if (!new Set([1, 2]).has(value?.format) || value?.mode !== "off") {
         return { valid: false, mode: String(value?.mode || "off"), fallbackReason: "Portalexport ist nicht eindeutig off." };
       }
       return { valid: true, mode: "off", fallbackReason: "" };

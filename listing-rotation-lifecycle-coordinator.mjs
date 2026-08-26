@@ -7,7 +7,7 @@ import {
 import { normalizeWorkflowStatus, WORKFLOW_STATUS } from "./workflow-status.mjs";
 import {
   isRegressionRepairLifecycle,
-  REGRESSION_REPAIR_SOURCE_STATUS,
+  regressionRepairSourceStatus,
 } from "./listing-regression-repair.mjs";
 
 export const ROTATION_LIFECYCLE_STAGE = Object.freeze({
@@ -209,7 +209,7 @@ export function inspectProductionRotationLifecycle(state, input, uploadLedger = 
   const sourceDeleteStatusAllowed = normalizeWorkflowStatus(source.status) === WORKFLOW_STATUS.PUBLISHED
     || (
       isRegressionRepairLifecycle(lifecycle)
-      && normalizeWorkflowStatus(source.status) === REGRESSION_REPAIR_SOURCE_STATUS
+      && normalizeWorkflowStatus(source.status) === regressionRepairSourceStatus(lifecycle)
     );
   const deleteAuthorized = Boolean(
     importConfirmed

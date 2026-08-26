@@ -10,7 +10,7 @@ import { MAX_LISTING_GROUP_LOGS } from "./listing-rules.mjs";
 import { recordPromotionUsage } from "./promotion-images.mjs";
 import {
   isRegressionRepairLifecycle,
-  REGRESSION_REPAIR_SOURCE_STATUS,
+  regressionRepairSourceStatus,
 } from "./listing-regression-repair.mjs";
 import { normalizeWorkflowStatus, WORKFLOW_STATUS } from "./workflow-status.mjs";
 
@@ -177,6 +177,9 @@ export function confirmImportReportInState(state, parsed, mail, uploadLedger, op
   const importedAt = parsed.providerImportAt;
   const productionLifecycle = match.listing.productionLifecycle;
   const regressionRepair = isRegressionRepairLifecycle(productionLifecycle);
+  const replacedSourceStatus = regressionRepair
+    ? regressionRepairSourceStatus(productionLifecycle)
+    : WORKFLOW_STATUS.PUBLISHED;
   const automaticDeleteAuthorized = productionLifecycle?.format === 1
     && productionLifecycle.automaticDeleteAuthorized === true
     && productionLifecycle.sourceListingId === match.source.id
@@ -200,7 +203,7 @@ export function confirmImportReportInState(state, parsed, mail, uploadLedger, op
   };
   const replacedSource = {
     ...match.source,
-    status: regressionRepair ? REGRESSION_REPAIR_SOURCE_STATUS : WORKFLOW_STATUS.PUBLISHED,
+    status: replacedSourceStatus,
     statusMessage: regressionRepair
       ? `Regression-Replacement ersetzt · neues Objekt ${match.listing.externalId} bestätigt · externe Löschung ausstehend`
       : `Ersetzt · neues Objekt ${match.listing.externalId} · externe Löschung ausstehend`,
@@ -218,7 +221,7 @@ export function confirmImportReportInState(state, parsed, mail, uploadLedger, op
   group = updateListingControl(group, replacedSource, {
     automaticUpdateEnabled: false,
     automaticDeletionEnabled: false,
-    status: regressionRepair ? REGRESSION_REPAIR_SOURCE_STATUS : WORKFLOW_STATUS.PUBLISHED,
+    status: replacedSourceStatus,
     statusMessage: replacedSource.statusMessage,
     schedulerSelectionId: "",
     schedulerSelectedAt: "",
