@@ -53,6 +53,10 @@ import {
 import { createProductionRuntimeOwnershipGuard } from "./production-runtime-ownership.mjs";
 import { createRegression85CampaignStore } from "./regression-85-repair-scope.mjs";
 import {
+  createRegression85NonExportedAttestationStore,
+  createRegression85NonExportedConfirmationResolver,
+} from "./regression-85-non-exported-delete-confirmation.mjs";
+import {
   createRegression85DeleteMutationGuard,
   createRegression85RepairService,
 } from "./regression-85-repair-service.mjs";
@@ -103,6 +107,9 @@ const REGRESSION_85_CAMPAIGN_PATH = join(APPLICATION_DATA_DIRECTORY, "regression
 const REGRESSION_85_LOCK_PATH = join(APPLICATION_DATA_DIRECTORY, "regression-85-repair.lock");
 const REGRESSION_85_LOG_PATH = join(APPLICATION_DATA_DIRECTORY, "regression-85-repair.log");
 const PORTAL_EXPORT_MODE_PATH = join(APPLICATION_DATA_DIRECTORY, "immoprofessional-portal-export-mode.json");
+const PORTAL_EXPORT_LEDGER_PATH = join(APPLICATION_DATA_DIRECTORY, "immoprofessional-portal-export-jobs.json");
+const PORTAL_EXPORT_LOG_PATH = join(APPLICATION_DATA_DIRECTORY, "immoprofessional-portal-export.log");
+const REGRESSION_85_NON_EXPORTED_ATTESTATION_PATH = join(APPLICATION_DATA_DIRECTORY, "regression-85-non-exported-delete-confirmation.json");
 const SESSION_TOKEN = String(process.env.FPI_SESSION_TOKEN || randomBytes(32).toString("hex"));
 const HELPER_STARTED_AT = new Date().toISOString();
 const RUNTIME_PROVENANCE = await loadHelperRuntimeProvenance();
@@ -139,6 +146,7 @@ const productionBatchOverrideStore = createProductionBatchOverrideStore(PRODUCTI
 const productionDeleteModeStore = createProductionDeleteModeStore(PRODUCTION_DELETE_MODE_PATH);
 const productionDeleteLedger = createProductionDeleteLedger(PRODUCTION_DELETE_LEDGER_PATH);
 const regression85CampaignStore = createRegression85CampaignStore(REGRESSION_85_CAMPAIGN_PATH);
+const regression85NonExportedAttestationStore = createRegression85NonExportedAttestationStore(REGRESSION_85_NON_EXPORTED_ATTESTATION_PATH);
 const regression85Lease = createPersistentLease(REGRESSION_85_LOCK_PATH, {
   writeEvent: (event, details) => writeRegression85Log(`lease-${event}`, details),
 });
@@ -150,6 +158,34 @@ const importReportService = createImmoprofessionalImportReportService({
   uploadJobLedger,
   mailAdapter: importReportMailAdapter,
   writeLog: (event, details) => writeImportReportLog(event, details),
+});
+
+async function readPortalExportLedger() {
+  try {
+    return JSON.parse(await readFile(PORTAL_EXPORT_LEDGER_PATH, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") return { format: 1, jobs: [] };
+    throw new Error("Das Portalexport-Jobledger ist nicht eindeutig lesbar.");
+  }
+}
+
+async function readPortalExportEvents() {
+  try {
+    return (await readFile(PORTAL_EXPORT_LOG_PATH, "utf8"))
+      .split(/\r?\n/gu)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  } catch (error) {
+    if (error?.code === "ENOENT") return [];
+    throw new Error("Das Portalexport-Protokoll ist nicht eindeutig lesbar.");
+  }
+}
+
+const regression85NonExportedConfirmationResolver = createRegression85NonExportedConfirmationResolver({
+  attestationStore: regression85NonExportedAttestationStore,
+  campaignStore: regression85CampaignStore,
+  readPortalLedger: readPortalExportLedger,
+  readPortalEvents: readPortalExportEvents,
 });
 
 async function credentialVault() {
@@ -576,6 +612,7 @@ const productionDeleteService = createProductionDeleteService({
   runtimeOwnershipGuard,
   mutationGuard: regression85DeleteMutationGuard,
   mailAdapter: productionDeleteMailAdapter,
+  resolveConfirmationContext: regression85NonExportedConfirmationResolver,
   upload: automaticProductionDeleteUpload,
   writeLog: (event, details) => writeProductionDeleteLog(event, details),
 });

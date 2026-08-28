@@ -339,6 +339,54 @@ deshalb erwartungsgemäß null Creative-Kandidaten und darf ohne künstliche
 CreativeSelection aktiviert werden. Scope-, Runtime-, Marker-, DELETE- und
 Serialisierungs-Gates bleiben davon unverändert verpflichtend.
 
+### DELETE-Bestätigung für nachweislich nie exportierte Rogue-B-Objekte
+
+Der normale Production-DELETE-Vertrag bleibt unverändert streng: Ein
+portalexportiertes Objekt benötigt neben der eindeutigen objektbezogenen
+Providerzeile `Erfolgreich gelöscht` weiterhin mindestens einen exakt auf die
+Objektnummer bezogenen Börsen-Löschnachweis. Ein Bericht ohne Börsenabschnitt
+wird in diesem Normalfall weiterhin fail-closed abgewiesen.
+
+Für den festen 85er-Rollback existiert ein eigener Bestätigungstyp
+`provider_object_delete_confirmed_non_exported`. Er wird nur erzeugt, wenn
+sämtliche folgenden Nachweise gemeinsam gültig sind:
+
+- Scope-Hash, Scope-Evidence-Hash und Klassifikations-Fingerprint entsprechen
+  exakt den freigegebenen 85er-Werten;
+- alle 85 Klassifikationen sind unverändert `ROLLBACK_ELIGIBLE`;
+- der read-only Snapshot weist für jedes Rogue-B Immowelt, Kleinanzeigen und
+  ImmoScout24 jeweils exakt als `not_transferred` aus;
+- weder Portaljob-Ledger noch Portalprotokoll enthalten irgendeine Referenz auf
+  eines der 85 Rogue-B-Listings oder deren Objektnummern;
+- Job, A→B-Beziehung, Objektnummer und individuelle Klassifikations-Evidenz
+  stimmen exakt mit der unveränderlichen Attestation überein;
+- der Mailbericht bestätigt genau ein Objekt, enthält die positive
+  objektbezogene Löschzeile und keinerlei Fehler oder Warnung.
+
+Die Attestation ist atomar, unveränderlich und gehasht. Auch nach ihrer
+Erstellung wird die Portalprovenienz vor jeder Bestätigung erneut geprüft.
+Ein später hinzugekommener Portaljob blockiert daher den Ausnahmeweg. Der
+Bestätigungstyp und der Attestation-Hash werden getrennt im DELETE-Ledger, am
+gelöschten Listing und im Katalogbericht protokolliert; eine Börsenlöschung
+wird nicht vorgetäuscht.
+
+Der einmalige Maintainerpfad für den bereits übertragenen ersten DELETE läuft
+bei pausierter Kampagne sowie Rotation, Portalexport und Production-DELETE auf
+`off`. Er kann keinen FTPS-Transfer auslösen und ist hart auf
+`30460-423286 → 30460-755080` gebunden:
+
+```bash
+node regression-85-non-exported-delete-confirmation-cli.mjs prepare-evidence --evidence-snapshot <READ_ONLY-85-PORTALSTATUS.json>
+node regression-85-non-exported-delete-confirmation-cli.mjs reconcile-first --target 30460-423286 --presence-evidence <READ_ONLY-PRESENCE.json>
+node regression-85-non-exported-delete-confirmation-cli.mjs status
+```
+
+Der Presence-Nachweis muss aktuell, read-only und eindeutig sein: Rogue-B
+abwesend, Original-A vorhanden, null Mail- und Portalmutationen. Nach dem
+internen Abschluss bleibt B `deleted`, A `published` und A übernimmt erst dann
+wieder konsistent den Scheduler-Owner-Zustand. Die übrigen 84 Vorgänge werden
+durch diesen Maintainerbefehl nicht gestartet.
+
 ### Produktive Runtime-Ownership
 
 Commit-Provenienz allein reicht für produktive Mutationen nicht aus. Vor

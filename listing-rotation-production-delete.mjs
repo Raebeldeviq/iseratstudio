@@ -177,6 +177,8 @@ export function createProductionDeleteLedger(path) {
           reportMessageId: "",
           reportHash: "",
           providerProcessedAt: "",
+          confirmationType: "",
+          confirmationEvidenceHash: "",
         };
         return { changed: true, ledger: replace(ledger, job), value: job };
       });
@@ -212,6 +214,7 @@ export function createProductionDeleteLedger(path) {
         if (!current) throw productionError("PRODUCTION_DELETE_JOB_NOT_FOUND", "Der Produktions-Deletejob fehlt.");
         if (current.status === PRODUCTION_DELETE_STATUS.CONFIRMED) {
           if (current.externalObjectNumber !== report.externalObjectNumber || report.deleteResult !== "success") throw productionError("PRODUCTION_DELETE_CONFIRMATION_CONFLICT", "Ein bestätigter Delete erhielt einen widersprüchlichen Bericht.");
+          if (current.confirmationType && current.confirmationType !== clean(report.confirmationType, 100)) throw productionError("PRODUCTION_DELETE_CONFIRMATION_CONFLICT", "Ein bestätigter Delete erhielt einen widersprüchlichen Bestätigungstyp.");
           if (current.reportHash === report.rawHash || current.reportMessageId === report.messageId) return { changed: false, ledger, value: current };
           const evidence = { messageId: clean(report.messageId), rawHash: clean(report.rawHash, 128), providerProcessedAt: clean(report.providerProcessedAt, 50) };
           const job = { ...current, additionalReports: [...(current.additionalReports || []), evidence].slice(-20), updatedAt: now };
@@ -219,7 +222,19 @@ export function createProductionDeleteLedger(path) {
         }
         if (current.status !== PRODUCTION_DELETE_STATUS.PENDING_CONFIRMATION) throw productionError("PRODUCTION_DELETE_CONFIRMATION_STATUS_INVALID", "Nur ein eindeutig übertragener Delete darf bestätigt werden.");
         if (current.externalObjectNumber !== report.externalObjectNumber || report.deleteResult !== "success") throw productionError("PRODUCTION_DELETE_CONFIRMATION_MISMATCH", "Der Löschbericht gehört nicht exakt zur alten Quell-Objektnummer.");
-        const job = { ...current, status: PRODUCTION_DELETE_STATUS.CONFIRMED, reportMessageId: clean(report.messageId), reportHash: clean(report.rawHash, 128), providerProcessedAt: clean(report.providerProcessedAt, 50), confirmedAt: now, updatedAt: now };
+        const confirmationType = clean(report.confirmationType, 100);
+        if (!confirmationType) throw productionError("PRODUCTION_DELETE_CONFIRMATION_TYPE_MISSING", "Der positive Löschbericht besitzt keinen eindeutigen Bestätigungstyp.");
+        const job = {
+          ...current,
+          status: PRODUCTION_DELETE_STATUS.CONFIRMED,
+          reportMessageId: clean(report.messageId),
+          reportHash: clean(report.rawHash, 128),
+          providerProcessedAt: clean(report.providerProcessedAt, 50),
+          confirmationType,
+          confirmationEvidenceHash: clean(report.confirmationEvidence?.attestationHash, 64),
+          confirmedAt: now,
+          updatedAt: now,
+        };
         return { changed: true, ledger: replace(ledger, job), value: job };
       });
     },
@@ -457,6 +472,8 @@ export function finalizeProductionDeleteInState(state, job, report, options = {}
     deleteReportHash: report.rawHash,
     deleteJobId: job.deleteJobId,
     productionDeleteState: "confirmed",
+    deleteConfirmationType: clean(report.confirmationType || job.confirmationType, 100),
+    deleteConfirmationEvidenceHash: clean(report.confirmationEvidence?.attestationHash || job.confirmationEvidenceHash, 64),
   };
   let group = normalizeListingGroup(project.listingGroup, project.id, { now });
   group = updateListingControl(group, deletedSource, {
@@ -482,6 +499,11 @@ export function finalizeProductionDeleteInState(state, job, report, options = {}
     processedAt: now,
     result: "success",
     channel: "email",
+    confirmationType: clean(report.confirmationType || job.confirmationType, 100),
+    confirmationEvidenceHash: clean(report.confirmationEvidence?.attestationHash || job.confirmationEvidenceHash, 64),
+    targetWasNeverPortalExported: report.targetWasNeverPortalExported === true,
+    externalPresenceEvidenceHash: clean(report.externalPresenceEvidenceHash, 64),
+    externalPresenceObservedAt: clean(report.externalPresenceObservedAt, 50),
   };
   return {
     state: {
@@ -505,6 +527,7 @@ export function createProductionDeleteService(options) {
   if (!options?.mailAdapter?.findCandidates || !options?.mailAdapter?.readRawMessage || options.mailAdapter.readOnly !== true) throw new Error("Dem Produktions-Deletedienst fehlt der read-only Löschberichtadapter.");
   const writeLog = options.writeLog || (async () => undefined);
   const now = options.now || (() => new Date().toISOString());
+  const resolveConfirmationContext = options.resolveConfirmationContext || (async () => null);
 
   function deleteContextKey(identity) {
     return identity.batchOverrideId
@@ -739,6 +762,9 @@ export function createProductionDeleteService(options) {
         messageId: job.reportMessageId,
         rawHash: job.reportHash,
         providerProcessedAt: job.providerProcessedAt,
+        confirmationType: job.confirmationType,
+        confirmationEvidence: job.confirmationEvidenceHash ? { attestationHash: job.confirmationEvidenceHash } : null,
+        targetWasNeverPortalExported: job.confirmationType === "provider_object_delete_confirmed_non_exported",
       };
       await options.store.update((state) => ({
         state: finalizeProductionDeleteInState(state, job, report, { now: now() }).state,
@@ -752,13 +778,17 @@ export function createProductionDeleteService(options) {
     const rawMessages = new Map();
     const confirmed = [];
     for (const job of pending) {
+      const confirmationContext = await resolveConfirmationContext(job);
       for (const candidate of candidates) {
         let report;
         try {
           const key = `${candidate.mailboxName}:${candidate.transportId}`;
           if (!rawMessages.has(key)) rawMessages.set(key, await options.mailAdapter.readRawMessage(candidate));
           const mail = rawMessages.get(key);
-          report = (options.parseReport || parseImmoprofessionalDeleteReport)(mail.rawSource, { expectedTarget: job.externalObjectNumber });
+          report = (options.parseReport || parseImmoprofessionalDeleteReport)(mail.rawSource, {
+            expectedTarget: job.externalObjectNumber,
+            confirmationContext,
+          });
         } catch {
           // Eine nicht passende Mail ist keine Evidenz und wird unverändert übergangen.
           continue;
@@ -766,7 +796,7 @@ export function createProductionDeleteService(options) {
         const confirmedJob = await options.ledger.confirm(job.deleteJobId, report, now());
         await options.store.update((state) => ({ state: finalizeProductionDeleteInState(state, confirmedJob, report, { now: now() }).state }), { now: now() });
         confirmed.push(job.externalObjectNumber);
-        await writeLog("confirmed", { deleteJobId: job.deleteJobId, schedulerRunId: job.schedulerRunId, batchOverrideId: job.batchOverrideId || null, effectiveMaxRunItems: job.batchOverrideId ? job.batchOverrideMaxRunItems : 3, runtimeCommit: job.runtimeCommit || null, externalObjectNumber: job.externalObjectNumber, reportMessageId: report.messageId, reportHash: report.rawHash, mailboxName: candidate.mailboxName, mailMutations: 0, status: confirmedJob.status });
+        await writeLog("confirmed", { deleteJobId: job.deleteJobId, schedulerRunId: job.schedulerRunId, batchOverrideId: job.batchOverrideId || null, effectiveMaxRunItems: job.batchOverrideId ? job.batchOverrideMaxRunItems : 3, runtimeCommit: job.runtimeCommit || null, externalObjectNumber: job.externalObjectNumber, reportMessageId: report.messageId, reportHash: report.rawHash, confirmationType: report.confirmationType, confirmationEvidenceHash: report.confirmationEvidence?.attestationHash || null, mailboxName: candidate.mailboxName, mailMutations: 0, status: confirmedJob.status });
         break;
       }
     }

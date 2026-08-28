@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { createUploadJobId } from "../batch-upload.mjs";
 import { confirmImportReportInState } from "../immoprofessional-import-confirmation.mjs";
+import { IMMOPROFESSIONAL_EXCHANGE_DELETE_CONFIRMATION_TYPE } from "../immoprofessional-delete-report-parser.mjs";
 import { normalizeHouseDistribution } from "../house-distribution.mjs";
 import {
   assignListingGroupVariant,
@@ -562,6 +563,7 @@ test("serial worker survives restart, respects the daily guard and performs repl
       messageId: `<delete-${input.expectedTarget}@example.invalid>`,
       rawHash: input.expectedTarget.replace(/\D/gu, "").padEnd(64, "a").slice(0, 64),
       providerProcessedAt: NOW,
+      confirmationType: IMMOPROFESSIONAL_EXCHANGE_DELETE_CONFIRMATION_TYPE,
     }),
     now: () => NOW,
   });
@@ -951,6 +953,7 @@ test("rollback deletes only B, keeps A published, clears A marker only after con
       messageId: `<rollback-delete-${input.expectedTarget}@example.invalid>`,
       rawHash: input.expectedTarget.replace(/\D/gu, "").padEnd(64, "c").slice(0, 64),
       providerProcessedAt: NOW,
+      confirmationType: IMMOPROFESSIONAL_EXCHANGE_DELETE_CONFIRMATION_TYPE,
     }),
     now: () => NOW,
   });

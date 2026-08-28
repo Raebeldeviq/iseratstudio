@@ -278,9 +278,89 @@ test("production service transfers serially, waits for a report and finalizes id
   const finalState = (await store.load()).state;
   assert.equal(finalState.projects[0].listings[0].status, WORKFLOW_STATUS.DELETED);
   assert.equal(finalState.projects[0].listings[1].status, WORKFLOW_STATUS.PUBLISHED);
+  assert.equal(finalState.projects[0].listings[0].deleteConfirmationType, "provider_object_and_exchange_delete_confirmed");
   const repeated = await service.runOnce({ trigger: "test-repeat" });
   assert.equal(repeated.transferred.length, 0);
   assert.equal(uploads, 1);
+});
+
+test("a pending never-exported confirmation reconciles without a second transfer and survives restart idempotently", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fpi-production-delete-non-exported-reconcile-"));
+  const store = memoryStore(productionState());
+  const ledger = createProductionDeleteLedger(join(directory, "jobs.json"));
+  const state = (await store.load()).state;
+  const eligibility = resolveProductionDeleteEligibility(state, "project-1", "source-listing", await ledger.read());
+  const identity = productionDeleteIdentity(eligibility.source, eligibility.replacement);
+  const payload = await buildProductionDeletePayload(state, eligibility, { preparedAt: NOW });
+  const prepared = await ledger.prepare({
+    ...identity,
+    projectId: eligibility.project.id,
+    sourceListingId: eligibility.source.id,
+    replacementListingId: eligibility.replacement.id,
+    externalObjectNumber: eligibility.source.externalId,
+    replacementExternalObjectNumber: eligibility.replacement.externalId,
+    payloadFilename: payload.payloadFilename,
+    payloadSha256: payload.payloadSha256,
+    payloadSize: payload.payloadSize,
+  }, NOW);
+  const claimed = await ledger.claim(prepared.deleteJobId, NOW);
+  const transferred = await ledger.transferred(prepared.deleteJobId, claimed.claimToken, NOW);
+  await store.update((current) => {
+    current.projects[0].listings[0].productionDeleteState = "pending_confirmation";
+    current.projects[0].listings[0].productionDeleteJobId = transferred.deleteJobId;
+    return { state: current };
+  });
+  const context = Object.freeze({ contract: "validated-never-exported-test" });
+  let uploads = 0;
+  let contextResolutions = 0;
+  const serviceOptions = {
+    store,
+    modeStore: fixedMode("active"),
+    ledger,
+    productionPolicyStore: fixedPolicy(),
+    mailAdapter: {
+      readOnly: true,
+      async findCandidates() { return [{ mailboxName: "reports", transportId: "non-exported-1" }]; },
+      async readRawMessage() { return { rawSource: "synthetic never-exported report" }; },
+    },
+    resolveConfirmationContext: async (job) => {
+      contextResolutions += 1;
+      assert.equal(job.deleteJobId, transferred.deleteJobId);
+      return context;
+    },
+    parseReport: (_raw, input) => {
+      assert.equal(input.confirmationContext, context);
+      return {
+        externalObjectNumber: input.expectedTarget,
+        deleteResult: "success",
+        messageId: "<non-exported-delete@server22.immoprofessional.eu>",
+        rawHash: "d".repeat(64),
+        providerProcessedAt: NOW,
+        confirmationType: "provider_object_delete_confirmed_non_exported",
+        confirmationEvidence: { attestationHash: "e".repeat(64) },
+        targetWasNeverPortalExported: true,
+      };
+    },
+    upload: async () => { uploads += 1; },
+    now: () => NOW,
+  };
+  const first = await createProductionDeleteService(serviceOptions).runOnce({ trigger: "test-reconcile", reconcileOnly: true });
+  assert.deepEqual(first.confirmed, [SOURCE_EXTERNAL_ID]);
+  assert.equal(uploads, 0);
+  assert.equal(contextResolutions, 1);
+  const confirmedJob = (await ledger.read()).jobs[0];
+  assert.equal(confirmedJob.status, PRODUCTION_DELETE_STATUS.CONFIRMED);
+  assert.equal(confirmedJob.confirmationType, "provider_object_delete_confirmed_non_exported");
+  assert.equal(confirmedJob.confirmationEvidenceHash, "e".repeat(64));
+  const source = (await store.load()).state.projects[0].listings[0];
+  assert.equal(source.status, WORKFLOW_STATUS.DELETED);
+  assert.equal(source.deleteConfirmationType, "provider_object_delete_confirmed_non_exported");
+
+  const restarted = createProductionDeleteService(serviceOptions);
+  const second = await restarted.runOnce({ trigger: "test-restart", reconcileOnly: true });
+  assert.deepEqual(second.confirmed, []);
+  assert.equal(uploads, 0);
+  assert.equal((await ledger.read()).jobs.length, 1);
 });
 
 test("reconciliation-only confirms pending DELETEs but never transfers an authorized source", async () => {

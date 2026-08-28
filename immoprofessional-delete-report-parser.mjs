@@ -5,8 +5,13 @@ import {
   zonedLocalToIso,
 } from "./immoprofessional-import-report-parser.mjs";
 import { DELETE_CANARY_TARGET } from "./immoprofessional-delete-canary.mjs";
+import {
+  isValidatedRegression85NonExportedConfirmationContext,
+  REGRESSION_85_NON_EXPORTED_CONFIRMATION_TYPE,
+} from "./regression-85-non-exported-delete-confirmation.mjs";
 
-export const IMMOPROFESSIONAL_DELETE_REPORT_PARSER_VERSION = "1.0.0";
+export const IMMOPROFESSIONAL_DELETE_REPORT_PARSER_VERSION = "1.1.0";
+export const IMMOPROFESSIONAL_EXCHANGE_DELETE_CONFIRMATION_TYPE = "provider_object_and_exchange_delete_confirmed";
 export const LIVE_CANARY_DELETE_REPORT_TARGETS = Object.freeze([
   "30460-930980",
   "30460-142086",
@@ -32,7 +37,7 @@ function parseProcessedAt(text) {
   });
 }
 
-function parseDeleteBody(text, expectedTarget) {
+function parseDeleteBody(text, expectedTarget, confirmationContext) {
   const body = String(text || "")
     .replace(/Ã¶/gu, "ö")
     .replace(/Ã–/gu, "Ö");
@@ -46,7 +51,6 @@ function parseDeleteBody(text, expectedTarget) {
   const errorOrWarningLines = body.match(/^\s*-?\s*(?:Fehler|Warnung)\s*:.+$/gimu) || [];
   if (errorOrWarningLines.length) throw new Error("Der Löschbericht enthält einen Fehler- oder Warnstatus.");
   const exchangeMatches = [...body.matchAll(/Das Objekt\s+"(30460-\d{6})"\s+wurde aus der Börse\s+"([^"]+)"\s+gelöscht\./giu)];
-  if (!exchangeMatches.length) throw new Error("Der Löschbericht enthält keinen eindeutigen Börsen-Löschnachweis.");
   const allObjectNumbers = [...new Set(body.match(/30460-\d{6}/gu) || [])];
   const exchangeTargets = [...new Set(exchangeMatches.map((match) => match[1]))];
   const externalObjectNumber = okMatches[0][1];
@@ -54,14 +58,26 @@ function parseDeleteBody(text, expectedTarget) {
     externalObjectNumber !== expectedTarget
     || allObjectNumbers.length !== 1
     || allObjectNumbers[0] !== expectedTarget
-    || exchangeTargets.length !== 1
-    || exchangeTargets[0] !== expectedTarget
   ) {
     throw new Error("Der Löschbericht lässt sich nicht exklusiv der erwarteten alten Objektnummer zuordnen.");
   }
   if (senderSoftware !== IMMOPROFESSIONAL_IMPORT_REPORT_SENDER) throw new Error("Die Sendersoftware ist nicht freigegeben.");
   if (providerId !== IMMOPROFESSIONAL_IMPORT_REPORT_PROVIDER_ID) throw new Error("Die Anbieter-ID ist nicht freigegeben.");
   if (objectCount !== 1) throw new Error("Nur ein bestätigter Einzelobjekt-Delete darf verarbeitet werden.");
+  const nonExported = isValidatedRegression85NonExportedConfirmationContext(confirmationContext, expectedTarget);
+  if (exchangeMatches.length) {
+    if (exchangeTargets.length !== 1 || exchangeTargets[0] !== expectedTarget) {
+      throw new Error("Der Löschbericht lässt sich nicht exklusiv der erwarteten alten Objektnummer zuordnen.");
+    }
+    if (nonExported) {
+      throw new Error("Der Börsen-Löschnachweis widerspricht der persistierten Never-exported-Provenienz.");
+    }
+  } else if (!nonExported) {
+    throw new Error("Der Löschbericht enthält keinen eindeutigen Börsen-Löschnachweis.");
+  }
+  const confirmationType = nonExported
+    ? REGRESSION_85_NON_EXPORTED_CONFIRMATION_TYPE
+    : IMMOPROFESSIONAL_EXCHANGE_DELETE_CONFIRMATION_TYPE;
   return {
     providerProcessedAt: parseProcessedAt(body),
     senderSoftware,
@@ -71,6 +87,17 @@ function parseDeleteBody(text, expectedTarget) {
     deleteResult: "success",
     statusLine: "Erfolgreich gelöscht -",
     deletedFromExchanges: exchangeMatches.map((match) => String(match[2]).trim()),
+    confirmationType,
+    targetWasNeverPortalExported: nonExported,
+    confirmationEvidence: nonExported ? {
+      scopeHash: confirmationContext.scopeHash,
+      scopeEvidenceHash: confirmationContext.scopeEvidenceHash,
+      classificationFingerprint: confirmationContext.classificationFingerprint,
+      attestationHash: confirmationContext.attestationHash,
+      scopeItemId: confirmationContext.scopeItemId,
+      classificationEvidenceHash: confirmationContext.classificationEvidenceHash,
+      portalStatuses: confirmationContext.portalStatuses,
+    } : null,
     errors: [],
     warnings: [],
   };
@@ -83,7 +110,7 @@ export function parseImmoprofessionalDeleteReport(rawValue, options = {}) {
   }
   const envelope = extractImmoprofessionalReportEnvelope(rawValue, options);
   if (!envelope.messageId) throw new Error("Der Löschbericht besitzt keine eindeutige Message-ID.");
-  const fields = parseDeleteBody(envelope.bodyText, expectedTarget);
+  const fields = parseDeleteBody(envelope.bodyText, expectedTarget, options.confirmationContext);
   return {
     ...fields,
     subject: envelope.subject,

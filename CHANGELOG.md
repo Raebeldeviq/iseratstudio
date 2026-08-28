@@ -1,5 +1,56 @@
 # Änderungsprotokoll
 
+## Unreleased · Never-exported DELETE-Bestätigungsvertrag – 28. August 2026
+
+### Report
+
+- Den Production-DELETE-Parser um den getrennten Bestätigungstyp
+  `provider_object_delete_confirmed_non_exported` ergänzt. Der normale
+  Börsen-Löschnachweis bleibt für alle regulären portalexportierten Objekte
+  weiterhin verpflichtend.
+- Eine atomare und unveränderliche 85er-Attestation eingeführt. Sie bindet den
+  festen Scope-, Evidence- und Klassifikations-Fingerprint an exakt 85
+  Portalstatussätze mit dreimal `not_transferred` sowie an den Negativabgleich
+  gegen Portaljob-Ledger und Portalprotokoll.
+- Die Portalprovenienz wird auch nach Erstellung der Attestation bei jeder
+  Berichtbestätigung erneut geprüft. Jede spätere Scope-Referenz, jeder
+  unbekannte Portalstatus und jede Hash-/Job-/A→B-Abweichung blockiert
+  fail-closed.
+- DELETE-Ledger, gelöschtes Listing und Katalogbericht speichern den echten
+  Bestätigungstyp und den Attestation-Hash getrennt vom normalen
+  Börsenlöschpfad.
+- Einen einmaligen, FTPS-freien Maintainerpfad für den bereits übertragenen
+  DELETE `30460-423286 → 30460-755080` ergänzt. Er verlangt pausierte Kampagne,
+  alle produktiven Modi `off`, exakt einen bestehenden Pending-Job sowie einen
+  aktuellen read-only Presence-Nachweis und kann die übrigen 84 Vorgänge nicht
+  starten.
+- Tests A–H für reguläre Börsenlöschung, fehlenden Börsennachweis,
+  Never-exported-Erfolg, unbekannte/übertragene Portalzustände, falsche
+  Objektnummer, falschen Fingerprint sowie Providerfehler/-warnungen ergänzt.
+  Restart- und Deduplizierungstests bestätigen zusätzlich null zweite
+  Übertragung.
+
+### Begründung
+
+Der reale Providerbericht bestätigt die objektbezogene Löschung eindeutig,
+enthält für das nachweislich nie exportierte Rogue-B aber keinen Börsenabschnitt.
+Die historischen Vergleichsberichte portalexportierter Objekte enthalten
+dagegen dieselbe positive Objektzeile plus vier Börsenzeilen. Die getrennten
+Verträge bilden diese reale Semantik ab, ohne die allgemeine
+DELETE-Sicherheitsprüfung zu lockern.
+
+### Hürden und Risiken
+
+- Ein bloßes Flag `targetWasNeverPortalExported` genügt ausdrücklich nicht.
+  Nur ein vom Resolver erzeugter, zur Laufzeit validierter Kontext wird vom
+  Parser akzeptiert.
+- Eine beschädigte, fehlende oder abweichende Attestation sowie jede neue
+  Portalprovenienz blockiert. Es gibt keinen Fallback auf die positive
+  Objektzeile allein.
+- Der Maintainerpfad führt keinen zweiten DELETE aus. Ein partieller interner
+  Abschluss ist über Ledger-, Katalog- und Kampagnenpersistenz idempotent
+  fortsetzbar; externe Mutationen bleiben ausgeschlossen.
+
 ## Unreleased · Rollback-Aktivierungs-Gate – 28. August 2026
 
 ### Report
