@@ -814,6 +814,40 @@ test("classifies all exact published A→B pairs as rollback eligible and persis
   );
 });
 
+test("activation accepts an exact 85-item rollback campaign without synthetic Creative candidates", async () => {
+  const fixture = buildPublishedClassificationFixture();
+  const classifications = fixture.scope.items.map(() => REGRESSION_85_CLASSIFICATIONS.ROLLBACK_ELIGIBLE);
+  const directory = await mkdtemp(join(tmpdir(), "regression-85-rollback-activation-"));
+  const campaignStore = createRegression85CampaignStore(join(directory, "campaign.json"));
+  await campaignStore.initialize(fixture.scope, fixture.scopeHash, fixture.scopeEvidenceHash, { now: NOW });
+  await campaignStore.update(() => campaignFor(fixture, classifications), { now: NOW });
+  const runtimeCommit = "a".repeat(40);
+
+  const result = await runRegression85RepairCli(["activate"], {
+    campaignStore,
+    catalogStore: { async load() { return { stored: true, state: fixture.state }; } },
+    rotationModeStore: { async load() { return { valid: true, mode: "off" }; } },
+    portalModeReader: async () => ({ valid: true, mode: "off" }),
+    deleteModeStore: { async load() { return { valid: true, mode: "active" }; } },
+    productionPolicyStore: {
+      async load() { return { valid: true, expectedRuntimeCommit: runtimeCommit }; },
+    },
+    deleteLedger: { async read() { return fixture.deleteLedger; } },
+    loadRuntimeProvenance: async () => ({
+      valid: true,
+      runtimeCommit,
+      runtimeRelease: "release-test",
+      sourceTreeClean: true,
+    }),
+    now: () => NOW,
+  });
+
+  assert.equal(result.mode, "active");
+  assert.equal(result.previewSummary.candidateCount, 0);
+  assert.equal(result.previewSummary.distinctHouseCount, 0);
+  assert.equal((await campaignStore.load()).mode, "active");
+});
+
 test("operational gate accepts exactly 85 in-scope markers and blocks every foreign or incomplete marker set", () => {
   const fixture = buildPublishedClassificationFixture();
   assert.equal(inspectRegression85OperationalGate(fixture.state, fixture.scope, { deleteLedger: fixture.deleteLedger }).allowed, true);

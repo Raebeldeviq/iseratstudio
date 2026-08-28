@@ -166,8 +166,10 @@ export async function runRegression85RepairCli(argv, options = {}) {
     const provenance = await (options.loadRuntimeProvenance || loadHelperRuntimeProvenance)();
     assertProductionRuntime(provenance, policy);
     const preview = previewRegression85Repair(snapshot.state, campaign, { now: now() });
+    const classifiedPreviewCount = preview.rollback.length + preview.replacements.length + preview.ambiguous.length;
     if (
-      preview.summary.candidateCount !== REGRESSION_85_EXPECTED_COUNT
+      classifiedPreviewCount !== REGRESSION_85_EXPECTED_COUNT
+      || preview.summary.candidateCount !== preview.replacements.length
       || (preview.replacements.length > 1 && preview.summary.distinctHouseCount < 2)
       || (preview.replacements.length > 0 && preview.summary.mostFrequentHouse?.count >= 80)
     ) throw new Error("Die 85er-Creative-Preview erfüllt die Mindestvariation nicht.");

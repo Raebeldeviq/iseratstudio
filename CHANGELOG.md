@@ -1,5 +1,38 @@
 # Änderungsprotokoll
 
+## Unreleased · Rollback-Aktivierungs-Gate – 28. August 2026
+
+### Report
+
+- Das Aktivierungs-Gate der exakten 85er-Reparatur zählt weiterhin alle 85
+  klassifizierten Scope-Einträge, prüft die Creative-Mindestvariation jedoch
+  nur noch gegen die tatsächlich als `REPLACEMENT_REQUIRED` klassifizierten
+  Vorgänge.
+- Eine vollständig rollbackfähige Kampagne mit 85 × `ROLLBACK_ELIGIBLE` und
+  null Creative-Kandidaten wird dadurch nicht mehr fälschlich vor der ersten
+  Mutation abgewiesen.
+- Einen Integrationstest für die CLI-Aktivierung der reinen Rollbackkampagne
+  ergänzt. Er bestätigt 85 Scope-Einträge, null Creative-Kandidaten und den
+  kontrollierten Übergang von `off` nach `active`.
+
+### Begründung
+
+`candidateCount` beschreibt ausschließlich neu zu erzeugende C-Replacements.
+Bei einem sicheren A-behalten/B-löschen-Rollback ist dieser Wert fachlich null.
+Die bisherige Gleichsetzung mit der Gesamtzahl 85 vermischte Scope-Vollständigkeit
+und Creative-Planung und blockierte deshalb den korrekten Minimalrepair.
+
+### Hürden und Risiken
+
+- Die Scope-Vollständigkeit bleibt separat auf exakt 85 gebunden; eine kleinere
+  oder beschädigte Klassifikation wird weiterhin fail-closed abgewiesen.
+- Creative-Diversitätsregeln bleiben für jeden echten Replacementfall aktiv.
+  Der Fix lockert weder Runtime-Ownership noch Marker-, DELETE-, Lease-, CAS-
+  oder Serialisierungsprüfungen.
+- Vor einer neuen produktiven Runtime sind vollständige Tests, Build und eine
+  erneute explizite Deploymentfreigabe erforderlich. Bis dahin bleiben
+  Kampagne und Production-DELETE auf `off`.
+
 ## Unreleased · Klassifizierter 85er-Rollback/Replacement-Repair – 26. August 2026
 
 ### Report

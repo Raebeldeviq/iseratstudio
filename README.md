@@ -332,6 +332,13 @@ außerhalb des aktuell seriell bearbeiteten Allowlist-Eintrags. Die alten 85
 werden als exakte Portal-Exclusion bereitgestellt; neue korrekte Nachfolger
 werden dadurch nicht dauerhaft ausgeschlossen.
 
+Die Aktivierungsprüfung zählt dabei stets alle 85 klassifizierten Vorgänge,
+wendet die Creative-Mindestvariation aber ausschließlich auf
+`REPLACEMENT_REQUIRED` an. Eine reine 85er-`ROLLBACK_ELIGIBLE`-Kampagne besitzt
+deshalb erwartungsgemäß null Creative-Kandidaten und darf ohne künstliche
+CreativeSelection aktiviert werden. Scope-, Runtime-, Marker-, DELETE- und
+Serialisierungs-Gates bleiben davon unverändert verpflichtend.
+
 ### Produktive Runtime-Ownership
 
 Commit-Provenienz allein reicht für produktive Mutationen nicht aus. Vor
