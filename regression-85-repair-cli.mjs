@@ -14,6 +14,7 @@ import {
   createRegression85CampaignStore,
   deriveRegression85Scope,
   REGRESSION_85_EXPECTED_COUNT,
+  REGRESSION_85_REPAIR_STAGES,
 } from "./regression-85-repair-scope.mjs";
 import { previewRegression85Repair } from "./regression-85-repair-service.mjs";
 import { createUploadJobLedger } from "./upload-job-ledger.mjs";
@@ -22,6 +23,10 @@ import {
   classifyRegression85Scope,
   inspectRegression85OperationalGate,
 } from "./regression-85-classification.mjs";
+import {
+  REGRESSION_85_NON_EXPORTED_CONFIRMATION_CONTRACT,
+  regression85ClassificationFingerprint,
+} from "./regression-85-non-exported-delete-confirmation.mjs";
 
 const CAMPAIGN_PATH = join(APPLICATION_DATA_DIRECTORY, "regression-85-repair.json");
 const UPLOAD_LOG_PATH = join(APPLICATION_DATA_DIRECTORY, "upload.log");
@@ -31,6 +36,10 @@ const ROTATION_MODE_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-rotation-mo
 const PORTAL_MODE_PATH = join(APPLICATION_DATA_DIRECTORY, "immoprofessional-portal-export-mode.json");
 const DELETE_MODE_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-rotation-production-delete-mode.json");
 const PRODUCTION_POLICY_PATH = join(APPLICATION_DATA_DIRECTORY, "listing-rotation-production-policy.json");
+
+function clean(value, maximum = 500) {
+  return String(value ?? "").trim().slice(0, maximum);
+}
 
 function parseArguments(argv) {
   const [command = "status", ...rest] = argv;
@@ -139,13 +148,14 @@ export async function runRegression85RepairCli(argv, options = {}) {
   }
 
   if (args.command === "activate") {
-    const [snapshot, rotationMode, portalMode, deleteMode, policy, deletes] = await Promise.all([
+    const [snapshot, rotationMode, portalMode, deleteMode, policy, deletes, uploads] = await Promise.all([
       catalogStore.load(),
       rotationModeStore.load(),
       portalModeReader(),
       deleteModeStore.load(),
       productionPolicyStore.load(),
       deleteLedger.read(),
+      uploadLedger.read(),
     ]);
     if (rotationMode.mode !== "off") throw new Error("Die normale Rotation muss vor Aktivierung off sein.");
     if (portalMode.mode !== "off" || portalMode.valid !== true) throw new Error("Der Portalexport muss vor Aktivierung eindeutig off sein.");
@@ -158,13 +168,35 @@ export async function runRegression85RepairCli(argv, options = {}) {
     ].includes(job.status));
     if (openDeletes.length) throw new Error("Vor Aktivierung muss jede bereits begonnene DELETE-Kette eindeutig abgeschlossen sein.");
     if (campaign.classificationSummary?.total !== REGRESSION_85_EXPECTED_COUNT) throw new Error("Vor Aktivierung muss die vollständige persistierte 85er-Klassifikation vorliegen.");
+    const classificationFingerprint = regression85ClassificationFingerprint(campaign);
+    const expectedClassificationFingerprint = clean(
+      options.expectedClassificationFingerprint || REGRESSION_85_NON_EXPORTED_CONFIRMATION_CONTRACT.classificationFingerprint,
+      64,
+    ).toLowerCase();
+    if (classificationFingerprint !== expectedClassificationFingerprint) {
+      throw new Error("Der persistierte Classification-Fingerprint stimmt nicht mit dem freigegebenen 85er-Vertrag überein.");
+    }
     const operationalGate = inspectRegression85OperationalGate(snapshot.state, campaign.scope, {
       deleteLedger: deletes,
+      uploadLedger: uploads,
       classifications: campaign.progress,
     });
     if (!operationalGate.allowed) throw new Error(`Das 85er-Operational-Gate ist blockiert: ${operationalGate.reasons.join(", ")}.`);
     const provenance = await (options.loadRuntimeProvenance || loadHelperRuntimeProvenance)();
     assertProductionRuntime(provenance, policy);
+    const completedCount = campaign.progress.filter((item) => item.stage === REGRESSION_85_REPAIR_STAGES.REPAIR_COMPLETED).length;
+    if (completedCount === REGRESSION_85_EXPECTED_COUNT) {
+      const completedAt = now();
+      const completed = await campaignStore.update((current) => ({
+        ...current,
+        mode: "completed",
+        activeScopeItemId: "",
+        completedAt: current.completedAt || completedAt,
+        lastErrorCode: "",
+        lastError: "",
+      }), { now: completedAt });
+      return { ...summary(completed), alreadyCompleted: true, nextScopeItemId: null };
+    }
     const preview = previewRegression85Repair(snapshot.state, campaign, { now: now() });
     const classifiedPreviewCount = preview.rollback.length + preview.replacements.length + preview.ambiguous.length;
     if (
@@ -189,7 +221,11 @@ export async function runRegression85RepairCli(argv, options = {}) {
         foreignOpenDeleteJobCount: operationalGate.foreignOpenDeleteJobCount,
       },
     }), { now: updatedAt });
-    return { ...summary(active), previewSummary: preview.summary };
+    const nextScopeItemId = active.progress.find((item) => !new Set([
+      REGRESSION_85_REPAIR_STAGES.REPAIR_COMPLETED,
+      REGRESSION_85_REPAIR_STAGES.AMBIGUOUS_BLOCKED,
+    ]).has(item.stage))?.scopeItemId || null;
+    return { ...summary(active), previewSummary: preview.summary, classificationFingerprint, nextScopeItemId };
   }
 
   const updatedAt = now();

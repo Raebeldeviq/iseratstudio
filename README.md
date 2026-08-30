@@ -295,11 +295,22 @@ Transfer ist keine Löschbestätigung. Deterministische Jobs, Campaign-Claim,
 Scheduler-Lease und der bestehende DELETE-Guard verhindern doppelte Uploads
 und Löschungen nach Neustarts.
 
-Das Operational Gate akzeptiert die 85 bekannten `externalDeletionPending`-
-Marker ausschließlich auf den 85 ursprünglichen A-Listings. Ein einziger
-fremder Marker, eine fehlende Source oder ein fremder offener DELETE-Job
-blockiert. Bei belegten `REPLACEMENT_REQUIRED`-Fällen darf statt des Markers
-nur die exakt bestätigte gelöschte A-Source stehen. Portalexport und normale
+Das Operational Gate verlangt weiterhin exakt 85 gültige Scope-Einträge. Vor
+der ersten Reparatur sind dies die 85 bekannten `externalDeletionPending`-
+Marker ausschließlich auf den ursprünglichen A-Listings. Bei einer
+Wiederaufnahme gilt streng:
+
+`gültige Scope-Einträge = aktive Reparatureinträge + vollständig bestätigte Abschlüsse`
+
+Ein abgeschlossener Rollback ersetzt seinen früheren Marker dabei nur, wenn A
+`published`, markerfrei und konsistenter Scheduler-Owner ist, B eindeutig
+`deleted` ist und genau ein terminaler DELETE-Job samt exakt zugeordnetem
+positivem Löschbericht vorliegt. Paarbezogene Claims, Leases, aktive Uploadjobs,
+doppelte DELETE-Jobs oder eine abweichende A→B-Zuordnung blockieren. Ein bloß
+fehlender Marker wird niemals akzeptiert. Bei belegten
+`REPLACEMENT_REQUIRED`-Fällen darf statt des Markers weiterhin nur die exakt
+bestätigte gelöschte A-Source stehen. Ein einziger fremder Marker, eine fehlende
+Source oder ein fremder offener DELETE-Job blockiert. Portalexport und normale
 Rotation bleiben während der Kampagne `off`.
 
 Die Creative-Planung läuft ausschließlich für `REPLACEMENT_REQUIRED`. Sie setzt
@@ -326,7 +337,13 @@ node regression-85-repair-cli.mjs off
 `activate` verlangt normale Rotation und Portalexport eindeutig `off`,
 Production-DELETE eindeutig `active`, eine passende Produktionsruntime, einen
 vollständigen 85er-Klassifikations- und Repairpreview sowie null fremde Marker
-und offene DELETE-Jobs. Während einer aktiven
+und offene DELETE-Jobs. Scope-Hash, Scope-Evidence-Hash und
+Classification-Fingerprint müssen weiterhin exakt dem freigegebenen Vertrag
+entsprechen. Ein Resume bei `1/85` behält den abgeschlossenen Eintrag
+unverändert bei und wählt ausschließlich den nächsten noch offenen
+Scope-Eintrag. Wiederholte Starts sind idempotent. Bei bereits vollständigen
+`85/85` setzt die CLI die Kampagne terminal auf `completed`, ohne einen neuen
+DELETE-Lifecycle zu beginnen. Während einer aktiven
 oder pausierten Kampagne blockiert der DELETE-Mutationsguard jede Kette
 außerhalb des aktuell seriell bearbeiteten Allowlist-Eintrags. Die alten 85
 werden als exakte Portal-Exclusion bereitgestellt; neue korrekte Nachfolger

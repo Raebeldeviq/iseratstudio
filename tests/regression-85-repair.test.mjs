@@ -38,6 +38,7 @@ import {
   classifyRegression85Scope,
   inspectRegression85OperationalGate,
 } from "../regression-85-classification.mjs";
+import { regression85ClassificationFingerprint } from "../regression-85-non-exported-delete-confirmation.mjs";
 import { runRegression85RepairCli } from "../regression-85-repair-cli.mjs";
 import {
   createRegression85DeleteMutationGuard,
@@ -296,6 +297,148 @@ function campaignFor(fixture, classifications = fixture.scope.items.map(() => RE
       counts: Object.fromEntries(Object.values(REGRESSION_85_CLASSIFICATIONS).map((value) => [value, classifications.filter((item) => item === value).length])),
     },
     progress,
+  };
+}
+
+function completeRollbackEntries(fixture, count) {
+  const state = structuredClone(fixture.state);
+  const classifications = fixture.scope.items.map(() => REGRESSION_85_CLASSIFICATIONS.ROLLBACK_ELIGIBLE);
+  const campaign = campaignFor(fixture, classifications);
+  campaign.mode = "paused";
+  const deleteLedger = { format: 1, jobs: [] };
+  state.deleteReports = [];
+  for (let index = 0; index < count; index += 1) {
+    const scopeItem = fixture.scope.items[index];
+    const progress = campaign.progress[index];
+    const project = state.projects.find((candidate) => candidate.id === scopeItem.projectId);
+    const source = project.listings.find((candidate) => candidate.id === scopeItem.originalSourceListingId);
+    const regression = project.listings.find((candidate) => candidate.id === scopeItem.regressionListingId);
+    const rawHash = String(index + 1).padStart(64, "d").slice(-64);
+    const deleteJobId = `production-delete:${String(index + 1).padStart(64, "e").slice(-64)}`;
+    const deleteReportId = `delete-report-${rawHash.slice(0, 32)}`;
+    const messageId = `<resume-delete-${index + 1}@example.invalid>`;
+    const confirmationType = IMMOPROFESSIONAL_EXCHANGE_DELETE_CONFIRMATION_TYPE;
+    Object.assign(source, {
+      status: WORKFLOW_STATUS.PUBLISHED,
+      statusMessage: `Rollback abgeschlossen ${source.externalId}`,
+      externalDeletionPending: false,
+      productionDeleteState: "",
+      supersededByListingId: "",
+    });
+    Object.assign(regression, {
+      status: WORKFLOW_STATUS.DELETED,
+      statusMessage: `Extern gelöscht ${regression.externalId}`,
+      externalDeletionPending: false,
+      productionDeleteState: "confirmed",
+      deleteJobId,
+      deleteReportHash: rawHash,
+      deleteReportMessageId: messageId,
+      deleteConfirmationType: confirmationType,
+    });
+    let group = normalizeListingGroup(project.listingGroup, project.id, { now: NOW });
+    const variant = group.variants.find((candidate) => candidate.listing?.id === regression.id);
+    const sourceHouse = state.houses.find((candidate) => candidate.id === source.templateId);
+    group = assignListingGroupVariant(group, variant.id, sourceHouse, source, { now: NOW });
+    const assignedSource = group.variants.find((candidate) => candidate.id === variant.id).listing;
+    Object.assign(source, assignedSource);
+    group = updateListingControl(group, source, {
+      automaticUpdateEnabled: true,
+      automaticDeletionEnabled: false,
+      status: WORKFLOW_STATUS.PUBLISHED,
+      statusMessage: source.statusMessage,
+      schedulerSelectionId: "",
+      schedulerSelectedAt: "",
+      pendingRotationListingId: "",
+      pendingRotationJobId: "",
+      processLease: null,
+      manualLock: false,
+    }, { now: NOW });
+    group = updateListingControl(group, regression, {
+      automaticUpdateEnabled: false,
+      automaticDeletionEnabled: false,
+      status: WORKFLOW_STATUS.DELETED,
+      statusMessage: regression.statusMessage,
+      schedulerSelectionId: "",
+      schedulerSelectedAt: "",
+      pendingRotationListingId: "",
+      pendingRotationJobId: "",
+      processLease: null,
+    }, { now: NOW });
+    project.listingGroup = group;
+    project.selectedHouseIds = group.variants.filter((candidate) => candidate.active && candidate.templateId).map((candidate) => candidate.templateId);
+    Object.assign(progress, {
+      stage: REGRESSION_85_REPAIR_STAGES.REPAIR_COMPLETED,
+      repairState: "repair_completed",
+      replacementListingId: source.id,
+      replacementExternalId: source.externalId,
+      deleteJobId,
+      deleteReportId,
+      completedAt: NOW,
+      updatedAt: NOW,
+    });
+    state.deleteReports.push({
+      reportId: deleteReportId,
+      deleteJobId,
+      sourceListingId: regression.id,
+      replacementListingId: source.id,
+      externalObjectNumber: regression.externalId,
+      messageId,
+      rawHash,
+      providerProcessedAt: NOW,
+      processedAt: NOW,
+      result: "success",
+      channel: "email",
+      confirmationType,
+    });
+    deleteLedger.jobs.push({
+      deleteJobId,
+      projectId: project.id,
+      sourceListingId: regression.id,
+      replacementListingId: source.id,
+      externalObjectNumber: regression.externalId,
+      replacementExternalObjectNumber: source.externalId,
+      status: PRODUCTION_DELETE_STATUS.CONFIRMED,
+      attempt: 1,
+      reportMessageId: messageId,
+      reportHash: rawHash,
+      providerProcessedAt: NOW,
+      confirmationType,
+      confirmedAt: NOW,
+    });
+  }
+  return { ...fixture, state, campaign, deleteLedger, uploadLedger: fixture.ledger };
+}
+
+function activationHarness(fixture, options = {}) {
+  let campaign = structuredClone(fixture.campaign);
+  const runtimeCommit = "a".repeat(40);
+  return {
+    options: {
+      campaignStore: {
+        async load() { return { ...campaign, valid: true }; },
+        async update(mutator) {
+          campaign = await mutator(campaign);
+          return { ...campaign, valid: true };
+        },
+      },
+      catalogStore: { async load() { return { stored: true, state: fixture.state }; } },
+      rotationModeStore: { async load() { return { valid: true, mode: "off" }; } },
+      portalModeReader: async () => ({ valid: true, mode: "off" }),
+      deleteModeStore: { async load() { return { valid: true, mode: "active" }; } },
+      productionPolicyStore: { async load() { return { valid: true, expectedRuntimeCommit: runtimeCommit }; } },
+      deleteLedger: { async read() { return fixture.deleteLedger; } },
+      uploadLedger: { async read() { return fixture.uploadLedger; } },
+      loadRuntimeProvenance: async () => ({
+        valid: true,
+        runtimeCommit,
+        runtimeRelease: "release-test",
+        sourceTreeClean: true,
+      }),
+      expectedClassificationFingerprint: options.expectedClassificationFingerprint
+        || regression85ClassificationFingerprint(fixture.campaign),
+      now: () => NOW,
+    },
+    campaign: () => campaign,
   };
 }
 
@@ -823,6 +966,7 @@ test("activation accepts an exact 85-item rollback campaign without synthetic Cr
   const campaignStore = createRegression85CampaignStore(join(directory, "campaign.json"));
   await campaignStore.initialize(fixture.scope, fixture.scopeHash, fixture.scopeEvidenceHash, { now: NOW });
   await campaignStore.update(() => campaignFor(fixture, classifications), { now: NOW });
+  const persistedCampaign = await campaignStore.load();
   const runtimeCommit = "a".repeat(40);
 
   const result = await runRegression85RepairCli(["activate"], {
@@ -835,12 +979,14 @@ test("activation accepts an exact 85-item rollback campaign without synthetic Cr
       async load() { return { valid: true, expectedRuntimeCommit: runtimeCommit }; },
     },
     deleteLedger: { async read() { return fixture.deleteLedger; } },
+    uploadLedger: { async read() { return fixture.ledger; } },
     loadRuntimeProvenance: async () => ({
       valid: true,
       runtimeCommit,
       runtimeRelease: "release-test",
       sourceTreeClean: true,
     }),
+    expectedClassificationFingerprint: regression85ClassificationFingerprint(persistedCampaign),
     now: () => NOW,
   });
 
@@ -848,6 +994,169 @@ test("activation accepts an exact 85-item rollback campaign without synthetic Cr
   assert.equal(result.previewSummary.candidateCount, 0);
   assert.equal(result.previewSummary.distinctHouseCount, 0);
   assert.equal((await campaignStore.load()).mode, "active");
+});
+
+test("resume gate accepts strict completed rollback evidence at 1/85, 2/85 and 84/85", () => {
+  for (const completedCount of [1, 2, 84]) {
+    const fixture = completeRollbackEntries(buildPublishedClassificationFixture(), completedCount);
+    const result = inspectRegression85OperationalGate(fixture.state, fixture.scope, {
+      classifications: fixture.campaign.progress,
+      deleteLedger: fixture.deleteLedger,
+      uploadLedger: fixture.uploadLedger,
+    });
+    assert.equal(result.allowed, true, JSON.stringify(result.invalidCompletedRepairEntries));
+    assert.equal(result.activeRepairEntryCount, 85 - completedCount);
+    assert.equal(result.completedRepairEntryCount, completedCount);
+    assert.equal(result.validScopeEntryCount, 85);
+  }
+});
+
+test("resume activation keeps 1/85, selects only a pending item and is restart-idempotent", async () => {
+  const fixture = completeRollbackEntries(buildPublishedClassificationFixture(), 1);
+  const completed = fixture.campaign.progress[0];
+  const expectedNext = fixture.campaign.progress[1].scopeItemId;
+  const completedRegression = fixture.state.projects
+    .flatMap((project) => project.listings)
+    .find((listingValue) => listingValue.id === fixture.scope.items[0].regressionListingId);
+  const before = structuredClone(completedRegression);
+  const harness = activationHarness(fixture);
+  const first = await runRegression85RepairCli(["activate"], harness.options);
+  const second = await runRegression85RepairCli(["activate"], harness.options);
+  assert.equal(first.mode, "active");
+  assert.equal(first.completed, 1);
+  assert.equal(first.pending, 84);
+  assert.equal(first.nextScopeItemId, expectedNext);
+  assert.equal(second.nextScopeItemId, expectedNext);
+  assert.equal(harness.campaign().progress[0].scopeItemId, completed.scopeItemId);
+  assert.equal(harness.campaign().progress[0].stage, REGRESSION_85_REPAIR_STAGES.REPAIR_COMPLETED);
+  assert.deepEqual(completedRegression, before);
+  assert.equal(fixture.deleteLedger.jobs.length, 1);
+});
+
+test("resume activation recognizes 85/85 as terminal and starts no new lifecycle", async () => {
+  const fixture = completeRollbackEntries(buildPublishedClassificationFixture(), 85);
+  const harness = activationHarness(fixture);
+  const result = await runRegression85RepairCli(["activate"], harness.options);
+  assert.equal(result.mode, "completed");
+  assert.equal(result.completed, 85);
+  assert.equal(result.pending, 0);
+  assert.equal(result.alreadyCompleted, true);
+  assert.equal(result.nextScopeItemId, null);
+  assert.equal(harness.campaign().activeScopeItemId, "");
+  assert.equal(fixture.deleteLedger.jobs.length, 85);
+});
+
+test("resume gate blocks every incomplete or contradictory completed rollback", () => {
+  const missingMarker = completeRollbackEntries(buildPublishedClassificationFixture(), 0);
+  const firstScope = missingMarker.scope.items[0];
+  const missingMarkerProject = missingMarker.state.projects.find((item) => item.id === firstScope.projectId);
+  missingMarkerProject.listings.find((item) => item.id === firstScope.originalSourceListingId).externalDeletionPending = false;
+  let result = inspectRegression85OperationalGate(missingMarker.state, missingMarker.scope, {
+    classifications: missingMarker.campaign.progress,
+    deleteLedger: missingMarker.deleteLedger,
+    uploadLedger: missingMarker.uploadLedger,
+  });
+  assert.equal(result.allowed, false);
+  assert.equal(result.validScopeEntryCount, 84);
+
+  const missingReport = completeRollbackEntries(buildPublishedClassificationFixture(), 1);
+  missingReport.state.deleteReports = [];
+  result = inspectRegression85OperationalGate(missingReport.state, missingReport.scope, {
+    classifications: missingReport.campaign.progress,
+    deleteLedger: missingReport.deleteLedger,
+    uploadLedger: missingReport.uploadLedger,
+  });
+  assert.equal(result.allowed, false);
+  assert.equal(result.invalidCompletedRepairEntryCount, 1);
+
+  const wrongRegression = completeRollbackEntries(buildPublishedClassificationFixture(), 1);
+  wrongRegression.state.deleteReports[0].sourceListingId = wrongRegression.scope.items[1].regressionListingId;
+  result = inspectRegression85OperationalGate(wrongRegression.state, wrongRegression.scope, {
+    classifications: wrongRegression.campaign.progress,
+    deleteLedger: wrongRegression.deleteLedger,
+    uploadLedger: wrongRegression.uploadLedger,
+  });
+  assert.equal(result.allowed, false);
+  assert.equal(result.invalidCompletedRepairEntryCount, 1);
+
+  const foreignMarker = completeRollbackEntries(buildPublishedClassificationFixture(), 1);
+  foreignMarker.state.projects[0].listings.push({
+    ...foreignMarker.state.projects[0].listings.at(-1),
+    id: "foreign-resume-marker",
+    externalId: "30460-999996",
+    externalDeletionPending: true,
+  });
+  result = inspectRegression85OperationalGate(foreignMarker.state, foreignMarker.scope, {
+    classifications: foreignMarker.campaign.progress,
+    deleteLedger: foreignMarker.deleteLedger,
+    uploadLedger: foreignMarker.uploadLedger,
+  });
+  assert.equal(result.allowed, false);
+  assert.equal(result.foreignMarkerCount, 1);
+});
+
+test("resume gate blocks inconsistent scheduler ownership, active pair jobs and duplicate DELETE evidence", () => {
+  const ownership = completeRollbackEntries(buildPublishedClassificationFixture(), 1);
+  const scopeItem = ownership.scope.items[0];
+  const project = ownership.state.projects.find((item) => item.id === scopeItem.projectId);
+  const source = project.listings.find((item) => item.id === scopeItem.originalSourceListingId);
+  project.listingGroup = updateListingControl(project.listingGroup, source, {
+    automaticUpdateEnabled: false,
+  }, { now: NOW });
+  let result = inspectRegression85OperationalGate(ownership.state, ownership.scope, {
+    classifications: ownership.campaign.progress,
+    deleteLedger: ownership.deleteLedger,
+    uploadLedger: ownership.uploadLedger,
+  });
+  assert.equal(result.allowed, false);
+  assert.equal(result.invalidCompletedRepairEntries[0].reasons.includes("completed_source_scheduler_ownership_invalid"), true);
+
+  const activeUpload = completeRollbackEntries(buildPublishedClassificationFixture(), 1);
+  activeUpload.uploadLedger.jobs.push({
+    jobId: "active-resume-upload",
+    projectId: activeUpload.scope.items[0].projectId,
+    listingId: activeUpload.scope.items[0].regressionListingId,
+    status: WORKFLOW_STATUS.PROCESSING,
+  });
+  result = inspectRegression85OperationalGate(activeUpload.state, activeUpload.scope, {
+    classifications: activeUpload.campaign.progress,
+    deleteLedger: activeUpload.deleteLedger,
+    uploadLedger: activeUpload.uploadLedger,
+  });
+  assert.equal(result.allowed, false);
+  assert.equal(result.invalidCompletedRepairEntries[0].reasons.includes("completed_pair_upload_job_open"), true);
+
+  const duplicateDelete = completeRollbackEntries(buildPublishedClassificationFixture(), 1);
+  duplicateDelete.deleteLedger.jobs.push({
+    ...duplicateDelete.deleteLedger.jobs[0],
+    deleteJobId: `production-delete:${"f".repeat(64)}`,
+  });
+  result = inspectRegression85OperationalGate(duplicateDelete.state, duplicateDelete.scope, {
+    classifications: duplicateDelete.campaign.progress,
+    deleteLedger: duplicateDelete.deleteLedger,
+    uploadLedger: duplicateDelete.uploadLedger,
+  });
+  assert.equal(result.allowed, false);
+  assert.equal(result.invalidCompletedRepairEntries[0].reasons.includes("completed_delete_job_evidence_invalid"), true);
+});
+
+test("resume activation blocks divergent scope, evidence and classification fingerprints", async () => {
+  const fixture = completeRollbackEntries(buildPublishedClassificationFixture(), 1);
+  const approvedFingerprint = regression85ClassificationFingerprint(fixture.campaign);
+  for (const mutation of [
+    (campaign) => { campaign.scopeHash = "f".repeat(64); },
+    (campaign) => { campaign.scopeEvidenceHash = "f".repeat(64); },
+  ]) {
+    const changed = structuredClone(fixture);
+    mutation(changed.campaign);
+    const harness = activationHarness(changed, { expectedClassificationFingerprint: approvedFingerprint });
+    await assert.rejects(() => runRegression85RepairCli(["activate"], harness.options));
+  }
+  const harness = activationHarness(fixture, { expectedClassificationFingerprint: "f".repeat(64) });
+  await assert.rejects(
+    () => runRegression85RepairCli(["activate"], harness.options),
+    /Classification-Fingerprint/u,
+  );
 });
 
 test("operational gate accepts exactly 85 in-scope markers and blocks every foreign or incomplete marker set", () => {

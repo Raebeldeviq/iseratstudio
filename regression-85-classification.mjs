@@ -20,6 +20,11 @@ const OPEN_DELETE_STATUSES = new Set([
   PRODUCTION_DELETE_STATUS.PENDING_CONFIRMATION,
   PRODUCTION_DELETE_STATUS.TRANSFER_UNCERTAIN,
 ]);
+const ACTIVE_UPLOAD_STATUSES = new Set([WORKFLOW_STATUS.PROCESSING]);
+const POSITIVE_DELETE_CONFIRMATION_TYPES = new Set([
+  "provider_object_and_exchange_delete_confirmed",
+  "provider_object_delete_confirmed_non_exported",
+]);
 
 function clean(value, maximum = 500) {
   return String(value ?? "").trim().slice(0, maximum);
@@ -160,6 +165,134 @@ function exactPositiveDeleteEvidence(state, source, deleteLedger) {
     relatedJobCount: jobs.length,
     openJobs: jobs.filter((candidate) => OPEN_DELETE_STATUSES.has(candidate.status)),
     valid,
+  };
+}
+
+function completedRollbackEvidence(state, index, scopeItem, progress, deleteLedger, uploadLedger) {
+  const reasons = [];
+  const sourceRow = index.get(scopeItem.originalSourceListingId);
+  const regressionRow = index.get(scopeItem.regressionListingId);
+  const source = sourceRow?.listing;
+  const regression = regressionRow?.listing;
+  if (!sourceRow || sourceRow.project.id !== scopeItem.projectId) reasons.push("completed_source_relation_missing");
+  if (!regressionRow || regressionRow.project.id !== scopeItem.projectId) reasons.push("completed_regression_relation_missing");
+  if (
+    progress?.scopeItemId !== scopeItem.scopeItemId
+    || progress?.classification !== REGRESSION_85_CLASSIFICATIONS.ROLLBACK_ELIGIBLE
+    || progress?.repairStrategy !== REGRESSION_85_REPAIR_STRATEGIES.ROLLBACK
+    || progress?.stage !== REGRESSION_85_REPAIR_STAGES.REPAIR_COMPLETED
+    || progress?.repairState !== "repair_completed"
+    || !iso(progress?.completedAt)
+  ) reasons.push("completed_progress_contract_invalid");
+  if (
+    !source
+    || source.status !== WORKFLOW_STATUS.PUBLISHED
+    || source.externalDeletionPending !== false
+    || progress?.replacementListingId !== source.id
+    || progress?.replacementExternalId !== source.externalId
+  ) reasons.push("completed_source_state_invalid");
+  if (
+    !regression
+    || regression.status !== WORKFLOW_STATUS.DELETED
+    || regression.externalDeletionPending !== false
+    || regression.productionDeleteState !== "confirmed"
+    || regression.rotationSourceListingId !== source?.id
+    || regression.externalId !== scopeItem.regressionExternalId
+  ) reasons.push("completed_regression_state_invalid");
+
+  if (sourceRow && source && regression) {
+    const group = normalizeListingGroup(sourceRow.project.listingGroup, sourceRow.project.id);
+    const sourceControl = listingControl(group, source);
+    const regressionControl = listingControl(group, regression);
+    const sourceOwnsVariant = group.variants.some((variant) => variant.active && variant.listing?.id === source.id);
+    if (
+      !sourceOwnsVariant
+      || sourceControl.status !== WORKFLOW_STATUS.PUBLISHED
+      || sourceControl.automaticUpdateEnabled !== true
+      || sourceControl.automaticDeletionEnabled !== false
+      || sourceControl.processLease
+      || sourceControl.schedulerSelectionId
+      || sourceControl.schedulerSelectedAt
+      || sourceControl.pendingRotationListingId
+      || sourceControl.pendingRotationJobId
+      || sourceControl.manualLock
+    ) reasons.push("completed_source_scheduler_ownership_invalid");
+    if (
+      regressionControl.status !== WORKFLOW_STATUS.DELETED
+      || regressionControl.automaticUpdateEnabled !== false
+      || regressionControl.automaticDeletionEnabled !== false
+      || regressionControl.processLease
+      || regressionControl.schedulerSelectionId
+      || regressionControl.schedulerSelectedAt
+      || regressionControl.pendingRotationListingId
+      || regressionControl.pendingRotationJobId
+    ) reasons.push("completed_regression_scheduler_state_invalid");
+  }
+
+  const relatedDeleteJobs = (deleteLedger?.jobs || []).filter((job) =>
+    job?.sourceListingId === scopeItem.regressionListingId
+    || job?.externalObjectNumber === scopeItem.regressionExternalId);
+  const confirmedJobs = relatedDeleteJobs.filter((job) => job?.status === PRODUCTION_DELETE_STATUS.CONFIRMED);
+  const openDeleteJobs = relatedDeleteJobs.filter((job) => OPEN_DELETE_STATUSES.has(job?.status));
+  const job = relatedDeleteJobs.length === 1 && confirmedJobs.length === 1 ? confirmedJobs[0] : null;
+  if (
+    !job
+    || openDeleteJobs.length
+    || job.projectId !== scopeItem.projectId
+    || job.sourceListingId !== scopeItem.regressionListingId
+    || job.replacementListingId !== scopeItem.originalSourceListingId
+    || job.externalObjectNumber !== scopeItem.regressionExternalId
+    || job.replacementExternalObjectNumber !== source?.externalId
+    || job.deleteJobId !== regression?.deleteJobId
+    || job.deleteJobId !== progress?.deleteJobId
+    || Number(job.attempt) !== 1
+    || job.claimToken
+  ) reasons.push("completed_delete_job_evidence_invalid");
+
+  const reports = (state?.deleteReports || []).filter((report) =>
+    report?.sourceListingId === scopeItem.regressionListingId
+    || report?.externalObjectNumber === scopeItem.regressionExternalId);
+  const report = reports.length === 1 ? reports[0] : null;
+  const confirmationType = clean(report?.confirmationType || job?.confirmationType, 100);
+  if (
+    !report
+    || !POSITIVE_DELETE_CONFIRMATION_TYPES.has(confirmationType)
+    || report.result !== "success"
+    || report.channel !== "email"
+    || report.sourceListingId !== scopeItem.regressionListingId
+    || report.replacementListingId !== scopeItem.originalSourceListingId
+    || report.externalObjectNumber !== scopeItem.regressionExternalId
+    || report.reportId !== progress?.deleteReportId
+    || report.deleteJobId !== progress?.deleteJobId
+    || report.rawHash !== regression?.deleteReportHash
+    || report.rawHash !== job?.reportHash
+    || report.messageId !== regression?.deleteReportMessageId
+    || report.messageId !== job?.reportMessageId
+    || confirmationType !== clean(job?.confirmationType, 100)
+    || confirmationType !== clean(regression?.deleteConfirmationType, 100)
+    || !iso(report.providerProcessedAt)
+    || !iso(job?.confirmedAt)
+  ) reasons.push("completed_delete_report_evidence_invalid");
+  if (confirmationType === "provider_object_delete_confirmed_non_exported" && (
+    report?.targetWasNeverPortalExported !== true
+    || !/^[a-f0-9]{64}$/u.test(clean(report?.confirmationEvidenceHash, 64))
+    || report.confirmationEvidenceHash !== job?.confirmationEvidenceHash
+    || report.confirmationEvidenceHash !== regression?.deleteConfirmationEvidenceHash
+    || !/^[a-f0-9]{64}$/u.test(clean(report?.externalPresenceEvidenceHash, 64))
+    || !iso(report?.externalPresenceObservedAt)
+  )) reasons.push("completed_non_exported_confirmation_invalid");
+
+  const activeUploadJobs = (uploadLedger?.jobs || []).filter((job) =>
+    job?.projectId === scopeItem.projectId
+    && new Set([scopeItem.originalSourceListingId, scopeItem.regressionListingId]).has(job?.listingId)
+    && ACTIVE_UPLOAD_STATUSES.has(job?.status));
+  if (activeUploadJobs.length) reasons.push("completed_pair_upload_job_open");
+  return {
+    valid: reasons.length === 0,
+    reasons,
+    scopeItemId: scopeItem.scopeItemId,
+    sourceListingId: scopeItem.originalSourceListingId,
+    regressionListingId: scopeItem.regressionListingId,
   };
 }
 
@@ -375,6 +508,7 @@ export function inspectRegression85OperationalGate(state, scope, options = {}) {
   }
   const originalIds = new Set(scope.items.map((item) => item.originalSourceListingId));
   const rows = (state?.projects || []).flatMap((project) => (project.listings || []).map((listing) => ({ project, listing })));
+  const index = new Map(rows.map((row) => [row.listing.id, row]));
   const markers = rows.filter(({ listing }) => listing.externalDeletionPending === true);
   const scopeMarkers = markers.filter(({ listing }) => originalIds.has(listing.id));
   const foreignMarkers = markers.filter(({ listing }) => !originalIds.has(listing.id));
@@ -382,18 +516,45 @@ export function inspectRegression85OperationalGate(state, scope, options = {}) {
   const missingMarkers = [...originalIds].filter((listingId) => !scopeMarkers.some(({ listing }) => listing.id === listingId));
   const classifications = Array.isArray(options.classifications) ? options.classifications : [];
   const classificationByScopeItemId = new Map(classifications.map((item) => [item.scopeItemId, item]));
+  const activeScopeMarkers = scope.items.filter((scopeItem) => {
+    const row = index.get(scopeItem.originalSourceListingId);
+    const progress = classificationByScopeItemId.get(scopeItem.scopeItemId);
+    return row?.listing.externalDeletionPending === true
+      && progress?.stage !== REGRESSION_85_REPAIR_STAGES.REPAIR_COMPLETED;
+  });
   const confirmedDeletedWithoutMarker = scope.items.filter((scopeItem) => {
-    const row = rows.find(({ listing }) => listing.id === scopeItem.originalSourceListingId);
+    const row = index.get(scopeItem.originalSourceListingId);
     const classification = classificationByScopeItemId.get(scopeItem.scopeItemId);
     return !row?.listing.externalDeletionPending
       && row?.listing.status === WORKFLOW_STATUS.DELETED
       && row?.listing.productionDeleteState === "confirmed"
       && classification?.classification === REGRESSION_85_CLASSIFICATIONS.REPLACEMENT_REQUIRED;
   });
+  const completedRollbackChecks = scope.items
+    .map((scopeItem) => ({
+      scopeItem,
+      progress: classificationByScopeItemId.get(scopeItem.scopeItemId),
+    }))
+    .filter(({ progress }) => progress?.stage === REGRESSION_85_REPAIR_STAGES.REPAIR_COMPLETED
+      && progress?.classification === REGRESSION_85_CLASSIFICATIONS.ROLLBACK_ELIGIBLE)
+    .map(({ scopeItem, progress }) => completedRollbackEvidence(
+      state,
+      index,
+      scopeItem,
+      progress,
+      options.deleteLedger,
+      options.uploadLedger,
+    ));
+  const completedRollbackEntries = completedRollbackChecks.filter((item) => item.valid);
+  const invalidCompletedRollbackEntries = completedRollbackChecks.filter((item) => !item.valid);
   const openDeleteJobs = (options.deleteLedger?.jobs || []).filter((job) => OPEN_DELETE_STATUSES.has(job.status));
   const foreignOpenDeleteJobs = openDeleteJobs.filter((job) => !originalIds.has(job.sourceListingId));
+  const validScopeEntryCount = activeScopeMarkers.length
+    + confirmedDeletedWithoutMarker.length
+    + completedRollbackEntries.length;
   const reasons = [];
-  if (scopeMarkers.length + confirmedDeletedWithoutMarker.length !== REGRESSION_85_EXPECTED_COUNT) reasons.push("scope_marker_or_confirmed_deleted_source_count_not_85");
+  if (validScopeEntryCount !== REGRESSION_85_EXPECTED_COUNT) reasons.push("active_or_completed_scope_entry_count_not_85");
+  if (invalidCompletedRollbackEntries.length) reasons.push("completed_rollback_evidence_invalid");
   if (foreignMarkers.length) reasons.push("foreign_external_deletion_markers_present");
   if (missingSourceIds.length) reasons.push("scope_sources_missing");
   if (foreignOpenDeleteJobs.length) reasons.push("foreign_open_delete_jobs_present");
@@ -401,6 +562,10 @@ export function inspectRegression85OperationalGate(state, scope, options = {}) {
     allowed: reasons.length === 0,
     reasons,
     scopeMarkerCount: scopeMarkers.length,
+    activeRepairEntryCount: activeScopeMarkers.length,
+    completedRepairEntryCount: completedRollbackEntries.length,
+    invalidCompletedRepairEntryCount: invalidCompletedRollbackEntries.length,
+    validScopeEntryCount,
     foreignMarkerCount: foreignMarkers.length,
     missingMarkerCount: missingMarkers.length,
     confirmedDeletedSourceCount: confirmedDeletedWithoutMarker.length,
@@ -409,6 +574,7 @@ export function inspectRegression85OperationalGate(state, scope, options = {}) {
     scopeListingIds: [...originalIds],
     foreignMarkerListingIds: foreignMarkers.map(({ listing }) => listing.id),
     missingSourceListingIds: missingSourceIds,
+    invalidCompletedRepairEntries: invalidCompletedRollbackEntries,
   };
 }
 

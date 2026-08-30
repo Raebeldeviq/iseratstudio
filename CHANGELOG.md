@@ -1,5 +1,47 @@
 # Änderungsprotokoll
 
+## Unreleased · 85er-Resume-Gate – 30. August 2026
+
+### Report
+
+- Das Operational Gate zählt den unveränderlichen 85er-Scope nun als Summe aus
+  noch aktiven Reparatureinträgen und vollständig evidenzgebunden
+  abgeschlossenen Rollbacks. Dadurch kann eine pausierte Kampagne nach einem
+  bestätigten Zwischenstand wie `1/85` sicher fortgesetzt werden.
+- Ein abgeschlossener Rollback wird nur anerkannt, wenn A weiterhin
+  `published` und alleiniger Scheduler-Owner ist, B eindeutig `deleted` ist
+  und genau ein terminaler DELETE-Job samt exakt zugeordnetem positivem
+  Löschbericht existiert. Offene Leases, Scheduler-Claims, Uploadjobs,
+  doppelte DELETE-Jobs oder widersprüchliche A→B-Daten blockieren.
+- Die CLI-Aktivierung bindet zusätzlich den unveränderten
+  Classification-Fingerprint an den freigegebenen 85er-Vertrag. Bei `85/85`
+  wird die Kampagne unmittelbar terminal `completed`; ein neuer Lifecycle wird
+  nicht mehr gestartet.
+- Regressionstests für `1/85`, `2/85`, `84/85`, `85/85`, mehrfachen Restart,
+  fehlenden Marker ohne Abschluss, fehlenden Löschbeleg, falsche B-Zuordnung,
+  Fremdmarker, abweichende Hashes, fehlerhafte Scheduler-Ownership, aktive
+  Uploadjobs und doppelte DELETE-Evidenz ergänzt.
+
+### Begründung
+
+Die Rollback-Finalisierung entfernt den historischen Marker von A absichtlich,
+nachdem B positiv bestätigt gelöscht und A als Scheduler-Owner wiederhergestellt
+wurde. Das bisherige Aktivierungs-Gate interpretierte genau diesen korrekten
+terminalen Zustand beim Resume fälschlich als Scope-Verlust. Die neue Prüfung
+akzeptiert nicht den fehlenden Marker selbst, sondern ausschließlich den
+vollständig belegten Abschlusszustand des unveränderten Scope-Eintrags.
+
+### Hürden und Risiken
+
+- Markerfreiheit allein bleibt ausdrücklich unzureichend. Fehlt nur ein
+  Bestandteil der Job-, Bericht-, A→B-, Scheduler- oder Hash-Provenienz, stoppt
+  das Gate fail-closed.
+- Bereits abgeschlossene Einträge werden weder zurückgesetzt noch erneut
+  ausgewählt. Die Änderung erzeugt keine Upload-, DELETE-, Creative- oder
+  Portalaktion und ändert keine persistierten Scope- oder Evidenz-Hashes.
+- Eine produktive Wiederaufnahme bleibt an einen separat integrierten und als
+  Release-Runtime verifizierten Commit gebunden.
+
 ## Unreleased · Never-exported DELETE-Bestätigungsvertrag – 28. August 2026
 
 ### Report
