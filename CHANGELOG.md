@@ -1,5 +1,50 @@
 # Änderungsprotokoll
 
+## Unreleased · 9-Tage-Rotationsbetrieb – 2. September 2026
+
+### Report
+
+- Das intern persistierte `schedulerDate` ist jetzt die alleinige
+  Fälligkeitsbasis. Bestehende Kataloge migrieren dieses Feld verlustfrei aus
+  dem bisherigen internen `lastSuccessAt`/`lastUpdatedAt`; Portalalter,
+  Maildatum und externe Zeitstempel fließen nicht in die Auswahl ein.
+- Die Fälligkeit liegt exakt neun lokale Kalendertage später zur selben
+  Uhrzeit in `Europe/Berlin`. Die Auswahl ist global nach dem ältesten
+  Schedulerdatum sowie stabil nach Projekt- und Listing-ID sortiert.
+- Einen im Katalog persistierten, CAS-atomaren und auditierbaren Tages-Claim
+  ergänzt. Er erlaubt höchstens 40 neu gestartete Rotationslifecycles je
+  Berliner Kalendertag, bleibt bei Restart erhalten und zählt einen Fehler
+  nicht zurück. Wiederaufnahmen verbrauchen keinen zweiten Claim.
+- Das produktive Per-Run-Limit akzeptiert nun bis zu 40 Einträge. Die
+  bestehende serielle Import-/Handover-/DELETE-Kette arbeitet diese ohne
+  künstliche Pause zwischen den Grundstücken ab; der unabhängige Plot-Guard
+  bleibt bei einem Hausupload je Grundstück und Tag.
+- Importbestätigungen setzen das Schedulerdatum des neuen Owners auf den
+  bestätigten Provider-Importzeitpunkt. CreativeSelection, Payload-Guard,
+  FTPS-/DELETE-Deduplizierung und der manuell deaktivierte Portalexport bleiben
+  unverändert.
+
+### Begründung
+
+Der Katalog besitzt bereits einen atomaren CAS-Speicher und eine bewährte
+serielle Lifecycle-Barriere. Der Tageszähler wurde deshalb dort als
+idempotenter Start-Claim ergänzt, statt eine zweite Scheduler- oder
+Parallelarchitektur einzuführen. Die vorhandene zentrale Zeitzonenhilfe wurde
+um lokale Kalendertage erweitert, damit Sommer-/Winterzeit keine Stunde
+verschiebt.
+
+### Hürden und Risiken
+
+- Der 40er-Betrieb darf erst nach
+  `REGRESSION_85_CLOSED_MANUAL_RECONCILIATION`, grünem Production Preview und
+  expliziter Runtime-Freigabe aktiviert werden. Dieser Entwicklungsstand führt
+  keine produktive Rotation, keinen Upload und keinen DELETE aus.
+- Ein gestarteter Lifecycle verbraucht sein Tagesbudget auch bei einem späteren
+  Fehler. Das ist absichtlich fail-closed und verhindert Retry-bedingte
+  Überschreitungen.
+- Automatischer Portalexport bleibt `off`; die nachgelagerten Plattformen
+  werden weiterhin manuell bedient.
+
 ## Unreleased · 85er-Resume-Gate – 30. August 2026
 
 ### Report

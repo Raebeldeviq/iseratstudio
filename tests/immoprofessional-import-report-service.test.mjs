@@ -124,7 +124,7 @@ test("confirms exactly one valid report from the dedicated folder with zero mail
   const copy = store.current().projects[0].listings.find((listing) => listing.id === "copy");
   assert.equal(copy.status, WORKFLOW_STATUS.PUBLISHED);
   assert.equal(copy.lastUploadedAt, "2026-08-13T09:16:00.000Z");
-  assert.equal(copy.nextUpdateAt, "2026-08-25T09:16:00.000Z");
+  assert.equal(copy.nextUpdateAt, "2026-08-22T09:16:00.000Z");
   assert.equal(store.current().importReports[0].processingStatus, "confirmed");
   assert.equal(store.current().importReports[0].mailSourceFolder, IMPORT_REPORT_MAIL_FOLDER);
   assert.equal("mailMovedAt" in store.current().importReports[0], false);
@@ -252,7 +252,7 @@ test("Apple Mail timeout is never setup required and preserves the existing tran
   const copy = store.current().projects[0].listings.find((listing) => listing.id === "copy");
   assert.equal(copy.status, WORKFLOW_STATUS.PUBLISHED);
   assert.equal(copy.lastUploadedAt, "2026-08-13T09:16:00.000Z");
-  assert.equal(copy.nextUpdateAt, "2026-08-25T09:16:00.000Z");
+  assert.equal(copy.nextUpdateAt, "2026-08-22T09:16:00.000Z");
   assert.equal(source.supersededByListingId, copy.id);
   assert.equal(source.externalDeletionPending, true);
   assert.equal(store.current().importReports.length, 1);

@@ -486,7 +486,8 @@ node listing-creative-preview-cli.mjs preview --limit 20 --at 2026-08-17T10:00:0
 
 Die Vorschau zeigt Grundstück, Quelle, bisheriges und vorgeschlagenes Haus,
 Hero-Typ, konkretes Creative, Begründung sowie letzte Verwendung. Daily-Plot-
-Guard, Dreierlimit, Zeitfenster, Claims, Leases, Importbestätigung und das
+Guard, globales 40er-Tageslimit, Zeitfenster, Claims, Leases,
+Importbestätigung und das
 separate DELETE-Sicherheitsmodell werden von der Creative-Stufe nicht verändert.
 
 ### Hartes Tageslimit je Grundstück
@@ -531,9 +532,9 @@ ausgewählte Source-/Replacement-Kette vollständig und strikt seriell:
 `→ persistierter Handover → Production-DELETE → positiver Löschbericht → source deleted`
 
 Erst der final belegte Zustand `replacement published` und `source deleted`
-gibt die nächste zuvor ausgewählte Rotation frei. Das gilt identisch für den
-regulären Dreierlauf und einen beanspruchten One-Shot bis maximal 25. Der
-One-Shot erweitert ausschließlich das Mengenlimit; er erzeugt keine parallelen
+gibt die nächste zuvor ausgewählte Rotation frei. Der reguläre Lauf verarbeitet
+bis zu 40 Lebenszyklen pro Berliner Kalendertag. Der historische One-Shot bis
+maximal 25 erzeugt ebenfalls keine parallelen
 FTPS-, Import- oder DELETE-Ketten. Das vorab persistierte `scheduled` ist nur
 eine Arbeitsplanung: Es beansprucht weder Daily-Plot-Kontingent noch Creative-
 Nutzung und erzeugt keine Kopie. Die erste produktive Mutation von Kandidat N+1
@@ -698,8 +699,8 @@ Helper nicht und führt selbst weder Rotation noch FTPS-Transfer aus.
 ### Persistentes Produktionslimit und Startup-Vertrag
 
 `listing-rotation-production-policy.json` begrenzt `active` zusätzlich auf
-höchstens drei Source-/Replacement-Lifecycles je Schedulerlauf. Fehlt diese
-Datei, ist sie beschädigt, liegt `maxRunItems` außerhalb `1..3` oder ist der
+höchstens 40 Source-/Replacement-Lifecycles je Schedulerlauf. Fehlt diese
+Datei, ist sie beschädigt, liegt `maxRunItems` außerhalb `1..40` oder ist der
 Startup-Modus unbekannt, bleibt `active` fail-closed ohne Rotation und Upload.
 Die Policy bindet produktive Mutationen außerdem an einen exakten 40-stelligen
 Git-Commit. Die isolierte Helper-Runtime darf nur aus einem sauberen Git-Stand
@@ -710,17 +711,49 @@ andernfalls werden Rotation und Upload mit
 
 ```bash
 node listing-rotation-production-policy-cli.mjs status
-node listing-rotation-production-policy-cli.mjs set --max-run-items 3 --startup-catchup-mode detect-only --expected-runtime-commit <40-STELLIGER-GIT-COMMIT>
-node listing-rotation-production-policy-cli.mjs set --max-run-items 3 --startup-catchup-mode guarded --expected-runtime-commit <40-STELLIGER-GIT-COMMIT>
+node listing-rotation-production-policy-cli.mjs set --max-run-items 40 --startup-catchup-mode detect-only --expected-runtime-commit <40-STELLIGER-GIT-COMMIT>
+node listing-rotation-production-policy-cli.mjs set --max-run-items 40 --startup-catchup-mode guarded --expected-runtime-commit <40-STELLIGER-GIT-COMMIT>
 node helper-runtime-provenance-cli.mjs status
 ```
 
 `detect-only` ist der sichere Release- und Erststartmodus. `guarded` verwendet
 bei einem späteren Neustart denselben regulären Scheduler wie der Stundenlauf;
-Zeitfenster, globaler Mindestabstand, Tageslimit, maximal drei Inserate,
+Zeitfenster, globaler Mindestabstand zwischen Schedulerläufen, Tageslimit,
+maximal 40 neue Lifecycle-Starts,
 unterschiedliche Grundstücke und der persistente Daily-Plot-Guard bleiben
 wirksam. `selectedPlotIds` und explizite Listing-IDs sind in `active` keine
 Scheduler-Eingabe.
+
+### Dauerhafter 9-Tage-Rotationsvertrag
+
+Maßgeblich ist ausschließlich `listingControl.schedulerDate`. Bei älteren
+Katalogen wird es beim Normalisieren einmalig aus den bisherigen internen
+Scheduler-Erfolgsfeldern übernommen. `dueAt` liegt neun lokale Kalendertage
+später zur selben Uhrzeit in `Europe/Berlin`; dadurch bleiben auch
+Sommer-/Winterzeitwechsel korrekt. Das älteste Schedulerdatum gewinnt, bei
+Gleichstand folgen Projekt-ID und Listing-ID als stabile Tie-Breaker.
+
+Jeder neue Lifecycle beansprucht vor der Kopie atomar einen persistenten
+Tagesdatensatz im Katalog. Maximal 40 Claims je Berliner Kalendertag sind
+zulässig. Der Claim bleibt bei Restart und Fehler erhalten; dieselbe
+Schedulerlauf-/Projekt-/Source-Kombination ist idempotent. Bereits offene
+Lifecycles werden über die vorhandene Import-, Handover- und DELETE-Barriere
+zuerst abgeschlossen und erhalten keinen zweiten Tagesclaim. Der separate
+Daily-Plot-Guard begrenzt unabhängig weiterhin auf einen Hausupload je
+Grundstück und Tag.
+
+Innerhalb `08:00–21:00 Europe/Berlin` verarbeitet ein Schedulerlauf den
+verbleibenden Tagesrahmen seriell ohne Pause zwischen zwei vollständig
+bestätigten Grundstücksketten. Nach FTPS bleibt die Kopie
+`transferred_pending_import`; erst der exakte positive Importbericht macht sie
+zum neuen veröffentlichten Scheduler-Owner und setzt dessen `schedulerDate`.
+Erst danach darf der normale Production-DELETE genau die alte Source
+übertragen; erst der positive objektbezogene Löschbericht setzt sie auf
+`deleted`. FTPS-Erfolg und DELETE-Transfer sind niemals Bestätigungen.
+
+Der automatische Portalexport nach Immowelt, Kleinanzeigen und ImmoScout24
+bleibt ausdrücklich `off`. Er ist weder Bestandteil dieses Schedulers noch
+Voraussetzung für den bestätigten Immoprofessional-Source-DELETE.
 
 Der sessiongeschützte Helper-Endpunkt `/runtime-provenance` und die Health-
 Antwort zeigen zusätzlich Runtime-Commit, Release und Helper-Startzeit. Jeder
@@ -729,11 +762,12 @@ strukturierten Logs ergänzen stets die Prozess-ID. Damit lässt sich die Kette
 `Runtime → Rotation → persistierte Creative-Auswahl → OpenImmo-Payload`
 vollständig rekonstruieren, ohne Zugangsdaten zu protokollieren.
 
-### Einmaliger Produktionsbatch bis maximal 25
+### Historischer einmaliger Produktionsbatch bis maximal 25
 
-Der dauerhafte Produktionsvertrag bleibt unverändert bei höchstens drei
-Rotationen pro Schedulerlauf. Eine größere Runde ist ausschließlich über den
-persistent verbrauchbaren Operatorvertrag `production_batch_once` zulässig. Er
+Der dauerhafte 9-Tage-Produktionsvertrag erlaubt nun bis zu 40 Rotationen pro
+Schedulerlauf und Berliner Kalendertag. Der ältere persistent verbrauchbare
+Operatorvertrag `production_batch_once` bleibt für Audit- und
+Rückwärtskompatibilität erhalten. Er
 akzeptiert nur ganze Werte von `4` bis `25`, bindet sich beim Armieren an den
 exakten Commit der laufenden isolierten Helper-Runtime und verfällt nach 60
 Minuten automatisch, falls ihn kein regulärer Produktionslauf beansprucht.
@@ -752,10 +786,10 @@ Helper und Restarts hinweg exklusiv. Nach einem erfolgreichen, blockierten oder
 fehlgeschlagenen Abschluss wird er `consumed`. Ein harter Prozessabbruch lässt
 ihn sicher `claimed`; dadurch entsteht ebenfalls nie automatisch ein zweiter
 großer Batch. Bereits vorbereitete Einzelkopien dürfen anschließend unter dem
-normalen Dreierlimit idempotent fortgesetzt werden.
+normalen 40er-Tageslimit idempotent fortgesetzt werden.
 
 Status, Vorschau, Dry Run und `startup-detect-only` beanspruchen den Override
-nicht. Auch `startup-guarded` bleibt beim normalen Dreierlimit. Das dauerhafte
+nicht. Auch `startup-guarded` bleibt beim normalen 40er-Tageslimit. Das dauerhafte
 Produktionszeitfenster ist `08:00–21:00 Europe/Berlin`; Sommer- und Winterzeit
 werden über die explizite IANA-Zeitzone ausgewertet. Die Prüfung erfolgt vor
 jedem neuen Rotationsstart. Minutengenau sind Starts bis einschließlich
@@ -766,18 +800,22 @@ Verarbeitung, Daily-Plot-Guard, Creative-Payload-Prüfung, Upload-Deduplizierung
 Importbestätigung und alle Claims/Leases/CAS-Grenzen bleiben unverändert. Ein
 Runtime-Mismatch entwertet den Override vor Kopie und FTPS fail-closed.
 
-Der normale Produktionslauf bleibt auf `maxRunItems = 3` begrenzt. Der separat
-armierte One-Shot bleibt einmalig, 60 Minuten gültig und auf höchstens 25
-Rotationen beschränkt; er besitzt keinen Zeitfenster-Bypass. Der persistente
+Der normale Produktionslauf darf `maxRunItems = 40` verwenden. Der separat
+armierte historische One-Shot bleibt einmalig, 60 Minuten gültig und auf
+höchstens 25 Rotationen beschränkt; er besitzt keinen Zeitfenster-Bypass und
+kann den globalen 40er-Tagesclaim niemals erweitern. Der persistente
 Daily-Plot-Guard erlaubt weiterhin höchstens einen Hausupload je Grundstück und
-Europe/Berlin-Kalendertag. Startup-Catch-up bleibt `detect-only` und verbraucht
-keinen armierten One-Shot.
+Europe/Berlin-Kalendertag. Der sichere Release-Erststart bleibt `detect-only`;
+nach bestandenem Produktions-Gate darf `startup-guarded` offene Lebenszyklen
+rekonstruieren und den normalen Vertrag innerhalb aller Guards fortsetzen. Ein
+Startup-Lauf verbraucht keinen armierten One-Shot.
 
 Jede im One-Shot-Lauf neu erzeugte Ersatzkopie trägt zusätzlich Override-ID,
 ursprüngliche Schedulerlauf-ID, Batchlimit und Runtime-Commit. Nur diese exakte
-Provenienz kann später den Production-DELETE für denselben Batchkontext bis zur
-autorisierten Obergrenze erweitern. Ohne diese Provenienz bleibt DELETE bei
-höchstens drei Ketten; falsche oder gemischte Jobprovenienz stoppt vor FTPS.
+Provenienz kann später den Production-DELETE für denselben historischen
+Batchkontext bis zur autorisierten Obergrenze binden. Normale Rotationen nutzen
+den regulären 40er-Produktionsvertrag; falsche oder gemischte Jobprovenienz
+stoppt vor FTPS.
 
 ### Immoprofessional-Importbestätigung aus dem serverseitigen Berichtordner
 

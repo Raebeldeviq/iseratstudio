@@ -3,13 +3,17 @@ import test from "node:test";
 
 import { assignListingGroupVariant, createListingGroup, updateListingControl } from "../listing-groups.mjs";
 import {
+  claimSchedulerDailyRotationStart,
   createListingScheduler,
+  isListingDue,
   LISTING_SCHEDULER_PRODUCTION_END_TIME,
+  listingDueAt,
   listingHealthScore,
   normalizeListingScheduler,
   reserveSchedulerSelection,
   runSchedulerDryRun,
   schedulerWindowBlockReasons,
+  schedulerDailyRotationBudget,
   selectSchedulerListings,
   updateListingSchedulerSettings,
 } from "../listing-scheduler.mjs";
@@ -150,11 +154,91 @@ test("the default and persisted legacy 18:00 window normalize to the permanent 2
   assert.equal(normalized.settings.endTime, LISTING_SCHEDULER_PRODUCTION_END_TIME);
 });
 
-test("selection scales to 2,000 listings without fixed limits", () => {
+test("selection scales to 2,000 listings while enforcing the hard global 40/day cap", () => {
   const current = state(500, 4);
   current.scheduler = updateListingSchedulerSettings(current.scheduler, { maxUpdatesPerDay: 200, maxUpdatesPerAddressPerDay: 1 });
   const result = selectSchedulerListings(current, "2026-07-24T10:00:00.000Z");
   assert.equal(current.projects.reduce((sum, projectValue) => sum + projectValue.listings.length, 0), 2000);
-  assert.equal(result.selections.length, 200);
-  assert.equal(new Set(result.selections.map((item) => item.project.id)).size, 200);
+  assert.equal(result.selections.length, 40);
+  assert.equal(new Set(result.selections.map((item) => item.project.id)).size, 40);
+});
+
+test("nine Berlin calendar days use the internal scheduler date and remain DST-correct", () => {
+  const current = state(1, 1);
+  const projectValue = current.projects[0];
+  const source = projectValue.listings[0];
+  projectValue.listingGroup = updateListingControl(projectValue.listingGroup, source, {
+    schedulerDate: "2026-03-20T09:15:00.000Z",
+    lastSuccessAt: "2025-01-01T00:00:00.000Z",
+  });
+  assert.equal(listingDueAt(projectValue.listingGroup, source), "2026-03-29T08:15:00.000Z");
+  assert.equal(isListingDue(projectValue.listingGroup, source, {}, "2026-03-29T08:14:59.999Z"), false);
+  assert.equal(isListingDue(projectValue.listingGroup, source, {}, "2026-03-29T08:15:00.000Z"), true);
+});
+
+test("external age fields never make a listing due without an internal scheduler date", () => {
+  const current = state(1, 1);
+  const projectValue = current.projects[0];
+  const source = projectValue.listings[0];
+  source.createdAt = "2020-01-01T00:00:00.000Z";
+  source.lastUploadedAt = "2020-01-02T00:00:00.000Z";
+  projectValue.listingGroup.listingControls = projectValue.listingGroup.listingControls.map((control) => ({
+    ...control,
+    schedulerDate: "",
+    lastSuccessAt: "",
+    lastUpdatedAt: "",
+  }));
+  assert.equal(listingDueAt(projectValue.listingGroup, source), "");
+  assert.equal(isListingDue(projectValue.listingGroup, source, {}, "2026-08-17T18:00:00.000Z"), false);
+});
+
+test("oldest internal scheduler date wins with stable project and listing tie-breakers", () => {
+  const current = state(3, 4);
+  const dates = ["2026-07-01T08:00:00.000Z", "2026-06-01T08:00:00.000Z", "2026-06-01T08:00:00.000Z"];
+  for (let index = 0; index < current.projects.length; index += 1) {
+    const projectValue = current.projects[index];
+    for (const source of projectValue.listings) {
+      projectValue.listingGroup = updateListingControl(projectValue.listingGroup, source, {
+        schedulerDate: dates[index],
+      });
+    }
+  }
+  current.scheduler = updateListingSchedulerSettings(current.scheduler, { maxUpdatesPerDay: 3 });
+  const selected = selectSchedulerListings(current, "2026-07-24T10:00:00.000Z");
+  assert.deepEqual(selected.selections.map((item) => item.project.id), ["project-2", "project-3", "project-1"]);
+});
+
+test("persistent atomic daily claims allow 40 but never a 41st lifecycle and reset on the next Berlin day", () => {
+  let current = state(0);
+  current.scheduler = updateListingSchedulerSettings(current.scheduler, { maxUpdatesPerDay: 40 });
+  for (let index = 1; index <= 39; index += 1) {
+    const claimed = claimSchedulerDailyRotationStart(current, {
+      schedulerRunId: `run-${index}`,
+      projectId: `project-${index}`,
+      sourceListingId: `listing-${index}`,
+    }, { now: "2026-08-17T18:00:00.000Z" });
+    assert.equal(claimed.result.claimed, true);
+    current = claimed.state;
+  }
+  assert.equal(schedulerDailyRotationBudget(current.scheduler, "2026-08-17T18:00:00.000Z").remaining, 1);
+  const fortieth = claimSchedulerDailyRotationStart(current, {
+    schedulerRunId: "run-40", projectId: "project-40", sourceListingId: "listing-40",
+  }, { now: "2026-08-17T18:01:00.000Z" });
+  assert.equal(fortieth.result.claimed, true);
+  current = structuredClone(fortieth.state);
+  assert.equal(schedulerDailyRotationBudget(current.scheduler, "2026-08-17T18:02:00.000Z").used, 40);
+  const blocked = claimSchedulerDailyRotationStart(current, {
+    schedulerRunId: "run-41", projectId: "project-41", sourceListingId: "listing-41",
+  }, { now: "2026-08-17T18:02:00.000Z" });
+  assert.equal(blocked.result.claimed, false);
+  assert.equal(blocked.result.reason, "daily_rotation_cap_reached");
+  const idempotent = claimSchedulerDailyRotationStart(current, {
+    schedulerRunId: "run-40", projectId: "project-40", sourceListingId: "listing-40",
+  }, { now: "2026-08-17T18:03:00.000Z" });
+  assert.equal(idempotent.result.idempotent, true);
+  const nextDay = claimSchedulerDailyRotationStart(current, {
+    schedulerRunId: "run-next", projectId: "project-next", sourceListingId: "listing-next",
+  }, { now: "2026-08-17T22:01:00.000Z" });
+  assert.equal(nextDay.result.claimed, true);
+  assert.equal(nextDay.result.used, 1);
 });

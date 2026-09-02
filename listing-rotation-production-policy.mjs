@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { dirname } from "node:path";
+import { LISTING_ROTATION_DAILY_CAP } from "./listing-rules.mjs";
 
 export const LISTING_ROTATION_PRODUCTION_POLICY_FORMAT = 2;
-export const LISTING_ROTATION_PRODUCTION_MAX_RUN_ITEMS = 3;
+export const LISTING_ROTATION_PRODUCTION_MAX_RUN_ITEMS = LISTING_ROTATION_DAILY_CAP;
 export const LISTING_ROTATION_STARTUP_CATCHUP_MODES = Object.freeze(["detect-only", "guarded"]);
 
 function failClosed(reason, updatedAt = "") {

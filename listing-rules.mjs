@@ -4,6 +4,8 @@ export const MAX_LISTING_GROUP_LOGS = 500;
 export const MAX_SCHEDULER_LOGS = 500;
 export const MAX_UPLOAD_LOGS = 5000;
 export const MAX_PROMOTION_USAGE = 5000;
+export const LISTING_ROTATION_INTERVAL_DAYS = 9;
+export const LISTING_ROTATION_DAILY_CAP = 40;
 
 export const LISTING_RULES = Object.freeze({
   activeHousesPerProject: ACTIVE_HOUSES_PER_PROJECT,

@@ -7,11 +7,13 @@ import {
 import { MAX_SCHEDULER_LOGS, PROCESS_LEASE_MS } from "./listing-rules.mjs";
 import { prepareListingRotationInState } from "./listing-rotation-engine.mjs";
 import {
+  claimSchedulerDailyRotationStart,
   normalizeListingScheduler,
   schedulerDueListings,
   schedulerWindowBlockReasons,
   selectSchedulerListings,
 } from "./listing-scheduler.mjs";
+import { LISTING_ROTATION_PRODUCTION_MAX_RUN_ITEMS } from "./listing-rotation-production-policy.mjs";
 import { normalizeWorkflowStatus, WORKFLOW_STATUS } from "./workflow-status.mjs";
 import { normalizeListingRotationOperatingMode } from "./listing-rotation-operating-mode.mjs";
 import { verifyProductionRuntime } from "./helper-runtime-provenance.mjs";
@@ -444,7 +446,7 @@ export function createListingRotationSchedulerService(options) {
       productionPolicy.valid !== true
       || !Number.isInteger(productionPolicy.maxRunItems)
       || productionPolicy.maxRunItems < 1
-      || productionPolicy.maxRunItems > 3
+      || productionPolicy.maxRunItems > LISTING_ROTATION_PRODUCTION_MAX_RUN_ITEMS
     );
     const runtimeGuardBlocked = productiveMode && runtimeGuard.valid !== true;
     const runtimeOwnershipBlocked = productiveMode && runtimeOwnership.valid !== true;
@@ -703,6 +705,7 @@ export function createListingRotationSchedulerService(options) {
           runtimeGuardValid: runtimeGuard.valid,
           lifecycleContract: operatingMode === "active" ? "serial-end-to-end-v1" : "not-required",
           lifecyclePreflightCode,
+          dailyBudgetVersion: 1,
           maxRunItems: Number.isFinite(activeRunLimit) ? activeRunLimit : null,
           effectiveMaxRunItems: Number.isFinite(activeRunLimit) ? activeRunLimit : null,
           overrideId: batchOverride?.overrideId || null,
@@ -840,6 +843,30 @@ export function createListingRotationSchedulerService(options) {
               preflightError.code = itemPreflight?.code || "ROTATION_LIFECYCLE_PREFLIGHT_BLOCKED";
               throw preflightError;
             }
+          }
+          if (!item.resume) {
+            const budgetAt = stepTimestamp();
+            const budgetClaim = await options.store.update((state) => claimSchedulerDailyRotationStart(state, {
+              schedulerRunId: runId,
+              projectId: item.projectId,
+              sourceListingId,
+              startedAt: budgetAt,
+            }, { now: budgetAt }), { now: budgetAt });
+            if (budgetClaim.result?.claimed !== true && budgetClaim.result?.idempotent !== true) {
+              const budgetError = new Error("Das persistente Europe/Berlin-Tageslimit von 40 neuen Rotationen ist erreicht.");
+              budgetError.code = "LISTING_ROTATION_DAILY_CAP_REACHED";
+              throw budgetError;
+            }
+            await writeRunLog("daily-budget-claimed", {
+              runId,
+              trigger,
+              projectId: item.projectId,
+              sourceListingId,
+              dayKey: budgetClaim.result.dayKey,
+              used: budgetClaim.result.used,
+              remaining: budgetClaim.result.remaining,
+              idempotent: budgetClaim.result.idempotent === true,
+            });
           }
           startedRotationCount += 1;
           if (!item.resume) {

@@ -118,9 +118,9 @@ function mode(value = "off") {
   return { async load() { return { format: 1, mode: value, valid: true, fallbackReason: "" }; } };
 }
 
-test("exact confirmed canary proof reconciles only 30460-287191 and removes scheduler eligibility", () => {
+test("exact confirmed canary proof reconciles only 30460-287191 and external upload age never creates scheduler eligibility", () => {
   const source = fixture();
-  assert.deepEqual(schedulerDueListings(source.state, NOW).map((candidate) => candidate.listingId), [CONTRACT.listingId]);
+  assert.deepEqual(schedulerDueListings(source.state, NOW), []);
   const beforeOtherProjects = JSON.stringify(source.state.projects.slice(1));
   const result = reconcileHistoricalDeleteStateInState(source.state, source.ledgers, { now: NOW });
   const project = result.state.projects.find((candidate) => candidate.id === CONTRACT.projectId);

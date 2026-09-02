@@ -236,6 +236,7 @@ export function confirmImportReportInState(state, parsed, mail, uploadLedger, op
     updateMode: match.sourceControl.updateMode,
     status: WORKFLOW_STATUS.PUBLISHED,
     statusMessage: publishedCopy.statusMessage,
+    schedulerDate: importedAt,
     lastAttemptAt: importedAt,
     lastSuccessAt: importedAt,
     lastUpdatedAt: importedAt,

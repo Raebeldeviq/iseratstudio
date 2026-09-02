@@ -127,7 +127,7 @@ function fixedMode(mode) {
 }
 
 function fixedPolicy() {
-  return { async load() { return { format: 1, maxRunItems: 3, startupCatchupMode: "guarded", valid: true, fallbackReason: "" }; } };
+  return { async load() { return { format: 1, maxRunItems: 40, startupCatchupMode: "guarded", valid: true, fallbackReason: "" }; } };
 }
 
 function fixedSingleItemPolicy() {
@@ -434,7 +434,7 @@ test("manual exact production run selects only its authorized target and remains
   );
 });
 
-test("serial scheduler lifecycle targets exactly one source without weakening the normal three-item policy", async () => {
+test("serial scheduler lifecycle targets exactly one source under the normal forty-item policy", async () => {
   const directory = await mkdtemp(join(tmpdir(), "fpi-production-delete-lifecycle-exact-"));
   const store = memoryStore(productionStateWithSecondPair());
   const uploads = [];
@@ -453,7 +453,7 @@ test("serial scheduler lifecycle targets exactly one source without weakening th
   });
   assert.deepEqual(result.transferred, ["30460-574320"]);
   assert.deepEqual(uploads, ["30460-574320"]);
-  assert.equal(result.maxRunItems, 3);
+  assert.equal(result.maxRunItems, 40);
   const waiting = await service.runOnce({
     trigger: "scheduler-lifecycle",
     targetExternalObjectNumber: "30460-574320",
@@ -604,7 +604,7 @@ test("a provenance-bound consumed one-shot batch authorizes up to 25 serial prod
   });
   const result = await service.runOnce({ trigger: "batch-test" });
   assert.equal(result.ok, true, JSON.stringify(result));
-  assert.equal(result.maxRunItems, 3);
+  assert.equal(result.maxRunItems, 40);
   assert.equal(result.effectiveMaxRunItems, 25);
   assert.equal(result.batchOverrideId, armed.overrideId);
   assert.equal(result.schedulerRunId, schedulerRunId);
@@ -623,11 +623,11 @@ test("a provenance-bound consumed one-shot batch authorizes up to 25 serial prod
   assert.ok(logs.some((entry) => entry.event === "run-context" && entry.batchOverrideId === armed.overrideId && entry.effectiveMaxRunItems === 25));
 });
 
-test("more than three normal DELETE chains without one-shot provenance fail closed", async () => {
+test("more than forty normal DELETE chains without one-shot provenance fail closed", async () => {
   const directory = await mkdtemp(join(tmpdir(), "fpi-production-delete-normal-overflow-"));
   let uploads = 0;
   const service = createProductionDeleteService({
-    store: memoryStore(productionStateWithPairs(4)),
+    store: memoryStore(productionStateWithPairs(41)),
     modeStore: fixedMode("active"),
     ledger: createProductionDeleteLedger(join(directory, "jobs.json")),
     productionPolicyStore: fixedPolicy(),

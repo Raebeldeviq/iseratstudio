@@ -144,7 +144,7 @@ test("atomically publishes the copy, hands over scheduling and leaves the source
   const confirmation = confirmImportReportInState(state, parsed(), mail, ledger, { now: "2026-08-13T09:17:00.000Z" });
   assert.equal(confirmation.result.status, "confirmed");
   assert.equal(confirmation.result.matchedUploadJobId, jobId);
-  assert.equal(confirmation.result.nextUpdateAt, "2026-08-25T09:16:00.000Z");
+  assert.equal(confirmation.result.nextUpdateAt, "2026-08-22T09:16:00.000Z");
   assert.equal(confirmation.state.importReports.length, 1);
   assert.equal(confirmation.result.report.processingStatus, "confirmed");
   assert.equal(confirmation.result.report.mailSourceFolder, "Inseratestudio – Importberichte");
@@ -157,10 +157,10 @@ test("atomically publishes the copy, hands over scheduling and leaves the source
   const group = normalizeListingGroup(project.listingGroup, project.id, { now: "2026-08-13T09:17:00.000Z" });
   assert.equal(copy.status, WORKFLOW_STATUS.PUBLISHED);
   assert.equal(copy.lastUploadedAt, importedAt);
-  assert.equal(copy.nextUpdateAt, "2026-08-25T09:16:00.000Z");
+  assert.equal(copy.nextUpdateAt, "2026-08-22T09:16:00.000Z");
   assert.equal(copy.importReportId, confirmation.result.report.reportId);
   assert.equal(listingControl(group, copy).automaticUpdateEnabled, true);
-  assert.equal(listingControl(group, copy).nextUpdatedAt, "2026-08-25T09:16:00.000Z");
+  assert.equal(listingControl(group, copy).nextUpdatedAt, "2026-08-22T09:16:00.000Z");
 
   assert.equal(source.status, WORKFLOW_STATUS.PUBLISHED);
   assert.equal(source.supersededByListingId, copy.id);

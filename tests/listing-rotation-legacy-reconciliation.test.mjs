@@ -280,7 +280,7 @@ test("18-23: reconciliation publishes, performs the scheduler handover and is id
   const copy = project.listings.find((listing) => listing.externalId === "30460-652921");
   const group = normalizeListingGroup(project.listingGroup, project.id, { now: NOW });
   assert.equal(copy.status, WORKFLOW_STATUS.PUBLISHED);
-  assert.equal(copy.nextUpdateAt, "2026-08-24T15:22:59.957Z");
+  assert.equal(copy.nextUpdateAt, "2026-08-21T15:22:59.957Z");
   assert.equal(source.supersededByListingId, copy.id);
   assert.equal(source.externalDeletionPending, true);
   assert.equal(listingControl(group, copy).automaticUpdateEnabled, true);
@@ -402,7 +402,7 @@ test("31-36: the normal report contract remains strict for every non-allowlisted
   assert.equal(fixture.state.importReports.length, 0);
   assert.equal(fixture.state.importReportReviews.length, 0);
   const due = schedulerDueListings(fixture.state, "2027-01-01T00:00:00.000Z");
-  assert.deepEqual(due.map((item) => item.listingId), [fixture.source.id]);
+  assert.deepEqual(due.map((item) => item.listingId), []);
   assert.equal(due.some((item) => item.listingId === copy.id), false);
   assert.equal(copy.status, WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT);
 });

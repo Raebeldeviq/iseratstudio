@@ -4,9 +4,11 @@ import {
 } from "./listing-copy.mjs";
 import {
   ACTIVE_HOUSES_PER_PROJECT,
+  LISTING_ROTATION_INTERVAL_DAYS,
   MAX_LISTING_GROUP_LOGS,
   PROCESS_LEASE_MS,
 } from "./listing-rules.mjs";
+import { addLocalCalendarDaysToIso } from "./plot-sync-schedule.mjs";
 import {
   normalizeWorkflowStatus,
   workflowStatusMessage,
@@ -24,7 +26,7 @@ export const LISTING_GROUP_VARIANT_COUNT = DEFAULT_LISTING_VARIANT_COUNT;
 
 export const LISTING_GROUP_AUTOMATION_DEFAULTS = Object.freeze({
   automaticUpdateEnabled: false,
-  updateIntervalDays: 12,
+  updateIntervalDays: LISTING_ROTATION_INTERVAL_DAYS,
   automaticRecreationEnabled: true,
   automaticDeletionEnabled: false,
   rotationEnabled: true,
@@ -163,7 +165,7 @@ export function normalizeListingGroup(value, projectId, options = {}) {
   const automation = {
     ...LISTING_GROUP_AUTOMATION_DEFAULTS,
     ...currentAutomation,
-    updateIntervalDays: positiveInteger(source.automation?.updateIntervalDays, 12),
+    updateIntervalDays: LISTING_ROTATION_INTERVAL_DAYS,
     maxUpdatesPerDay: positiveInteger(source.automation?.maxUpdatesPerDay, 1),
     automaticDeletionEnabled: false,
   };
@@ -385,7 +387,7 @@ export function updateListingGroupAutomation(groupValue, patch, options = {}) {
   const automation = {
     ...group.automation,
     ...patch,
-    updateIntervalDays: positiveInteger(patch.updateIntervalDays ?? group.automation.updateIntervalDays, 12),
+    updateIntervalDays: LISTING_ROTATION_INTERVAL_DAYS,
     maxUpdatesPerDay: positiveInteger(patch.maxUpdatesPerDay ?? group.automation.maxUpdatesPerDay, 1),
     automaticDeletionEnabled: false,
   };
@@ -399,6 +401,7 @@ function normalizeStoredControl(stored, projectId) {
     automaticDeletionEnabled: false,
     premiumPlacement: stored?.premiumPlacement === true, manualLock: stored?.manualLock === true,
     lockedUntil: String(stored?.lockedUntil || ""), lockReason: String(stored?.lockReason || ""),
+    schedulerDate: String(stored?.schedulerDate || stored?.lastSuccessAt || stored?.lastUpdatedAt || ""),
     lastUpdatedAt: String(stored?.lastUpdatedAt || ""), nextUpdatedAt: String(stored?.nextUpdatedAt || ""),
     lastAttemptAt: String(stored?.lastAttemptAt || ""), lastSuccessAt: String(stored?.lastSuccessAt || stored?.lastUpdatedAt || ""),
     lastError: String(stored?.lastError || ""),
@@ -494,10 +497,10 @@ export function recordListingGroupCopy(groupValue, variantId, newListing, option
     || group.variants.map((item) => item.listing).find((listing) => listing?.id === sourceListingId)
     || { ...newListing, id: sourceListingId };
   const advanceRotation = options.advanceRotation !== false;
-  const nextDate = new Date(Date.parse(timestamp) + group.automation.updateIntervalDays * 86400000).toISOString();
+  const nextDate = addLocalCalendarDaysToIso(timestamp, LISTING_ROTATION_INTERVAL_DAYS);
   if (advanceRotation) {
     group = updateListingControl(group, sourceListing, {
-      lastAttemptAt: timestamp, lastSuccessAt: timestamp, lastUpdatedAt: timestamp, nextUpdatedAt: nextDate,
+      schedulerDate: timestamp, lastAttemptAt: timestamp, lastSuccessAt: timestamp, lastUpdatedAt: timestamp, nextUpdatedAt: nextDate,
       lastError: "",
       status: WORKFLOW_STATUS.PUBLISHED,
       statusMessage: options.statusMessage || workflowStatusMessage(options.status || WORKFLOW_STATUS.PUBLISHED),
@@ -523,7 +526,7 @@ export function recordListingGroupCopy(groupValue, variantId, newListing, option
     statusMessage: advanceRotation
       ? options.statusMessage || workflowStatusMessage(options.status || WORKFLOW_STATUS.PUBLISHED)
       : "Entwurf wartet auf Upload",
-    ...(advanceRotation ? { lastUpdatedAt: timestamp, lastSuccessAt: timestamp, nextUpdatedAt: nextDate } : {}),
+    ...(advanceRotation ? { schedulerDate: timestamp, lastUpdatedAt: timestamp, lastSuccessAt: timestamp, nextUpdatedAt: nextDate } : {}),
   }, { idFactory, now: timestamp });
   group = { ...group, rotationCounter: group.rotationCounter + (advanceRotation ? 1 : 0), updatedAt: timestamp };
   const log = operationLog(group, variant, {

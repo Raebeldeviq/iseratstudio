@@ -3,7 +3,12 @@ import {
   normalizeListingGroup,
   updateListingControl,
 } from "./listing-groups.mjs";
-import { LISTING_RULES, MAX_SCHEDULER_LOGS } from "./listing-rules.mjs";
+import {
+  LISTING_ROTATION_DAILY_CAP,
+  LISTING_ROTATION_INTERVAL_DAYS,
+  LISTING_RULES,
+  MAX_SCHEDULER_LOGS,
+} from "./listing-rules.mjs";
 import {
   listingRotationBlockReasons,
   listingRotationPoolBlockReasons,
@@ -16,21 +21,24 @@ import {
   workflowStatusMessage,
   WORKFLOW_STATUS,
 } from "./workflow-status.mjs";
+import { addLocalCalendarDaysToIso, localDateKey } from "./plot-sync-schedule.mjs";
 
 export const SCHEDULER_LOG_LIMIT = MAX_SCHEDULER_LOGS;
 export const LISTING_SCHEDULER_TIME_ZONE = "Europe/Berlin";
 export const LISTING_SCHEDULER_LEGACY_END_TIME = "18:00";
 export const LISTING_SCHEDULER_PRODUCTION_END_TIME = "21:00";
+export { LISTING_ROTATION_INTERVAL_DAYS };
+export const LISTING_SCHEDULER_DAILY_ROTATION_CAP = LISTING_ROTATION_DAILY_CAP;
 
 export const LISTING_SCHEDULER_DEFAULTS = Object.freeze({
   enabled: false,
   paused: true,
   mode: "prepare-only",
-  maxUpdatesPerDay: 8,
+  maxUpdatesPerDay: LISTING_SCHEDULER_DAILY_ROTATION_CAP,
   maxUpdatesPerAddressPerDay: LISTING_RULES.maxUpdatesPerAddressPerDay,
   minimumSpacingHours: 2,
-  initialWaitDays: 12,
-  updateIntervalDays: 12,
+  initialWaitDays: LISTING_ROTATION_INTERVAL_DAYS,
+  updateIntervalDays: LISTING_ROTATION_INTERVAL_DAYS,
   allowedWeekdays: Object.freeze([1, 2, 3, 4, 5]),
   startTime: "08:00",
   endTime: LISTING_SCHEDULER_PRODUCTION_END_TIME,
@@ -101,6 +109,7 @@ export function createListingScheduler(options = {}) {
   return {
     settings: { ...LISTING_SCHEDULER_DEFAULTS, allowedWeekdays: [...LISTING_SCHEDULER_DEFAULTS.allowedWeekdays] },
     runs: [],
+    dailyRotationStarts: [],
     lastRunAt: "",
     nextRunAt: "",
     lastStatus: WORKFLOW_STATUS.DRAFT,
@@ -126,11 +135,11 @@ export function normalizeListingScheduler(value, options = {}) {
       enabled: rawSettings.enabled === true,
       paused: rawSettings.paused !== false,
       mode: validMode(rawSettings.mode),
-      maxUpdatesPerDay: positiveInteger(rawSettings.maxUpdatesPerDay, LISTING_SCHEDULER_DEFAULTS.maxUpdatesPerDay),
+      maxUpdatesPerDay: LISTING_SCHEDULER_DAILY_ROTATION_CAP,
       maxUpdatesPerAddressPerDay: positiveInteger(rawSettings.maxUpdatesPerAddressPerDay, LISTING_SCHEDULER_DEFAULTS.maxUpdatesPerAddressPerDay),
       minimumSpacingHours: positiveInteger(rawSettings.minimumSpacingHours, LISTING_SCHEDULER_DEFAULTS.minimumSpacingHours),
-      initialWaitDays: positiveInteger(rawSettings.initialWaitDays, LISTING_SCHEDULER_DEFAULTS.initialWaitDays),
-      updateIntervalDays: positiveInteger(rawSettings.updateIntervalDays, LISTING_SCHEDULER_DEFAULTS.updateIntervalDays),
+      initialWaitDays: LISTING_ROTATION_INTERVAL_DAYS,
+      updateIntervalDays: LISTING_ROTATION_INTERVAL_DAYS,
       allowedWeekdays: allowedWeekdays.length ? allowedWeekdays : [...LISTING_SCHEDULER_DEFAULTS.allowedWeekdays],
       startTime: validTime(rawSettings.startTime, LISTING_SCHEDULER_DEFAULTS.startTime),
       endTime: normalizedSchedulerEndTime(rawSettings.endTime),
@@ -140,6 +149,16 @@ export function normalizeListingScheduler(value, options = {}) {
       status: normalizeWorkflowStatus(run?.status, WORKFLOW_STATUS.DRAFT),
       statusMessage: workflowStatusMessage(run?.status, run?.statusMessage),
     })) : [],
+    dailyRotationStarts: Array.isArray(source.dailyRotationStarts)
+      ? source.dailyRotationStarts.slice(-4000).map((claim) => ({
+          id: String(claim?.id || ""),
+          dayKey: String(claim?.dayKey || ""),
+          startedAt: String(claim?.startedAt || ""),
+          schedulerRunId: String(claim?.schedulerRunId || ""),
+          projectId: String(claim?.projectId || ""),
+          sourceListingId: String(claim?.sourceListingId || ""),
+        })).filter((claim) => claim.id && claim.dayKey && claim.startedAt && claim.sourceListingId)
+      : [],
     lastRunAt: String(source.lastRunAt || ""),
     nextRunAt: String(source.nextRunAt || ""),
     lastStatus: normalizeWorkflowStatus(source.lastStatus, WORKFLOW_STATUS.DRAFT),
@@ -167,9 +186,11 @@ function berlinDateTimeParts(value) {
 }
 
 function localDayKey(value) {
-  const parts = berlinDateTimeParts(value);
-  if (!parts) return "";
-  return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+  try {
+    return localDateKey(value, LISTING_SCHEDULER_TIME_ZONE);
+  } catch {
+    return "";
+  }
 }
 
 function berlinWeekday(parts) {
@@ -214,19 +235,20 @@ function daysBetween(later, earlier) {
   return Number.isFinite(difference) ? Math.max(0, difference / 86400000) : 0;
 }
 
-export function listingDueAt(groupValue, listing, settingsValue = {}) {
-  const settings = { ...LISTING_SCHEDULER_DEFAULTS, ...(settingsValue || {}) };
+export function listingDueAt(groupValue, listing) {
   const control = listingControl(groupValue, listing);
-  const firstPublication = control.lastSuccessAt
-    || control.lastUpdatedAt
-    || listing.lastUploadedAt
-    || listing.createdAt
-    || groupValue.createdAt;
-  if (!firstPublication || !Number.isFinite(Date.parse(firstPublication))) return "";
-  const intervalDays = control.lastSuccessAt || control.lastUpdatedAt || listing.lastUploadedAt
-    ? settings.updateIntervalDays
-    : settings.initialWaitDays;
-  return new Date(Date.parse(firstPublication) + intervalDays * 86400000).toISOString();
+  const schedulerDate = control.schedulerDate;
+  if (!schedulerDate || !Number.isFinite(Date.parse(schedulerDate))) return "";
+  return addLocalCalendarDaysToIso(
+    schedulerDate,
+    LISTING_ROTATION_INTERVAL_DAYS,
+    LISTING_SCHEDULER_TIME_ZONE,
+  );
+}
+
+export function listingSchedulerDate(groupValue, listing) {
+  const value = listingControl(groupValue, listing).schedulerDate;
+  return value && Number.isFinite(Date.parse(value)) ? value : "";
 }
 
 export function isListingDue(groupValue, listing, settingsValue, at = nowIso()) {
@@ -258,7 +280,7 @@ export function listingSchedulerBlockReasons(groupValue, listing, schedulerValue
     reasons.push("Nur ein bestätigtes veröffentlichtes Inserat darf automatisch rotiert werden.");
   }
   const pendingRotation = (options.project?.listings || []).find((candidate) =>
-    candidate.rotationSourceListingId === listing.id
+    candidate?.rotationSourceListingId === listing.id
     && !candidate.rotationArchivedAt
     && [
       WORKFLOW_STATUS.SCHEDULED,
@@ -294,24 +316,95 @@ export function schedulerDueListings(state, at = nowIso()) {
     const group = normalizeListingGroup(project.listingGroup, project.id, { now: at });
     if (group.automation.rotationEnabled === false) continue;
     for (const listing of project.listings || []) {
+      if (!listing) continue;
       const control = listingControl(group, listing);
       if (!control.automaticUpdateEnabled || control.status !== WORKFLOW_STATUS.PUBLISHED) continue;
       const dueAt = listingDueAt(group, listing, scheduler.settings);
       if (dueAt && Date.parse(dueAt) <= Date.parse(at)) {
-        due.push({ projectId: project.id, listingId: listing.id, dueAt });
+        due.push({
+          projectId: project.id,
+          listingId: listing.id,
+          schedulerDate: listingSchedulerDate(group, listing),
+          dueAt,
+        });
       }
     }
   }
-  return due;
+  return due.sort((left, right) =>
+    Date.parse(left.schedulerDate) - Date.parse(right.schedulerDate)
+    || left.projectId.localeCompare(right.projectId)
+    || left.listingId.localeCompare(right.listingId));
 }
 
-function successfulUpdatesToday(project, at) {
+function successfulUpdatesToday(project, at, options = {}) {
   const logs = project.listingGroup?.logs || [];
   return logs.filter((log) =>
     localDayKey(log.timestamp) === localDayKey(at)
+    && (!options.beforeAt || Date.parse(log.timestamp) < Date.parse(options.beforeAt))
     && log.mode !== "dry-run"
     && !log.error
     && isSuccessfulWorkflowStatus(log.processStatus));
+}
+
+function legacyRotationStartsToday(scheduler, projects, at, beforeAt = "") {
+  const legacyIds = new Set();
+  for (const run of scheduler.runs || []) {
+    const runAt = run.startedAt || run.timestamp;
+    if (run.dailyBudgetVersion === 1
+      || localDayKey(runAt) !== localDayKey(at)
+      || (beforeAt && Date.parse(runAt) >= Date.parse(beforeAt))) continue;
+    for (const listingId of run.completedListingIds || []) legacyIds.add(String(listingId));
+  }
+  const loggedStarts = projects.flatMap((project) => successfulUpdatesToday(project, at, { beforeAt })).length;
+  return Math.max(legacyIds.size, loggedStarts);
+}
+
+export function schedulerDailyRotationBudget(schedulerValue, at = nowIso(), projects = []) {
+  const scheduler = normalizeListingScheduler(schedulerValue, { now: at });
+  const dayKey = localDayKey(at);
+  const claims = scheduler.dailyRotationStarts.filter((claim) => claim.dayKey === dayKey);
+  const firstClaimAt = claims.map((claim) => claim.startedAt).sort()[0] || "";
+  const legacyCount = legacyRotationStartsToday(scheduler, projects, at, firstClaimAt);
+  const used = claims.length + legacyCount;
+  const limit = Math.min(LISTING_SCHEDULER_DAILY_ROTATION_CAP, scheduler.settings.maxUpdatesPerDay);
+  return { dayKey, limit, used, remaining: Math.max(0, limit - used), claims, legacyCount };
+}
+
+export function claimSchedulerDailyRotationStart(state, input, options = {}) {
+  const startedAt = String(options.now || input?.startedAt || nowIso());
+  const scheduler = normalizeListingScheduler(state.scheduler, { now: startedAt });
+  const schedulerRunId = String(input?.schedulerRunId || "");
+  const sourceListingId = String(input?.sourceListingId || "");
+  const projectId = String(input?.projectId || "");
+  const id = String(input?.id || `${schedulerRunId}:${projectId}:${sourceListingId}`);
+  if (!schedulerRunId || !sourceListingId || !projectId) {
+    return { state, result: { claimed: false, idempotent: false, reason: "daily_rotation_claim_invalid" } };
+  }
+  const existing = scheduler.dailyRotationStarts.find((claim) => claim.id === id);
+  if (existing) {
+    const budget = schedulerDailyRotationBudget(scheduler, startedAt, state.projects || []);
+    return { state, result: { claimed: false, idempotent: true, claim: existing, ...budget } };
+  }
+  const budget = schedulerDailyRotationBudget(scheduler, startedAt, state.projects || []);
+  if (budget.remaining < 1) {
+    return { state, result: { claimed: false, idempotent: false, reason: "daily_rotation_cap_reached", ...budget } };
+  }
+  const claim = { id, dayKey: budget.dayKey, startedAt, schedulerRunId, projectId, sourceListingId };
+  const oldestRetained = Date.parse(startedAt) - 45 * 86400000;
+  const dailyRotationStarts = [...scheduler.dailyRotationStarts.filter((item) => {
+    const timestamp = Date.parse(item.startedAt);
+    return Number.isFinite(timestamp) && timestamp >= oldestRetained;
+  }), claim].slice(-4000);
+  const nextScheduler = { ...scheduler, dailyRotationStarts, updatedAt: startedAt };
+  return {
+    state: { ...state, scheduler: nextScheduler },
+    result: {
+      claimed: true,
+      idempotent: false,
+      claim,
+      ...schedulerDailyRotationBudget(nextScheduler, startedAt, state.projects || []),
+    },
+  };
 }
 
 export function selectSchedulerListings(state, at = nowIso(), options = {}) {
@@ -320,19 +413,26 @@ export function selectSchedulerListings(state, at = nowIso(), options = {}) {
     ? []
     : schedulerWindowBlockReasons(scheduler, at, { ignoreTimeWindow: options.ignoreTimeWindow === true });
   const activeProjects = state.projects.filter((project) => project.isActive !== false);
-  const completedToday = activeProjects.flatMap((project) => successfulUpdatesToday(project, at));
+  const dailyBudget = schedulerDailyRotationBudget(scheduler, at, activeProjects);
   const requestedMaximum = Number.isFinite(Number(options.maximumSelections))
     ? Math.max(0, Math.trunc(Number(options.maximumSelections)))
     : Number.POSITIVE_INFINITY;
   const remainingGlobal = Math.min(
     requestedMaximum,
-    Math.max(0, scheduler.settings.maxUpdatesPerDay - completedToday.length),
+    dailyBudget.remaining,
   );
   if (windowIssues.length || remainingGlobal === 0) {
-    return { scheduler, selections: [], skipped: [], issues: windowIssues.length ? windowIssues : ["Das Tageslimit ist bereits erreicht."] };
+    return {
+      scheduler,
+      selections: [],
+      skipped: [],
+      issues: windowIssues.length ? windowIssues : ["Das Tageslimit ist bereits erreicht."],
+      dailyBudget,
+    };
   }
 
-  const projectQueues = [];
+  const candidates = [];
+  const addressCapacities = new Map();
   const skipped = [];
   const distribution = normalizeHouseDistribution(state.houseDistribution, state.houses || [], activeProjects);
   const distributionValidation = validateHousePool(distribution, state.houses || [], {
@@ -341,7 +441,8 @@ export function selectSchedulerListings(state, at = nowIso(), options = {}) {
   });
   for (const project of activeProjects) {
     const group = normalizeListingGroup(project.listingGroup, project.id, { now: at });
-    const usedForAddress = successfulUpdatesToday(project, at).length;
+    const claimedForAddress = dailyBudget.claims.filter((claim) => claim.projectId === project.id).length;
+    const usedForAddress = Math.max(successfulUpdatesToday(project, at).length, claimedForAddress);
     const reservedForAddress = group.listingControls.filter((control) =>
       control.schedulerSelectionId
       && localDayKey(control.schedulerSelectedAt || at) === localDayKey(at)).length;
@@ -350,8 +451,9 @@ export function selectSchedulerListings(state, at = nowIso(), options = {}) {
       scheduler.settings.maxUpdatesPerAddressPerDay - usedForAddress - reservedForAddress,
     );
     if (!addressCapacity) continue;
-    const candidates = [];
+    addressCapacities.set(project.id, addressCapacity);
     for (const listing of project.listings || []) {
+      if (!listing) continue;
       if (options.allowedListingIds instanceof Set
         && !options.allowedListingIds.has(String(listing.id || ""))
         && !options.allowedListingIds.has(String(listing.externalId || ""))) {
@@ -374,35 +476,32 @@ export function selectSchedulerListings(state, at = nowIso(), options = {}) {
         continue;
       }
       const health = listingHealthScore(group, listing, scheduler.settings, at);
-      candidates.push({ project, group, listing, control: listingControl(group, listing), health });
+      candidates.push({
+        project,
+        group,
+        listing,
+        control: listingControl(group, listing),
+        schedulerDate: listingSchedulerDate(group, listing),
+        dueAt: listingDueAt(group, listing, scheduler.settings),
+        health,
+      });
     }
-    candidates.sort((left, right) =>
-      right.health.score - left.health.score
-      || Date.parse(left.control.lastSuccessAt || left.listing.createdAt || "1970-01-01")
-        - Date.parse(right.control.lastSuccessAt || right.listing.createdAt || "1970-01-01")
-      || left.listing.id.localeCompare(right.listing.id));
-    if (candidates.length) projectQueues.push({ projectId: project.id, capacity: addressCapacity, candidates });
   }
 
-  projectQueues.sort((left, right) =>
-    right.candidates[0].health.score - left.candidates[0].health.score
-    || left.projectId.localeCompare(right.projectId));
+  candidates.sort((left, right) =>
+    Date.parse(left.schedulerDate) - Date.parse(right.schedulerDate)
+    || left.project.id.localeCompare(right.project.id)
+    || left.listing.id.localeCompare(right.listing.id));
   const selections = [];
-  let addedInRound = true;
-  while (selections.length < remainingGlobal && addedInRound) {
-    addedInRound = false;
-    for (const queue of projectQueues) {
-      if (selections.length >= remainingGlobal) break;
-      const addressSelected = selections.filter((item) => item.project.id === queue.projectId).length;
-      if (addressSelected >= queue.capacity || !queue.candidates.length) continue;
-      const candidate = queue.candidates.shift();
-      if (candidate) {
-        selections.push(candidate);
-        addedInRound = true;
-      }
-    }
+  const selectedPerAddress = new Map();
+  for (const candidate of candidates) {
+    if (selections.length >= remainingGlobal) break;
+    const selected = selectedPerAddress.get(candidate.project.id) || 0;
+    if (selected >= (addressCapacities.get(candidate.project.id) || 0)) continue;
+    selections.push(candidate);
+    selectedPerAddress.set(candidate.project.id, selected + 1);
   }
-  return { scheduler, selections, skipped, issues: [] };
+  return { scheduler, selections, skipped, issues: [], dailyBudget };
 }
 
 export function reserveSchedulerSelection(state, selectionResult, options = {}) {

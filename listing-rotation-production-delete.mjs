@@ -7,6 +7,7 @@ import JSZip from "jszip";
 import { APP_VERSION } from "./app/lib/app-version.mjs";
 import { parseImmoprofessionalDeleteReport } from "./immoprofessional-delete-report-parser.mjs";
 import { listingControl, normalizeListingGroup, updateListingControl } from "./listing-groups.mjs";
+import { LISTING_ROTATION_DAILY_CAP } from "./listing-rules.mjs";
 import {
   isRegressionRepairLifecycle,
   isRegressionRollbackLifecycle,
@@ -542,7 +543,7 @@ export function createProductionDeleteService(options) {
         overrideId: null,
         schedulerRunId: "",
         runtimeCommit: "",
-        maxRunItems: 3,
+        maxRunItems: LISTING_ROTATION_DAILY_CAP,
       };
     }
     const runtimeCommit = clean(options.runtimeProvenance?.runtimeCommit, 40).toLowerCase();
@@ -658,7 +659,7 @@ export function createProductionDeleteService(options) {
   }
 
   async function transferEligibleSources(context, maxRunItems, targetExternalObjectNumber = "", isolateExactTarget = false) {
-    const maximum = context?.overrideId ? context.maxRunItems : 3;
+    const maximum = context?.overrideId ? context.maxRunItems : LISTING_ROTATION_DAILY_CAP;
     if (!Number.isInteger(maxRunItems) || maxRunItems < 0 || maxRunItems > maximum) {
       throw productionError("PRODUCTION_DELETE_TRANSFER_BUDGET_INVALID", "Das verbleibende Produktions-Deletebudget ist ungültig.");
     }
@@ -809,7 +810,12 @@ export function createProductionDeleteService(options) {
     const mode = await options.modeStore.load();
     if (mode.valid !== true || mode.mode !== "active") return { ran: false, reason: mode.fallbackReason || "delete-mode-off", transferred: [], confirmed: [], mailMutations: 0 };
     const policy = await options.productionPolicyStore.load();
-    if (policy.valid !== true || !Number.isInteger(policy.maxRunItems) || policy.maxRunItems < 1 || policy.maxRunItems > 3) {
+    if (
+      policy.valid !== true
+      || !Number.isInteger(policy.maxRunItems)
+      || policy.maxRunItems < 1
+      || policy.maxRunItems > LISTING_ROTATION_DAILY_CAP
+    ) {
       return { ran: false, reason: policy.fallbackReason || "production-policy-invalid", transferred: [], confirmed: [], mailMutations: 0 };
     }
     const trigger = clean(input.trigger || "periodic", 100);

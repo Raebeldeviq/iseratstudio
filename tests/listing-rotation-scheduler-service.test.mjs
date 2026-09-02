@@ -671,6 +671,40 @@ test("active production policy limits one scheduler run to three distinct plots"
   assert.ok(copies.every((copy) => copy.productionLifecycle?.automaticDeleteAuthorized === true));
 });
 
+test("forty lifecycle starts exhaust the persistent Berlin-day budget and a helper restart cannot start a forty-first", async () => {
+  const store = memoryStore(studioState(45));
+  const uploads = [];
+  const createService = (prefix) => createListingRotationSchedulerService({
+    store,
+    lease: memoryLease(),
+    operatingModeStore: fixedOperatingMode("active"),
+    productionPolicyStore: fixedProductionPolicy(40, "guarded"),
+    runtimeProvenance: fixedRuntimeProvenance(),
+    idFactory: ids(prefix),
+    upload: async ({ project: projectValue, listing: listingValue }) => {
+      uploads.push({ projectId: projectValue.id, sourceListingId: listingValue.rotationSourceListingId });
+      return { ok: true, jobId: createUploadJobId(projectValue, listingValue) };
+    },
+  });
+  const first = await createService("forty-run").run({
+    now: "2026-08-17T08:00:00.000Z",
+    endNow: "2026-08-17T18:00:00.000Z",
+  });
+  assert.equal(first.ok, true, JSON.stringify(first));
+  assert.equal(first.selectedListingIds.length, 40);
+  assert.equal(uploads.length, 40);
+  assert.equal(new Set(uploads.map((entry) => entry.projectId)).size, 40);
+
+  const restarted = await createService("restart-run").run({
+    now: "2026-08-17T18:30:00.000Z",
+    endNow: "2026-08-17T18:40:00.000Z",
+  });
+  assert.equal(restarted.selectedListingIds.length, 0);
+  assert.equal(uploads.length, 40);
+  const persisted = (await store.load()).state;
+  assert.equal(persisted.scheduler.dailyRotationStarts.filter((entry) => entry.dayKey === "2026-08-17").length, 40);
+});
+
 test("three production rotations start only after the previous complete lifecycle is confirmed", async () => {
   const store = memoryStore(studioState(3));
   const events = [];

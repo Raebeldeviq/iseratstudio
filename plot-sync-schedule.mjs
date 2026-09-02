@@ -22,6 +22,41 @@ function zonedParts(value, timeZone) {
     .map((part) => [part.type, Number(part.value)]));
 }
 
+export function addLocalCalendarDaysToIso(value, days, timeZone = "Europe/Berlin") {
+  const source = new Date(value);
+  if (!Number.isFinite(source.getTime())) return "";
+  const parts = zonedParts(source, timeZone);
+  const shiftedDate = addLocalDays(
+    `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`,
+    days,
+  );
+  const [year, month, day] = shiftedDate.split("-").map(Number);
+  const desired = Date.UTC(
+    year,
+    month - 1,
+    day,
+    parts.hour,
+    parts.minute,
+    parts.second,
+    source.getUTCMilliseconds(),
+  );
+  let guess = desired;
+  for (let pass = 0; pass < 3; pass += 1) {
+    const actual = zonedParts(guess, timeZone);
+    const actualUtcShape = Date.UTC(
+      actual.year,
+      actual.month - 1,
+      actual.day,
+      actual.hour,
+      actual.minute,
+      actual.second,
+      new Date(guess).getUTCMilliseconds(),
+    );
+    guess += desired - actualUtcShape;
+  }
+  return new Date(guess).toISOString();
+}
+
 export function localDateKey(value, timeZone = "Europe/Berlin") {
   const parts = zonedParts(value, timeZone);
   return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
