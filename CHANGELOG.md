@@ -23,6 +23,23 @@
   bestätigten Provider-Importzeitpunkt. CreativeSelection, Payload-Guard,
   FTPS-/DELETE-Deduplizierung und der manuell deaktivierte Portalexport bleiben
   unverändert.
+- Den historischen `REGRESSION_85`-Worker einschließlich Startup-Aufruf,
+  Intervall und Importbericht-Campaign-Watcher aus dem normalen Helperpfad
+  entfernt. Die geschlossene Kampagne bleibt als Audit- und Mutationsevidenz
+  erhalten, startet jedoch nie wieder automatisch.
+- Einen einmaligen, fail-closed und hashgebundenen internen
+  Scheduler-Owner-Reconciliation-Vertrag ergänzt. Er erkennt exakt 39
+  inaktive Alt-Owner der abgeschlossenen 85er-Kampagne, deaktiviert nur deren
+  automatische Aktualisierung und protokolliert jede Änderung auditierbar.
+  Inserate, Veröffentlichungsstatus und externe Systeme bleiben unverändert.
+- Die vollständige Klassifikation aller 41 inaktiven Scheduler-Owner in
+  `NINE_DAY_ROTATION_BLOCKER_REVIEW.md` dokumentiert. Die zwei regulären,
+  extern weiterhin vorhandenen Objekte bleiben unveränderte fachliche
+  Ausnahmen und blockieren die übrige Due-Queue nicht.
+- Auswahlregressionen für 39/40 gültige Kandidaten, 40 gültige aus 50 mit zehn
+  Blockern und den übersprungenen ältesten Blocker ergänzt. Die
+  `schedulerDate`-Migration ist zusätzlich auf deterministischen,
+  restart-idempotenten Betrieb ohne Zähleränderung geprüft.
 
 ### Begründung
 
@@ -32,6 +49,12 @@ idempotenter Start-Claim ergänzt, statt eine zweite Scheduler- oder
 Parallelarchitektur einzuführen. Die vorhandene zentrale Zeitzonenhilfe wurde
 um lokale Kalendertage erweitert, damit Sommer-/Winterzeit keine Stunde
 verschiebt.
+
+Die 85er-Reconciliation ist bewusst kein allgemeiner Filter für inaktive
+Varianten. Sie akzeptiert ausschließlich den unveränderten abgeschlossenen
+85er-Vertrag und verlangt pro Alt-Owner einen aktiven veröffentlichten
+Alternativ-Owner desselben Grundstücks. Echte Datenfehler bleiben damit
+sichtbar und werden lediglich lokal vom Scheduler übersprungen.
 
 ### Hürden und Risiken
 
@@ -44,6 +67,11 @@ verschiebt.
   Überschreitungen.
 - Automatischer Portalexport bleibt `off`; die nachgelagerten Plattformen
   werden weiterhin manuell bedient.
+- Die interne 39er-Reconciliation ist ein kontrollierter Deployment-Schritt
+  und wird in diesem Entwicklungsstand nicht gegen den Produktionskatalog
+  ausgeführt. Hash-, Abschluss-, Scope- oder Statusabweichungen stoppen sie
+  vollständig. Die zwei regulären Ausnahmen `30460-131712` und
+  `30460-628198` benötigen weiterhin eine separate fachliche Entscheidung.
 
 ## Unreleased · 85er-Resume-Gate – 30. August 2026
 

@@ -755,6 +755,48 @@ Der automatische Portalexport nach Immowelt, Kleinanzeigen und ImmoScout24
 bleibt ausdrücklich `off`. Er ist weder Bestandteil dieses Schedulers noch
 Voraussetzung für den bestätigten Immoprofessional-Source-DELETE.
 
+### Geschlossene 85er-Historie und inaktive Alt-Owner
+
+Die normale Helper-Runtime startet keinen `REGRESSION_85`-Worker, keinen
+85er-Timer, keinen Fast Serial Drain und keinen Campaign-Watcher mehr. Die
+Kampagne bleibt terminal
+`REGRESSION_85_CLOSED_MANUAL_RECONCILIATION`; ihre Module und Daten verbleiben
+ausschließlich für Audit, Tests und den bestehenden DELETE-Mutation-Guard im
+Repository.
+
+Ein eng begrenzter interner Reconciliation-Schritt entfernt exakt nachgewiesene
+historische 85er-Owner aus der aktiven Due-Queue. Er ist an Scope-Hash,
+Evidence-Hash, Classification-Fingerprint und den manuellen Abschluss gebunden.
+Zusätzlich muss das Original weiterhin `published`, der zugehörige Slot
+inaktiv, das Rogue-B eindeutig `deleted`, der Lifecycle geschlossen und
+mindestens ein anderer aktiver veröffentlichter Owner desselben Grundstücks
+vorhanden sein. Abweichungen stoppen vollständig. Es gibt keinen allgemeinen
+„inaktive Slots ignorieren“-Schalter.
+
+Die rein lesende Vorschau lautet:
+
+```bash
+node regression-85-scheduler-owner-reconciliation-cli.mjs preview
+```
+
+Der kontrollierte Deployment-Schritt erfordert später die exakte Bestätigung:
+
+```bash
+node regression-85-scheduler-owner-reconciliation-cli.mjs apply \
+  --confirm REGRESSION_85_CLOSED_MANUAL_RECONCILIATION
+```
+
+`apply` ändert ausschließlich den internen Scheduler-Owner-Status, schreibt
+einen idempotenten Auditdatensatz und führt weder Upload, DELETE noch eine
+sonstige externe Aktion aus. Die vollständige 41er-Klassifikation steht in
+`NINE_DAY_ROTATION_BLOCKER_REVIEW.md`. Die beiden regulären Ausnahmen
+`30460-131712` und `30460-628198` werden nicht automatisch reconciliiert.
+
+Fällige, aber fachlich blockierte Einträge werden bei der normalen Auswahl
+pro Listing dokumentiert und übersprungen. Sie verbrauchen keinen Tagesclaim
+und verhindern weder die Auswahl des nächstältesten gültigen Kandidaten noch
+die Nutzung des globalen 40er-Rahmens.
+
 Der sessiongeschützte Helper-Endpunkt `/runtime-provenance` und die Health-
 Antwort zeigen zusätzlich Runtime-Commit, Release und Helper-Startzeit. Jeder
 Scheduler- und automatische Uploadlog enthält diese Runtime-Provenienz; die

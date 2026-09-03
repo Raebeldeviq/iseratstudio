@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { assignListingGroupVariant, createListingGroup, updateListingControl } from "../listing-groups.mjs";
+import { assignListingGroupVariant, createListingGroup, normalizeListingGroup, updateListingControl } from "../listing-groups.mjs";
 import {
   claimSchedulerDailyRotationStart,
   createListingScheduler,
@@ -163,6 +163,45 @@ test("selection scales to 2,000 listings while enforcing the hard global 40/day 
   assert.equal(new Set(result.selections.map((item) => item.project.id)).size, 40);
 });
 
+test("one inactive output slot excludes only its listing and does not abort 39 valid selections", () => {
+  const current = state(40, 1);
+  current.scheduler = updateListingSchedulerSettings(current.scheduler, { maxUpdatesPerDay: 40 });
+  current.projects[0].listingGroup.variants[0].active = false;
+  const result = selectSchedulerListings(current, "2026-07-24T10:00:00.000Z");
+  assert.equal(result.selections.length, 39);
+  assert.equal(result.selections.some((item) => item.project.id === "project-1"), false);
+  assert.equal(result.skipped.some((item) =>
+    item.projectId === "project-1"
+    && item.reasons.some((reason) => /Ausgangsplatz.*nicht mehr vorhanden/iu.test(reason))), true);
+  assert.deepEqual(result.issues, []);
+});
+
+test("ten blocked listings do not consume the global 40-item budget when 40 valid listings remain", () => {
+  const current = state(50, 1);
+  current.scheduler = updateListingSchedulerSettings(current.scheduler, { maxUpdatesPerDay: 40 });
+  for (const projectValue of current.projects.slice(0, 10)) projectValue.listingGroup.variants[0].active = false;
+  const result = selectSchedulerListings(current, "2026-07-24T10:00:00.000Z");
+  assert.equal(result.selections.length, 40);
+  assert.equal(result.skipped.filter((item) => item.reasons.some((reason) => /Ausgangsplatz.*nicht mehr vorhanden/iu.test(reason))).length, 10);
+  assert.equal(result.selections.some((item) => Number(item.project.id.split("-")[1]) <= 10), false);
+});
+
+test("a blocked oldest listing is skipped and the next-oldest valid listing is selected", () => {
+  const current = state(40, 1);
+  for (let index = 0; index < current.projects.length; index += 1) {
+    const projectValue = current.projects[index];
+    projectValue.listingGroup = updateListingControl(
+      projectValue.listingGroup,
+      projectValue.listings[0],
+      { schedulerDate: new Date(Date.UTC(2026, 4, index + 1, 8)).toISOString() },
+    );
+  }
+  current.projects[0].listingGroup.variants[0].active = false;
+  const result = selectSchedulerListings(current, "2026-07-24T10:00:00.000Z", { maximumSelections: 1 });
+  assert.deepEqual(result.selections.map((item) => item.project.id), ["project-2"]);
+  assert.equal(result.skipped.some((item) => item.projectId === "project-1"), true);
+});
+
 test("nine Berlin calendar days use the internal scheduler date and remain DST-correct", () => {
   const current = state(1, 1);
   const projectValue = current.projects[0];
@@ -190,6 +229,24 @@ test("external age fields never make a listing due without an internal scheduler
   }));
   assert.equal(listingDueAt(projectValue.listingGroup, source), "");
   assert.equal(isListingDue(projectValue.listingGroup, source, {}, "2026-08-17T18:00:00.000Z"), false);
+});
+
+test("scheduler date migration is deterministic, restart-idempotent and leaves counters unchanged", () => {
+  const current = state(1, 1);
+  const raw = structuredClone(current.projects[0].listingGroup);
+  raw.rotationCounter = 7;
+  delete raw.listingControls[0].schedulerDate;
+  raw.listingControls[0].lastSuccessAt = "2026-07-01T08:00:00.000Z";
+  raw.listingControls[0].lastUpdatedAt = "2026-07-02T08:00:00.000Z";
+  const migrated = normalizeListingGroup(raw, raw.projectId, { now: "2026-09-03T10:00:00.000Z" });
+  assert.equal(migrated.listingControls[0].schedulerDate, "2026-07-01T08:00:00.000Z");
+  assert.equal(migrated.rotationCounter, 7);
+  const persisted = structuredClone(migrated);
+  persisted.listingControls[0].lastSuccessAt = "2026-08-01T08:00:00.000Z";
+  persisted.listingControls[0].lastUpdatedAt = "2026-08-02T08:00:00.000Z";
+  const restarted = normalizeListingGroup(persisted, persisted.projectId, { now: "2026-09-04T10:00:00.000Z" });
+  assert.equal(restarted.listingControls[0].schedulerDate, "2026-07-01T08:00:00.000Z");
+  assert.equal(restarted.rotationCounter, 7);
 });
 
 test("oldest internal scheduler date wins with stable project and listing tie-breakers", () => {
