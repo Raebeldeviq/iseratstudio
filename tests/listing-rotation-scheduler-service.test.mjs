@@ -13,7 +13,11 @@ import {
   updateListingControl,
 } from "../listing-groups.mjs";
 import { isHvObjectNumber } from "../listing-object-number.mjs";
-import { createListingRotationSchedulerService as createSchedulerService } from "../listing-rotation-scheduler-service.mjs";
+import {
+  automaticRotationCopyId,
+  createListingRotationSchedulerService as createSchedulerService,
+  reusableAutomaticRotationCopy,
+} from "../listing-rotation-scheduler-service.mjs";
 import {
   createListingScheduler,
   updateListingSchedulerSettings,
@@ -295,6 +299,93 @@ function lifecycleEventsFor(sourceListingId) {
     `${sourceListingId}:source-deleted`,
   ];
 }
+
+test("historical terminal rotation copies are never reusable", () => {
+  const source = { id: "source-1" };
+  const base = {
+    id: "copy-1",
+    listingOrigin: "rotation-copy",
+    rotationSourceListingId: source.id,
+    productionLifecycle: { schedulerRunId: "historical-run" },
+  };
+  for (const status of [
+    WORKFLOW_STATUS.DELETED,
+    WORKFLOW_STATUS.ARCHIVED,
+    WORKFLOW_STATUS.PUBLISHED,
+    WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT,
+    WORKFLOW_STATUS.BLOCKED,
+  ]) {
+    assert.equal(reusableAutomaticRotationCopy({ ...base, status }, source, "historical-run"), false, status);
+  }
+});
+
+test("only an open rotation copy from the exact same scheduler lifecycle is reusable", () => {
+  const source = { id: "source-1" };
+  const base = {
+    id: "copy-1",
+    listingOrigin: "rotation-copy",
+    rotationSourceListingId: source.id,
+    productionLifecycle: { schedulerRunId: "current-run" },
+  };
+  for (const status of [
+    WORKFLOW_STATUS.SCHEDULED,
+    WORKFLOW_STATUS.PROCESSING,
+    WORKFLOW_STATUS.PREPARED,
+    WORKFLOW_STATUS.FAILED,
+  ]) {
+    assert.equal(reusableAutomaticRotationCopy({ ...base, status }, source, "current-run"), true, status);
+  }
+  assert.equal(reusableAutomaticRotationCopy({ ...base, status: WORKFLOW_STATUS.PREPARED }, source, "other-run"), false);
+  assert.equal(reusableAutomaticRotationCopy({ ...base, status: WORKFLOW_STATUS.PREPARED, listingOrigin: "group-source" }, source, "current-run"), false);
+});
+
+test("a new scheduler lifecycle creates a fresh deterministic copy and leaves a deleted historical copy untouched", async () => {
+  const initial = studioState(1);
+  const projectValue = initial.projects[0];
+  const source = projectValue.listings.find((item) => item.listingOrigin === "group-source");
+  const historicalCopyId = automaticRotationCopyId(projectValue, source, projectValue.listingGroup);
+  const historicalCopy = {
+    ...source,
+    id: historicalCopyId,
+    externalId: "30460-999998",
+    listingOrigin: "rotation-copy",
+    rotationSourceListingId: source.id,
+    status: WORKFLOW_STATUS.DELETED,
+    statusMessage: "Extern gelöscht · 30460-999998",
+    productionLifecycle: { format: 1, schedulerRunId: "historical-run", effectiveMaxRunItems: 1 },
+  };
+  projectValue.listings.push(historicalCopy);
+  projectValue.listingGroup = updateListingControl(projectValue.listingGroup, historicalCopy, {
+    automaticUpdateEnabled: false,
+    status: WORKFLOW_STATUS.DELETED,
+    statusMessage: historicalCopy.statusMessage,
+  }, { now: "2026-08-01T08:00:00.000Z" });
+
+  const store = memoryStore(initial);
+  const uploads = [];
+  const service = createListingRotationSchedulerService({
+    store,
+    lease: memoryLease(),
+    operatingModeStore: fixedOperatingMode("active"),
+    productionPolicyStore: fixedProductionPolicy(1),
+    runtimeProvenance: fixedRuntimeProvenance(),
+    upload: async ({ project: projectForUpload, listing: listingForUpload }) => {
+      uploads.push(listingForUpload.id);
+      return { ok: true, jobId: createUploadJobId(projectForUpload, listingForUpload) };
+    },
+  });
+  const result = await service.run({
+    runId: "fresh-run-after-terminal-copy",
+    now: "2026-08-14T09:00:00.000Z",
+    endNow: "2026-08-14T09:05:00.000Z",
+  });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(uploads.length, 1);
+  assert.notEqual(uploads[0], historicalCopyId);
+  const finalProject = (await store.load()).state.projects[0];
+  assert.equal(finalProject.listings.find((item) => item.id === historicalCopyId)?.status, WORKFLOW_STATUS.DELETED);
+  assert.equal(finalProject.listings.find((item) => item.id === uploads[0])?.productionLifecycle?.schedulerRunId, "fresh-run-after-terminal-copy");
+});
 
 async function waitUntil(predicate, attempts = 100) {
   for (let index = 0; index < attempts; index += 1) {

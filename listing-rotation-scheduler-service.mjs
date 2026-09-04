@@ -33,15 +33,33 @@ function stableHash(value) {
   return hash.toString(16).padStart(8, "0");
 }
 
-export function automaticRotationCopyId(project, listing, groupValue) {
+export function automaticRotationCopyId(project, listing, groupValue, operationToken = "") {
   const control = listingControl(groupValue, listing);
-  const cycle = control.lastSuccessAt
+  const cycle = String(operationToken || control.schedulerSelectionId || "")
+    || control.lastSuccessAt
     || control.lastUpdatedAt
     || listing.lastUploadedAt
     || listing.createdAt
     || project.createdAt
     || "initial";
   return `rotation-${stableHash(project.id)}-${stableHash(listing.id)}-${stableHash(cycle)}-copy`;
+}
+
+export function reusableAutomaticRotationCopy(copy, source, schedulerRunId) {
+  const resumableStatuses = new Set([
+    WORKFLOW_STATUS.SCHEDULED,
+    WORKFLOW_STATUS.PROCESSING,
+    WORKFLOW_STATUS.PREPARED,
+    WORKFLOW_STATUS.FAILED,
+  ]);
+  return Boolean(
+    copy
+    && source
+    && copy.listingOrigin === "rotation-copy"
+    && copy.rotationSourceListingId === source.id
+    && copy.productionLifecycle?.schedulerRunId === schedulerRunId
+    && resumableStatuses.has(normalizeWorkflowStatus(copy.status, WORKFLOW_STATUS.PREPARED)),
+  );
 }
 
 function pendingRotationCopies(state) {
@@ -885,9 +903,16 @@ export function createListingRotationSchedulerService(options) {
               const source = project?.listings.find((candidate) => candidate.id === sourceListingId);
               if (!project || !source) throw new Error("Das eingeplante Quellinserat ist nicht mehr vorhanden.");
               const group = normalizeListingGroup(project.listingGroup, project.id, { now: preparedAt });
-              const deterministicCopyId = automaticRotationCopyId(project, source, group);
+              const deterministicCopyId = automaticRotationCopyId(project, source, group, runId);
               const existing = project.listings.find((listing) => listing.id === deterministicCopyId);
-              if (existing) return { state, result: { copy: existing } };
+              if (existing) {
+                if (reusableAutomaticRotationCopy(existing, source, runId)) {
+                  return { state, result: { copy: existing } };
+                }
+                const collisionError = new Error("Eine vorhandene Rotationskopie besitzt keine fortsetzbare Provenienz für diesen Schedulerlauf.");
+                collisionError.code = "AUTOMATIC_ROTATION_COPY_COLLISION";
+                throw collisionError;
+              }
               const result = prepareListingRotationInState(state, project.id, source.id, {
                 now: preparedAt,
                 mode: normalizeListingScheduler(state.scheduler, { now: preparedAt }).settings.mode,

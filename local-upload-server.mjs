@@ -62,7 +62,10 @@ import { createListingRotationSchedulerService } from "./listing-rotation-schedu
 import { createProductionRotationLifecycleCoordinator } from "./listing-rotation-lifecycle-coordinator.mjs";
 import { createPersistentLease } from "./persistent-lease.mjs";
 import { createListingRotationOperatingModeStore } from "./listing-rotation-operating-mode.mjs";
-import { createListingRotationProductionPolicyStore } from "./listing-rotation-production-policy.mjs";
+import {
+  assertPolicyBoundAutomaticRotationUpload,
+  createListingRotationProductionPolicyStore,
+} from "./listing-rotation-production-policy.mjs";
 import { createProductionBatchOverrideStore } from "./production-batch-override.mjs";
 import { createAppleMailImportReportAdapter } from "./apple-mail-import-report-adapter.mjs";
 import { runMailRuntimeProbe } from "./mail-runtime-probe.mjs";
@@ -391,10 +394,13 @@ async function automaticRotationUpload({ state, project, listing, runId, batchOv
       error.code = "PRODUCTION_BATCH_OVERRIDE_UPLOAD_UNAUTHORIZED";
       throw error;
     }
-  } else if (lifecycle?.batchOverrideId || (effectiveMaxRunItems !== null && effectiveMaxRunItems > 3)) {
-    const error = new Error("Ein erhöhtes Uploadlimit ohne gültige One-Shot-Provenienz ist nicht zulässig.");
-    error.code = "PRODUCTION_BATCH_OVERRIDE_UPLOAD_PROVENANCE_MISSING";
-    throw error;
+  } else {
+    assertPolicyBoundAutomaticRotationUpload({
+      productionPolicy,
+      lifecycle,
+      runId,
+      effectiveMaxRunItems,
+    });
   }
   const jobId = createUploadJobId(project, listing);
   const uploadJob = {

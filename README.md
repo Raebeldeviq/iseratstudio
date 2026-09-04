@@ -859,6 +859,46 @@ Batchkontext bis zur autorisierten Obergrenze binden. Normale Rotationen nutzen
 den regulären 40er-Produktionsvertrag; falsche oder gemischte Jobprovenienz
 stoppt vor FTPS.
 
+### Produktionsstart-Guard und terminale Rotationskopien
+
+Ein regulärer automatischer Upload ist nur zulässig, wenn der gültige Wert aus
+`listing-rotation-production-policy.json` exakt mit dem effektiven Limit des
+persistierten Produktions-Lifecycles übereinstimmt. Damit ist
+`maxRunItems = 40` Bestandteil des normalen 9-Tage-Vertrags und keine
+One-Shot-Provenienz. Ein Wert oberhalb der regulären Policy bleibt weiterhin
+gesperrt und benötigt den bestehenden separaten, einmaligen Override-Vertrag.
+Bei einem Helper-Restart werden die neue überwachende Schedulerlauf-ID und die
+ursprüngliche Produktions-Lifecycle-ID getrennt geprüft; dadurch bleibt eine
+gültige offene Wiederaufnahme möglich, ohne die Policy-Bindung zu lockern.
+
+Der deterministische Schlüssel einer neu begonnenen Rotationskopie enthält die
+konkrete Schedulerlauf-ID. Eine bereits vorhandene Kopie darf nur dann
+fortgesetzt werden, wenn sie dieselbe Source, dieselbe Produktions-Lifecycle-ID
+und einen offenen Zustand `scheduled`, `processing`, `prepared` oder `failed`
+besitzt. Historische Kopien in `published`, `transferred_pending_import`,
+`archived`, `deleted` oder einem anderen terminalen Zustand werden nie als neue
+Kopie wiederverwendet. Eine unerwartete ID-Kollision stoppt fail-closed.
+
+Für den nachweislich rein internen Startschaden des Paars
+`30460-108038 → 30460-674991` existiert ein einmaliger
+Reconciliation-Vertrag. Er akzeptiert ausschließlich die fest gebundenen
+85er-Scope-, Evidence- und Classification-Hashes, den vorhandenen
+`repair_completed`-Stand und die positive objektbezogene
+Provider-Löschbestätigung in Katalog und DELETE-Ledger. Vorschau und Anwendung
+lauten:
+
+```bash
+node listing-rotation-start-reconciliation-cli.mjs preview
+node listing-rotation-start-reconciliation-cli.mjs apply \
+  --confirm RECONCILE_30460_108038_30460_674991
+```
+
+Die Anwendung setzt ausschließlich `30460-674991` intern wieder auf `deleted`,
+hält `30460-108038` auf `published` und bereinigt dessen Scheduler-Verweis auf
+die abgeschlossene Kopie. Sie ist idempotent, verlangt alle produktiven Modi
+auf `off` sowie einen vollständig ruhenden Jobzustand und führt keinen Upload,
+keinen DELETE, keine Mailmutation und keinen Portalexport aus.
+
 ### Immoprofessional-Importbestätigung aus dem serverseitigen Berichtordner
 
 Der lokale Background-Helper schließt die zweite Veröffentlichungsstufe über

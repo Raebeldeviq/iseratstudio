@@ -7,6 +7,42 @@ export const LISTING_ROTATION_PRODUCTION_POLICY_FORMAT = 2;
 export const LISTING_ROTATION_PRODUCTION_MAX_RUN_ITEMS = LISTING_ROTATION_DAILY_CAP;
 export const LISTING_ROTATION_STARTUP_CATCHUP_MODES = Object.freeze(["detect-only", "guarded"]);
 
+function productionPolicyError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+export function assertPolicyBoundAutomaticRotationUpload(input = {}) {
+  const policy = input.productionPolicy;
+  const lifecycle = input.lifecycle;
+  const supervisingSchedulerRunId = String(input.runId || "");
+  const productionSchedulerRunId = String(lifecycle?.schedulerRunId || "");
+  const effectiveMaxRunItems = Math.trunc(Number(input.effectiveMaxRunItems));
+  if (
+    policy?.valid !== true
+    || !Number.isInteger(effectiveMaxRunItems)
+    || effectiveMaxRunItems < 1
+    || effectiveMaxRunItems > LISTING_ROTATION_PRODUCTION_MAX_RUN_ITEMS
+    || effectiveMaxRunItems !== policy.maxRunItems
+    || !supervisingSchedulerRunId
+    || !productionSchedulerRunId
+    || lifecycle?.effectiveMaxRunItems !== effectiveMaxRunItems
+    || lifecycle?.batchOverrideId
+  ) {
+    throw productionPolicyError(
+      "PRODUCTION_POLICY_UPLOAD_PROVENANCE_INVALID",
+      "Der reguläre Rotationsupload ist nicht eindeutig an Schedulerlauf und persistente Production-Policy gebunden.",
+    );
+  }
+  return {
+    contract: "policy-bound-automatic-rotation-upload-v1",
+    schedulerRunId: productionSchedulerRunId,
+    supervisingSchedulerRunId,
+    effectiveMaxRunItems,
+  };
+}
+
 function failClosed(reason, updatedAt = "") {
   return {
     format: LISTING_ROTATION_PRODUCTION_POLICY_FORMAT,

@@ -1,5 +1,56 @@
 # Änderungsprotokoll
 
+## Unreleased · 9-Tage-Produktionsstart-Guards – 4. September 2026
+
+### Report
+
+- Der automatische Upload-Guard unterscheidet nun reguläre, exakt an die
+  persistente Production-Policy gebundene Schedulerläufe bis zum globalen
+  Tageslimit von 40 von einem separat autorisierten One-Shot. Schedulerlauf,
+  ursprünglicher Produktions-Lifecycle und effektives Limit müssen
+  widerspruchsfrei belegt sein.
+- Deterministische Rotationskopien sind zusätzlich an die konkrete
+  Schedulerlauf-ID gebunden. Eine vorhandene Kopie darf nur im selben offenen
+  Lifecycle und ausschließlich in einem fortsetzbaren Zustand wiederverwendet
+  werden; `published`, `transferred_pending_import`, `archived`, `deleted` und
+  andere terminale Zustände sind ausgeschlossen.
+- Einen einmaligen, fail-closed und idempotenten internen
+  Reconciliation-Vertrag für `30460-108038 → 30460-674991` ergänzt. Er verlangt
+  die unveränderte 85er-Scope-, Evidence- und Classification-Provenienz,
+  `repair_completed` sowie den positiven objektgebundenen Provider-Löschbeleg.
+  Er stellt ausschließlich B intern auf `deleted` und die Scheduler-Ownership
+  von A auf `published` zurück.
+- Regressionstests decken Policy-Limit 40, unveränderten One-Shot-Schutz,
+  terminale Kopien, zulässige Restart-/Resume-Kopien und die lokale
+  A/B-Reconciliation ohne externen Transfer ab.
+
+### Begründung
+
+Der reguläre Tagesvertrag und der historische One-Shot besitzen verschiedene
+Provenienzketten. Der Guard prüft deshalb den persistierten Policywert direkt
+gegen den in der Kopie gespeicherten Produktions-Lifecycle, statt ein Limit
+größer drei pauschal als One-Shot zu interpretieren. Die Lauf-ID im
+deterministischen Kopieschlüssel verhindert zugleich, dass ein neuer Zyklus auf
+eine abgeschlossene historische Kopie zeigt.
+
+Die Katalogkorrektur bleibt bewusst ein exakt kompiliertes Einzelwerkzeug. Sie
+leitet keinen Status aus Vermutungen ab, sondern verlangt Kampagnenabschluss,
+Löschbericht und DELETE-Ledger gemeinsam und verändert weder Provider noch
+FTPS, Mail oder Portal.
+
+### Hürden und Risiken
+
+- Eine Restart-Wiederaufnahme besitzt eine neue überwachende Schedulerlauf-ID,
+  darf aber nur den unveränderten ursprünglichen Produktions-Lifecycle
+  fortsetzen. Beide IDs werden getrennt geführt; Policy und Lifecycle-Limit
+  müssen weiterhin exakt übereinstimmen.
+- Die Reconciliation stoppt bei jeder Abweichung des A/B-Schadenbilds oder der
+  historischen Belege. Sie darf nur bei Rotation, Production-DELETE und
+  Portalexport auf `off` sowie ohne offene Jobs, Claims oder Leases laufen.
+- Dieser Stand startet keine Rotation und führt keinen FTPS-, DELETE- oder
+  Portaltransfer aus. Ein produktiver Start benötigt nach dem Release-Preview
+  eine neue ausdrückliche Freigabe.
+
 ## Unreleased · 9-Tage-Rotationsbetrieb – 2. September 2026
 
 ### Report

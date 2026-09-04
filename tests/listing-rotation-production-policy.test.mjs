@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  assertPolicyBoundAutomaticRotationUpload,
   createListingRotationProductionPolicyStore,
   normalizeListingRotationProductionPolicy,
 } from "../listing-rotation-production-policy.mjs";
@@ -65,4 +66,90 @@ test("policy CLI requires and forwards the exact expected runtime commit", async
   });
   assert.equal(saved.expectedRuntimeCommit, RUNTIME_COMMIT);
   assert.equal(result.valid, true);
+});
+
+test("a regular policy-bound scheduler run may use the persistent 40-item limit without one-shot provenance", () => {
+  const productionPolicy = normalizeListingRotationProductionPolicy({
+    format: 2,
+    maxRunItems: 40,
+    startupCatchupMode: "guarded",
+    expectedRuntimeCommit: RUNTIME_COMMIT,
+  });
+  const result = assertPolicyBoundAutomaticRotationUpload({
+    productionPolicy,
+    runId: "regular-scheduler-40",
+    effectiveMaxRunItems: 40,
+    lifecycle: {
+      format: 1,
+      schedulerRunId: "regular-scheduler-40",
+      effectiveMaxRunItems: 40,
+    },
+  });
+  assert.deepEqual(result, {
+    contract: "policy-bound-automatic-rotation-upload-v1",
+    schedulerRunId: "regular-scheduler-40",
+    supervisingSchedulerRunId: "regular-scheduler-40",
+    effectiveMaxRunItems: 40,
+  });
+});
+
+test("a valid open lifecycle remains policy-bound when a restart gives its supervisor a new run id", () => {
+  const productionPolicy = normalizeListingRotationProductionPolicy({
+    format: 2,
+    maxRunItems: 40,
+    startupCatchupMode: "guarded",
+    expectedRuntimeCommit: RUNTIME_COMMIT,
+  });
+  const result = assertPolicyBoundAutomaticRotationUpload({
+    productionPolicy,
+    runId: "restart-supervisor",
+    effectiveMaxRunItems: 40,
+    lifecycle: {
+      format: 1,
+      schedulerRunId: "original-production-lifecycle",
+      effectiveMaxRunItems: 40,
+    },
+  });
+  assert.equal(result.schedulerRunId, "original-production-lifecycle");
+  assert.equal(result.supervisingSchedulerRunId, "restart-supervisor");
+});
+
+test("a limit above the regular policy remains blocked without the dedicated one-shot contract", () => {
+  const productionPolicy = normalizeListingRotationProductionPolicy({
+    format: 2,
+    maxRunItems: 3,
+    startupCatchupMode: "detect-only",
+    expectedRuntimeCommit: RUNTIME_COMMIT,
+  });
+  assert.throws(() => assertPolicyBoundAutomaticRotationUpload({
+    productionPolicy,
+    runId: "unbound-one-shot",
+    effectiveMaxRunItems: 25,
+    lifecycle: {
+      format: 1,
+      schedulerRunId: "unbound-one-shot",
+      effectiveMaxRunItems: 25,
+    },
+  }), (error) => error.code === "PRODUCTION_POLICY_UPLOAD_PROVENANCE_INVALID");
+});
+
+test("regular policy uploads reject incomplete lifecycle and hidden one-shot provenance", () => {
+  const productionPolicy = normalizeListingRotationProductionPolicy({
+    format: 2,
+    maxRunItems: 40,
+    startupCatchupMode: "guarded",
+    expectedRuntimeCommit: RUNTIME_COMMIT,
+  });
+  for (const lifecycle of [
+    { schedulerRunId: "", effectiveMaxRunItems: 40 },
+    { schedulerRunId: "regular-run", effectiveMaxRunItems: 39 },
+    { schedulerRunId: "regular-run", effectiveMaxRunItems: 40, batchOverrideId: "one-shot" },
+  ]) {
+    assert.throws(() => assertPolicyBoundAutomaticRotationUpload({
+      productionPolicy,
+      runId: "regular-run",
+      effectiveMaxRunItems: 40,
+      lifecycle,
+    }), (error) => error.code === "PRODUCTION_POLICY_UPLOAD_PROVENANCE_INVALID");
+  }
 });
