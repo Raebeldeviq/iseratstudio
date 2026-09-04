@@ -193,7 +193,7 @@ export function parsePlotWorkbookRows(
       purchasePrice: parseGermanNumber(cell(row, "plotPrice")),
       regionalNotes: text(cell(row, "locationFacts")),
       owner,
-    }, { createId: () => id });
+    }, { createId: () => id }) as PlotRecord;
     const providedFields = ([
       ["street", cell(row, "street")],
       ["houseNumber", cell(row, "houseNumber")],

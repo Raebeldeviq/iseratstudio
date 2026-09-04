@@ -1232,11 +1232,11 @@ export default function InseratStudio() {
       let plots = current.plots || [];
       if (coreChanged && project.plotId) {
         plots = plots.map((plot) => plot.id === project.plotId
-          ? patchPlotFromProject(plot, updatedProject)
+          ? patchPlotFromProject(plot, updatedProject) as PlotRecord
           : plot);
       } else if (coreChanged && updatedProject.street.trim() && /^\d{5}$/u.test(updatedProject.zip) && updatedProject.city.trim()) {
         const existingPlot = plots.find((plot) => plotAddressKey(plot) === plotAddressKey(updatedProject));
-        const linkedPlot = existingPlot || plotFromProject(updatedProject, { id: `plot-${updatedProject.id}` });
+        const linkedPlot = existingPlot || plotFromProject(updatedProject, { id: `plot-${updatedProject.id}` }) as PlotRecord;
         if (!existingPlot) plots = [...plots, linkedPlot];
         projects = projects.map((item) => item.id === updatedProject.id
           ? applyPlotToProject(item, linkedPlot)
