@@ -959,6 +959,23 @@ Antworten als `MAIL_IMPORT_REPORT_PARSE_ERROR` getrennt. Alle Klassen bleiben
 fail-closed: Sie bestätigen keinen Import, verändern keine Mail und lassen die
 Rotationskopie unverändert `transferred_pending_import`.
 
+Import- und DELETE-Berichtadapter teilen einen einzigen prozessweiten
+read-only Access-Guard. Damit kann der Helper unabhängig davon, ob die Abfrage
+vom seriellen Lifecycle, vom periodischen Hintergrunddienst, von einer
+Startup-/Recovery-Prüfung oder vom manuellen Runtime-Probe stammt, höchstens
+einen Apple-Mail-Request gleichzeitig ausführen. Weitere Abfragen warten in
+einer begrenzten FIFO-Warteschlange; Kapazitäts- und Wartezeitüberschreitungen
+stoppen fail-closed. Fehler und Exceptions geben den Guard garantiert frei,
+und ein Helper-Abbruch hinterlässt keinen persistenten Mail-Lock.
+
+Nur die eindeutig erkannte AppleEvent-Signatur `-609` („Verbindung ist
+ungültig“) wird ausschließlich innerhalb der read-only Mailabfrage höchstens
+zweimal mit kurzen Abständen wiederholt. Andere Mail-, Permission-, Timeout-,
+Setup-, Script- oder Parserfehler werden nicht pauschal wiederholt. Der Retry
+umschließt weder Scheduler-Claim noch Replacement-Erzeugung, FTPS-Upload,
+DELETE-Transfer oder Portalexport; diese vorgelagerten Mutationen können
+dadurch nicht erneut ausgelöst werden.
+
 ### Persistenter macOS-Helper und read-only Runtime-Probe
 
 Der Helper läuft als einzelner Benutzer-LaunchAgent im Aqua-Kontext und mit
@@ -984,10 +1001,10 @@ node helper-launch-agent-cli.mjs install
 Der Apple-Mail-Kindprozess besitzt einen begrenzten Buffer und eine feste
 Laufzeit. Bei Timeout wird ausschließlich der zugehörige `osascript`-Prozess
 zunächst mit `SIGTERM` und nach Ablauf der Grace Period mit `SIGKILL` beendet;
-der Helper wartet auf dessen tatsächliches Ende. Adapter und Importdienst
-erlauben jeweils nur eine aktive Mailoperation. Die Ordnertraversierung ist auf
-500 Nachrichten begrenzt und liest für die Kandidatensuche nur Betreff,
-Empfangszeitpunkt und lokale Nachrichten-ID.
+der Helper wartet auf dessen tatsächliches Ende. Der gemeinsame Prozessguard
+erlaubt adapter- und dienstübergreifend nur eine aktive Mailoperation. Die
+Ordnertraversierung ist auf 500 Nachrichten begrenzt und liest für die
+Kandidatensuche nur Betreff, Empfangszeitpunkt und lokale Nachrichten-ID.
 
 Der sessiongeschützte Runtime-Probe prüft den exakt laufenden Helperpfad, ohne
 Nachrichtentexte oder Anhänge zu lesen und ohne eine Mail- oder Katalogmutation:

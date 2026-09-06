@@ -1,7 +1,14 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
+import { sharedAppleMailReadAccessGuard } from "./apple-mail-read-access-guard.mjs";
+import {
+  classifyAppleMailAutomationError,
+  isRetryableAppleMailInvalidConnection,
+} from "./apple-mail-import-report-adapter.mjs";
+
 const execFileAsync = promisify(execFile);
+const INVALID_CONNECTION_RETRY_DELAYS_MS = Object.freeze([150, 400]);
 
 export const LIVE_CANARY_DELETE_MAIL_ACCOUNT = "Livinghaus";
 export const LIVE_CANARY_DELETE_MAILBOXES = Object.freeze([
@@ -53,13 +60,39 @@ on run argv
   end tell
 end run`;
 
-async function defaultRunner(script, args) {
-  const result = await execFileAsync("osascript", ["-e", script, "--", ...args.map(String)], {
-    encoding: "utf8",
-    maxBuffer: 20 * 1024 * 1024,
-    timeout: 45_000,
-  });
-  return result.stdout;
+export function createAppleMailDeleteAutomationRunner(options = {}) {
+  const execute = options.execute || execFileAsync;
+  const clock = options.clock || (() => Date.now());
+  const sleep = options.sleep || ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+  const accessGuard = options.accessGuard || sharedAppleMailReadAccessGuard;
+  const retryDelaysMs = Array.isArray(options.retryDelaysMs)
+    ? options.retryDelaysMs.map((value) => Math.max(0, Number(value) || 0)).slice(0, 2)
+    : INVALID_CONNECTION_RETRY_DELAYS_MS;
+  return async function runAppleScript(script, args, runnerOptions = {}) {
+    const timeout = Math.max(1, Number(runnerOptions.timeout) || 45_000);
+    const operation = /FPI_OPERATION:([A-Z_]+)/u.exec(String(script || ""))?.[1] || "APPLE_MAIL_DELETE_REPORT_READ";
+    for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
+      const startedAt = clock();
+      try {
+        const result = await accessGuard.run(
+          () => execute("osascript", ["-e", script, "--", ...args.map(String)], {
+            encoding: "utf8",
+            maxBuffer: runnerOptions.maxBuffer || 20 * 1024 * 1024,
+            timeout,
+          }),
+          { operation, waitTimeoutMs: runnerOptions.queueWaitTimeoutMs },
+        );
+        return result.stdout;
+      } catch (error) {
+        const classified = error?.code?.startsWith?.("MAIL_")
+          ? error
+          : classifyAppleMailAutomationError(error, { durationMs: clock() - startedAt, timeout });
+        if (!isRetryableAppleMailInvalidConnection(classified) || attempt >= retryDelaysMs.length) throw classified;
+        await sleep(retryDelaysMs[attempt]);
+      }
+    }
+    throw new Error("Der begrenzte Apple-Mail-Retryvertrag wurde unerwartet verlassen.");
+  };
 }
 
 function candidateLine(line, accountName, accountId, mailboxName) {
@@ -69,7 +102,13 @@ function candidateLine(line, accountName, accountId, mailboxName) {
 }
 
 export function createAppleMailLiveCanaryDeleteReportAdapter(options = {}) {
-  const runner = options.runner || defaultRunner;
+  const runner = options.runner || createAppleMailDeleteAutomationRunner({
+    accessGuard: options.accessGuard,
+    clock: options.clock,
+    execute: options.execute,
+    retryDelaysMs: options.retryDelaysMs,
+    sleep: options.sleep,
+  });
   const accountName = String(options.accountName || LIVE_CANARY_DELETE_MAIL_ACCOUNT).trim();
   const mailboxNames = options.mailboxNames || LIVE_CANARY_DELETE_MAILBOXES;
   return Object.freeze({

@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 
+import { sharedAppleMailReadAccessGuard } from "./apple-mail-read-access-guard.mjs";
 import { IMMOPROFESSIONAL_IMPORT_REPORT_SUBJECT } from "./immoprofessional-import-report-parser.mjs";
 
 export const IMPORT_REPORT_MAIL_FOLDER = "Inseratestudio – Importberichte";
@@ -7,6 +8,7 @@ export const DEFAULT_IMPORT_REPORT_MAIL_ACCOUNT = "Livinghaus";
 
 const PROCESS_TIMEOUT_MS = 45_000;
 const PROCESS_TERMINATION_GRACE_MS = 1_000;
+const INVALID_CONNECTION_RETRY_DELAYS_MS = Object.freeze([150, 400]);
 export const IMPORT_REPORT_FOLDER_MESSAGE_LIMIT = 500;
 const FPI_OK_PREFIX = "FPI_OK\t";
 const FPI_ERROR_PREFIX = "FPI_ERROR\t";
@@ -174,11 +176,26 @@ export function classifyAppleMailAutomationError(error, context = {}) {
       { timedOut: false, exitSignal, durationMs },
     );
   }
-  if (/application isn.?t running|application not found|connection is invalid|invalid connection|no such process|\(-600\)|\(-609\)/iu.test(stderr)) {
+  const invalidConnectionSignature = [stderr, cleanProcessText(error?.message), String(error?.code || "")].join(" ");
+  if (/connection is invalid|invalid connection|verbindung ist ungültig|\(-609\)|(?:^|\s)-609(?:\s|$)/iu.test(invalidConnectionSignature)) {
     return adapterError(
       "MAIL_AUTOMATION_UNAVAILABLE",
       "Apple Mail oder die AppleEvent-Verbindung ist technisch nicht verfügbar.",
-      { timedOut: false, exitSignal, durationMs },
+      {
+        timedOut: false,
+        exitSignal,
+        durationMs,
+        appleEventErrorNumber: -609,
+        transientSignature: "apple-event-invalid-connection",
+        retryableReadOnly: true,
+      },
+    );
+  }
+  if (/application isn.?t running|application not found|no such process|\(-600\)/iu.test(stderr)) {
+    return adapterError(
+      "MAIL_AUTOMATION_UNAVAILABLE",
+      "Apple Mail oder die AppleEvent-Verbindung ist technisch nicht verfügbar.",
+      { timedOut: false, exitSignal, durationMs, retryableReadOnly: false },
     );
   }
   return adapterError(
@@ -186,6 +203,13 @@ export function classifyAppleMailAutomationError(error, context = {}) {
     "Apple Mail konnte read-only nicht abgefragt werden.",
     { timedOut: false, exitSignal, durationMs },
   );
+}
+
+export function isRetryableAppleMailInvalidConnection(error) {
+  return error?.code === "MAIL_AUTOMATION_UNAVAILABLE"
+    && error?.appleEventErrorNumber === -609
+    && error?.transientSignature === "apple-event-invalid-connection"
+    && error?.retryableReadOnly === true;
 }
 
 function processError(message, details = {}) {
@@ -303,20 +327,35 @@ export function createAppleMailAutomationRunner(options = {}) {
     terminationGraceMs: options.terminationGraceMs,
   });
   const clock = options.clock || (() => Date.now());
+  const sleep = options.sleep || ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+  const accessGuard = options.accessGuard || sharedAppleMailReadAccessGuard;
+  const retryDelaysMs = Array.isArray(options.retryDelaysMs)
+    ? options.retryDelaysMs.map((value) => Math.max(0, Number(value) || 0)).slice(0, 2)
+    : INVALID_CONNECTION_RETRY_DELAYS_MS;
   return async function runAppleScript(script, args, runnerOptions = {}) {
     const timeout = Math.max(1, Number(runnerOptions.timeout) || PROCESS_TIMEOUT_MS);
-    const startedAt = clock();
-    try {
-      const result = await execute("osascript", ["-e", script, "--", ...args.map(String)], {
-        encoding: "utf8",
-        maxBuffer: runnerOptions.maxBuffer || 10 * 1024 * 1024,
-        timeout,
-      });
-      return parseStructuredOutput(result.stdout);
-    } catch (error) {
-      if (error?.code?.startsWith?.("MAIL_")) throw error;
-      throw classifyAppleMailAutomationError(error, { durationMs: clock() - startedAt, timeout });
+    const operation = /FPI_OPERATION:([A-Z_]+)/u.exec(String(script || ""))?.[1] || "APPLE_MAIL_READ";
+    for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
+      const startedAt = clock();
+      try {
+        const result = await accessGuard.run(
+          () => execute("osascript", ["-e", script, "--", ...args.map(String)], {
+            encoding: "utf8",
+            maxBuffer: runnerOptions.maxBuffer || 10 * 1024 * 1024,
+            timeout,
+          }),
+          { operation, waitTimeoutMs: runnerOptions.queueWaitTimeoutMs },
+        );
+        return parseStructuredOutput(result.stdout);
+      } catch (error) {
+        const classified = error?.code?.startsWith?.("MAIL_")
+          ? error
+          : classifyAppleMailAutomationError(error, { durationMs: clock() - startedAt, timeout });
+        if (!isRetryableAppleMailInvalidConnection(classified) || attempt >= retryDelaysMs.length) throw classified;
+        await sleep(retryDelaysMs[attempt]);
+      }
     }
+    throw new Error("Der begrenzte Apple-Mail-Retryvertrag wurde unerwartet verlassen.");
   };
 }
 
@@ -341,7 +380,13 @@ function validMailboxHeader(output, expectedStatus, expectedMailbox) {
 }
 
 export function createAppleMailImportReportAdapter(options = {}) {
-  const runner = options.runner || createAppleMailAutomationRunner({ execute: options.execute, clock: options.clock });
+  const runner = options.runner || createAppleMailAutomationRunner({
+    accessGuard: options.accessGuard,
+    clock: options.clock,
+    execute: options.execute,
+    retryDelaysMs: options.retryDelaysMs,
+    sleep: options.sleep,
+  });
   const accountName = String(options.accountName || process.env.FPI_IMPORT_REPORT_MAIL_ACCOUNT || DEFAULT_IMPORT_REPORT_MAIL_ACCOUNT).trim();
   const mailboxName = String(
     options.mailboxName
@@ -351,85 +396,61 @@ export function createAppleMailImportReportAdapter(options = {}) {
   ).trim();
   if (!accountName) throw new Error("Der Apple-Mail-Accountname fehlt.");
   if (!mailboxName) throw new Error("Der Apple-Mail-Importberichtordner fehlt.");
-  let activeOperation = "";
-
-  async function singleFlight(operation, callback) {
-    if (activeOperation) {
-      throw adapterError(
-        "MAIL_AUTOMATION_BUSY",
-        `Eine read-only Apple-Mail-Abfrage (${activeOperation}) läuft bereits.`,
-        { activeOperation },
-      );
-    }
-    activeOperation = operation;
-    try {
-      return await callback();
-    } finally {
-      activeOperation = "";
-    }
-  }
-
   return Object.freeze({
     accountName,
     mailboxName,
     targetFolder: mailboxName,
     readOnly: true,
     async inspectSetup() {
-      return singleFlight("inspect-setup", async () => {
-        const output = await runner(INSPECT_SETUP_SCRIPT, [accountName, mailboxName]);
-        const setup = validMailboxHeader(output, "SETUP", mailboxName);
+      const output = await runner(INSPECT_SETUP_SCRIPT, [accountName, mailboxName]);
+      const setup = validMailboxHeader(output, "SETUP", mailboxName);
+      return {
+        accountName,
+        accountId: setup.accountId,
+        accountType: setup.accountType,
+        mailboxName,
+        mailboxClass: setup.mailboxClass,
+        targetFolder: mailboxName,
+        targetFolderExists: true,
+        readOnly: true,
+      };
+    },
+    async findCandidates(input = {}) {
+      const lookbackHours = Math.max(1, Math.min(720, Math.ceil(Number(input.lookbackHours) || 72)));
+      const output = String(await runner(LIST_MESSAGES_SCRIPT, [
+        accountName,
+        mailboxName,
+        IMMOPROFESSIONAL_IMPORT_REPORT_SUBJECT,
+        String(lookbackHours),
+        String(IMPORT_REPORT_FOLDER_MESSAGE_LIMIT),
+      ]) || "");
+      const lines = output.split(/\r?\n/gu).map((line) => line.trim()).filter(Boolean);
+      const header = validMailboxHeader(lines.shift(), "MAILBOX", mailboxName);
+      return lines.map((line) => {
+        const [kind, transportId] = line.split("\t");
+        if (kind !== "MESSAGE") throw adapterError("MAIL_IMPORT_REPORT_PARSE_ERROR", "Apple Mail hat eine ungültige Nachrichtenreferenz geliefert.");
         return {
+          transportId: validTransportId(transportId),
           accountName,
-          accountId: setup.accountId,
-          accountType: setup.accountType,
+          accountId: header.accountId,
+          accountType: header.accountType,
           mailboxName,
-          mailboxClass: setup.mailboxClass,
-          targetFolder: mailboxName,
-          targetFolderExists: true,
-          readOnly: true,
         };
       });
     },
-    async findCandidates(input = {}) {
-      return singleFlight("find-candidates", async () => {
-        const lookbackHours = Math.max(1, Math.min(720, Math.ceil(Number(input.lookbackHours) || 72)));
-        const output = String(await runner(LIST_MESSAGES_SCRIPT, [
-          accountName,
-          mailboxName,
-          IMMOPROFESSIONAL_IMPORT_REPORT_SUBJECT,
-          String(lookbackHours),
-          String(IMPORT_REPORT_FOLDER_MESSAGE_LIMIT),
-        ]) || "");
-        const lines = output.split(/\r?\n/gu).map((line) => line.trim()).filter(Boolean);
-        const header = validMailboxHeader(lines.shift(), "MAILBOX", mailboxName);
-        return lines.map((line) => {
-          const [kind, transportId] = line.split("\t");
-          if (kind !== "MESSAGE") throw adapterError("MAIL_IMPORT_REPORT_PARSE_ERROR", "Apple Mail hat eine ungültige Nachrichtenreferenz geliefert.");
-          return {
-            transportId: validTransportId(transportId),
-            accountName,
-            accountId: header.accountId,
-            accountType: header.accountType,
-            mailboxName,
-          };
-        });
-      });
-    },
     async readRawMessage(candidate) {
-      return singleFlight("read-message", async () => {
-        const transportId = validTransportId(candidate?.transportId);
-        const accountId = validAccountId(candidate?.accountId);
-        if (candidate?.accountName !== accountName || candidate?.mailboxName !== mailboxName) {
-          throw new Error("Die Apple-Mail-Nachrichtenreferenz gehört nicht zum konfigurierten Importberichtordner.");
-        }
-        const rawSource = await runner(
-          READ_MESSAGE_SCRIPT,
-          [accountName, mailboxName, accountId, transportId],
-          { maxBuffer: 20 * 1024 * 1024 },
-        );
-        if (!String(rawSource || "").trim()) throw adapterError("MAIL_IMPORT_REPORT_PARSE_ERROR", "Apple Mail lieferte eine leere Raw-Mail.");
-        return { ...candidate, accountName, accountId, mailboxName, rawSource: String(rawSource) };
-      });
+      const transportId = validTransportId(candidate?.transportId);
+      const accountId = validAccountId(candidate?.accountId);
+      if (candidate?.accountName !== accountName || candidate?.mailboxName !== mailboxName) {
+        throw new Error("Die Apple-Mail-Nachrichtenreferenz gehört nicht zum konfigurierten Importberichtordner.");
+      }
+      const rawSource = await runner(
+        READ_MESSAGE_SCRIPT,
+        [accountName, mailboxName, accountId, transportId],
+        { maxBuffer: 20 * 1024 * 1024 },
+      );
+      if (!String(rawSource || "").trim()) throw adapterError("MAIL_IMPORT_REPORT_PARSE_ERROR", "Apple Mail lieferte eine leere Raw-Mail.");
+      return { ...candidate, accountName, accountId, mailboxName, rawSource: String(rawSource) };
     },
   });
 }

@@ -1,5 +1,48 @@
 # Änderungsprotokoll
 
+## Unreleased · Prozessweite Apple-Mail-Serialisierung – 6. September 2026
+
+### Report
+
+- Sämtliche read-only Apple-Mail-Aufrufe der Import- und
+  DELETE-Bestätigungsadapter laufen nun über denselben prozessweiten,
+  FIFO-basierten Access-Guard. Lifecycle-Coordinator, periodischer
+  Hintergrunddienst, Startup-/Recovery-Prüfung und Runtime-Probe teilen damit
+  innerhalb eines Helper-Prozesses exakt einen aktiven AppleEvent-Zugriff.
+- Der Guard begrenzt Warteschlange und Wartezeit, gibt den Zugriff in jedem
+  Erfolgs- und Fehlerpfad frei und hinterlässt bei einem Prozessabbruch keinen
+  persistenten Lock.
+- Ausschließlich die eindeutig klassifizierte AppleEvent-Signatur `-609`
+  („Verbindung ist ungültig“) erhält für read-only Mailabfragen höchstens zwei
+  kurze Wiederholungen. Permission-, Timeout-, Setup-, Parser- und unbekannte
+  Fehler bleiben ohne pauschalen Retry fail-closed.
+- Regressionstests decken beide Zugriffsrichtungen, Exception-/Timeout-
+  Freigabe, `-609`-Erfolg und -Erschöpfung, unbekannte Fehler sowie drei
+  serielle Lifecycles bei gleichzeitig aktivem Hintergrundtimer ab. FTPS- und
+  DELETE-Transferzähler bleiben dabei je Lifecycle exakt eins.
+
+### Begründung
+
+Import- und DELETE-Bestätigung verwendeten bislang getrennte lokale
+Single-Flight-Grenzen. Ein gemeinsamer Guard direkt am AppleScript-
+Ausführungspunkt erfasst alle bestehenden Caller, ohne Scheduler-, Lifecycle-,
+FTPS- oder DELETE-Verträge zu verändern. Der Retry liegt ebenfalls innerhalb
+der read-only Ausführung; dadurch kann er keine vorgelagerte externe Mutation
+wiederholen.
+
+### Hürden und Risiken
+
+- Die Warteschlange muss lang laufende AppleEvents aufnehmen, ohne unbegrenzt
+  zu wachsen oder dauerhaft zu blockieren. Kapazität und Wartezeit sind daher
+  fest begrenzt; ein Überschreiten erzeugt einen expliziten fail-closed
+  Mailfehler.
+- Zwischen zwei `-609`-Versuchen wird der Guard freigegeben. So kann ein bereits
+  wartender read-only Caller fair fortfahren; Message-ID-/Hash-/Ledger-Dedupe
+  bleibt für eine doppelt sichtbare Providermail unverändert zuständig.
+- Dieser Entwicklungsstand führt keine Rotation, keinen Upload, keinen DELETE
+  und keinen Portalexport aus. Der produktive Runtime-Wechsel erfolgt erst nach
+  vollständig grünem QA- und Runtime-Preflight.
+
 ## Unreleased · 9-Tage-Produktionsstart-Guards – 4. September 2026
 
 ### Report

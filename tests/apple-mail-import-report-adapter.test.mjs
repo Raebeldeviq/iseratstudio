@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 
+import { createAppleMailReadAccessGuard } from "../apple-mail-read-access-guard.mjs";
 import {
   classifyAppleMailAutomationError,
   createAppleMailAutomationRunner,
@@ -248,23 +249,25 @@ test("folder traversal limit is classified fail-closed", async () => {
     error.code === "MAIL_IMPORT_REPORT_SCAN_LIMIT_EXCEEDED");
 });
 
-test("adapter rejects overlapping Apple Mail operations and releases single-flight after completion", async () => {
+test("adapter serializes overlapping Apple Mail operations and releases the shared guard", async () => {
   let release;
-  const runner = async (script) => {
-    if (operation(script) === "INSPECT_IMPORT_REPORT_FOLDER") {
+  const accessGuard = createAppleMailReadAccessGuard({ waitTimeoutMs: 1_000 });
+  const execute = async (_file, args) => {
+    if (operation(args[1]) === "INSPECT_IMPORT_REPORT_FOLDER") {
       await new Promise((resolve) => { release = resolve; });
-      return `SETUP\t${accountId}\tunknown\t${IMPORT_REPORT_MAIL_FOLDER}\tmailbox`;
+      return { stdout: `FPI_OK\tSETUP\t${accountId}\tunknown\t${IMPORT_REPORT_MAIL_FOLDER}\tmailbox`, stderr: "" };
     }
-    return `MAILBOX\t${accountId}\tunknown\t${IMPORT_REPORT_MAIL_FOLDER}\tmailbox\n`;
+    return { stdout: `FPI_OK\tMAILBOX\t${accountId}\tunknown\t${IMPORT_REPORT_MAIL_FOLDER}\tmailbox\n`, stderr: "" };
   };
-  const adapter = createAppleMailImportReportAdapter({ runner });
+  const adapter = createAppleMailImportReportAdapter({ accessGuard, execute, retryDelaysMs: [] });
   const first = adapter.inspectSetup();
   await new Promise((resolve) => setImmediate(resolve));
-  await assert.rejects(adapter.findCandidates(), (error) =>
-    error.code === "MAIL_AUTOMATION_BUSY" && error.activeOperation === "inspect-setup");
+  const second = adapter.findCandidates();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(accessGuard.inspect().queuedCalls, 1);
   release();
   await first;
-  assert.deepEqual(await adapter.findCandidates(), []);
+  assert.deepEqual(await second, []);
 });
 
 test("timeout escalates from SIGTERM to SIGKILL and waits for the owned child to close", async () => {
