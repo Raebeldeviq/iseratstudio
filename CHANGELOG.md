@@ -1,5 +1,32 @@
 # Änderungsprotokoll
 
+## Unreleased · Exklusive 21:00-Schedulergrenze – 7. September 2026
+
+### Report
+
+- Das Produktionszeitfenster wird nun als halboffenes Intervall
+  `08:00–21:00 Europe/Berlin` ausgewertet: Starts bis `20:59:59` sind zulässig,
+  ab `21:00:00` darf kein neuer Lifecycle mehr beginnen.
+- Die bestehenden Scheduler- und seriellen Lifecycle-Tests prüfen die Grenze
+  jetzt ausdrücklich bei `21:00:00`, `21:00:02` und `21:00:59` in Sommer- und
+  Winterzeit.
+
+### Begründung
+
+Die bisher minutengenaue inklusive Endprüfung ließ die gesamte Minute 21:00
+noch als Startzeit zu. Dadurch konnte nach Abschluss einer vorher gestarteten
+Kette um `21:00:02` ein weiterer Lifecycle beansprucht und übertragen werden.
+Die exklusive Endgrenze setzt den dokumentierten Vertrag „ab 21:00 kein neuer
+Start“ direkt in der zentralen Zeitfensterprüfung um.
+
+### Hürden und Risiken
+
+- Bereits vor 21:00 sicher gestartete Import- und DELETE-Bestätigungsketten
+  dürfen weiterhin nach 21:00 abschließen; nur der Start eines neuen
+  Lifecycles wird blockiert.
+- Der Fix verändert weder Schedulerlimits noch Upload-, DELETE-, Mail-,
+  Creative-, Claim-, Lease-, Lock- oder Portalexport-Verträge.
+
 ## Unreleased · Prozessweite Apple-Mail-Serialisierung – 6. September 2026
 
 ### Report

@@ -742,7 +742,7 @@ zuerst abgeschlossen und erhalten keinen zweiten Tagesclaim. Der separate
 Daily-Plot-Guard begrenzt unabhängig weiterhin auf einen Hausupload je
 Grundstück und Tag.
 
-Innerhalb `08:00–21:00 Europe/Berlin` verarbeitet ein Schedulerlauf den
+Innerhalb des halboffenen Zeitfensters `08:00–21:00 Europe/Berlin` verarbeitet ein Schedulerlauf den
 verbleibenden Tagesrahmen seriell ohne Pause zwischen zwei vollständig
 bestätigten Grundstücksketten. Nach FTPS bleibt die Kopie
 `transferred_pending_import`; erst der exakte positive Importbericht macht sie
@@ -835,7 +835,7 @@ nicht. Auch `startup-guarded` bleibt beim normalen 40er-Tageslimit. Das dauerhaf
 Produktionszeitfenster ist `08:00–21:00 Europe/Berlin`; Sommer- und Winterzeit
 werden über die explizite IANA-Zeitzone ausgewertet. Die Prüfung erfolgt vor
 jedem neuen Rotationsstart. Minutengenau sind Starts bis einschließlich
-`21:00:59` zulässig, ab `21:01` nicht mehr. Eine vorher sicher gestartete Kette
+`20:59:59` zulässig; ab `21:00:00` darf kein neuer Lifecycle beginnen. Eine vorher sicher gestartete Kette
 darf FTPS, Importbestätigung, Production-DELETE und Löschbestätigung nach ihren
 bestehenden Regeln abschließen. Mindestens eine Stunde Laufabstand, serielle
 Verarbeitung, Daily-Plot-Guard, Creative-Payload-Prüfung, Upload-Deduplizierung,

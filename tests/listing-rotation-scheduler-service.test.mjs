@@ -953,7 +953,7 @@ test("an FTPS or Creative-Payload failure stops before every later lifecycle", a
   }
 });
 
-test("a chain started at 20:59 Europe/Berlin may finish, but the next new rotation cannot start after 21:00", async () => {
+test("a chain started at 20:59 Europe/Berlin may finish, but the next new rotation cannot start at 21:00:02", async () => {
   const store = memoryStore(studioState(2));
   const uploads = [];
   let stepCall = 0;
@@ -976,7 +976,7 @@ test("a chain started at 20:59 Europe/Berlin may finish, but the next new rotati
       stepCall += 1;
       return stepCall === 1
         ? "2026-08-17T18:59:30.000Z"
-        : "2026-08-17T19:01:00.000Z";
+        : "2026-08-17T19:00:02.000Z";
     },
   });
   assert.equal(result.ok, true, JSON.stringify(result));

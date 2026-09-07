@@ -105,13 +105,13 @@ test("window, pause, locks and failure isolation are enforced", () => {
   const first = current.projects[0].listings[0];
   current.projects[0].listingGroup = updateListingControl(current.projects[0].listingGroup, first, { premiumPlacement: true });
   current.projects[1].listingGroup.variants[1].templateId = current.projects[1].listingGroup.variants[0].templateId;
-  const dryRun = runSchedulerDryRun(current, current.houses, () => 500000, { now: "2026-07-24T10:00:00.000Z" });
+  const dryRun = runSchedulerDryRun(current, current.houses, () => 500000, { now: "2026-07-24T09:59:00.000Z" });
   assert.equal(dryRun.results.length, 2);
   assert.equal(dryRun.results.every((item) => item.ok), true);
   assert.ok(dryRun.skipped.some((item) => item.projectId === "project-2"));
 });
 
-test("the production window is evaluated explicitly in Europe/Berlin with an inclusive 21:00 end minute", () => {
+test("the production window is evaluated explicitly in Europe/Berlin with an exclusive 21:00 boundary", () => {
   const scheduler = updateListingSchedulerSettings(createListingScheduler({
     now: "2026-08-17T06:00:00.000Z",
   }), {
@@ -130,12 +130,14 @@ test("the production window is evaluated explicitly in Europe/Berlin with an inc
     ["summer 19:00", "2026-08-17T17:00:00.000Z", false],
     ["summer 20:00", "2026-08-17T18:00:00.000Z", false],
     ["summer 20:59", "2026-08-17T18:59:00.000Z", false],
-    ["summer 21:00", "2026-08-17T19:00:00.000Z", false],
-    ["summer 21:00:59", "2026-08-17T19:00:59.000Z", false],
+    ["summer 20:59:59", "2026-08-17T18:59:59.999Z", false],
+    ["summer 21:00", "2026-08-17T19:00:00.000Z", true],
+    ["summer 21:00:59", "2026-08-17T19:00:59.000Z", true],
     ["summer 21:01", "2026-08-17T19:01:00.000Z", true],
     ["winter 07:59", "2026-12-14T06:59:00.000Z", true],
     ["winter 08:00", "2026-12-14T07:00:00.000Z", false],
-    ["winter 21:00", "2026-12-14T20:00:00.000Z", false],
+    ["winter 20:59:59", "2026-12-14T19:59:59.999Z", false],
+    ["winter 21:00", "2026-12-14T20:00:00.000Z", true],
     ["winter 21:01", "2026-12-14T20:01:00.000Z", true],
   ];
   for (const [label, at, blocked] of checks) {

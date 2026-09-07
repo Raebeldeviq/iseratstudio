@@ -221,7 +221,7 @@ export function schedulerWindowBlockReasons(schedulerValue, at = nowIso(), optio
     const minute = minuteOfDay(parts);
     const start = settingMinute(settings.startTime);
     const end = settingMinute(settings.endTime);
-    if (!options.ignoreTimeWindow && (minute < start || minute > end)) reasons.push("Der aktuelle Zeitpunkt liegt außerhalb des Europe/Berlin-Zeitfensters.");
+    if (!options.ignoreTimeWindow && (minute < start || minute >= end)) reasons.push("Der aktuelle Zeitpunkt liegt außerhalb des Europe/Berlin-Zeitfensters.");
   }
   if (scheduler.lastRunAt) {
     const spacingMs = settings.minimumSpacingHours * 60 * 60 * 1000;
