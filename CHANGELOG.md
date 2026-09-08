@@ -2684,3 +2684,36 @@ Immoprofessional-Importstrecke.
   Transfer bestätigen, aber nicht die fachliche Annahme des Imports.
 - Eine spätere Verteilung außerhalb dieses Macs benötigt Apple-Signierung und
   Notarisierung; der aktuelle Startknopf ist für den lokalen Workflow bestimmt.
+# Unreleased · Livinghaus-Statusordner für Importberichte – 8. September 2026
+
+## Report
+
+- Den read-only Immoprofessional-Berichtpfad vom bisherigen Livinghaus-Ordner
+  `Inseratestudio – Importberichte` auf den vorhandenen direkten Ordner
+  `21_Statusmeldungen` umgestellt.
+- Import- und DELETE-Berichte bleiben streng an das Livinghaus-Konto, den exakt
+  einmal vorhandenen Zielordner, Message-ID, Raw-Hash und Objektnummer gebunden.
+- Der Inbox-Fallback bleibt außerhalb des historischen Live-Canary-Adapters
+  verboten. Der produktive Helper verschiebt, löscht oder markiert weiterhin
+  keine E-Mail.
+- Die serverseitige Outlook-/Exchange-Regel muss ausschließlich Mails mit dem
+  Betreffbestandteil `Importbericht OpenImmo XML` direkt nach
+  `21_Statusmeldungen` zustellen.
+
+## Begründung
+
+Der bereits für Livinghaus-Statusmeldungen vorgesehene Ordner hält technische
+Immoprofessional-Berichte aus dem Posteingang fern. Die Änderung erfolgt an der
+read-only Quelle des Helpers und an der serverseitigen Zustellregel gemeinsam,
+damit keine Bestätigung zwischen zwei Ordnern verloren geht.
+
+## Hürden und Risiken
+
+- Regel und Helper müssen in dieser Reihenfolge kontrolliert umgestellt werden:
+  zuerst getestete Runtime bereitstellen, danach die serverseitige Regel
+  aktivieren. Eine nur einseitige Umstellung würde Berichte unsichtbar machen.
+- `21_Statusmeldungen` darf dauerhaft nicht mehr als 500 Nachrichten enthalten;
+  andernfalls stoppt der Adapter weiterhin fail-closed.
+- Der offene DELETE für `30460-708152` wird durch die Ordnerumstellung nicht
+  nachträglich bestätigt. Ohne objektbezogenen Bericht oder einen separat
+  freigegebenen Evidenzvertrag bleibt er `delete_pending_confirmation`.

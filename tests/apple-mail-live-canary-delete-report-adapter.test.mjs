@@ -6,6 +6,10 @@ import {
   LIVE_CANARY_DELETE_MAILBOXES,
 } from "../apple-mail-live-canary-delete-report-adapter.mjs";
 
+test("live-canary reconciliation checks the status folder before the historical inbox fallback", () => {
+  assert.deepEqual(LIVE_CANARY_DELETE_MAILBOXES, ["21_Statusmeldungen", "Posteingang"]);
+});
+
 test("limited delete-report adapter scans exactly the dedicated folder and inbox read-only", async () => {
   const calls = [];
   const adapter = createAppleMailLiveCanaryDeleteReportAdapter({

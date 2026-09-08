@@ -912,16 +912,16 @@ Die Mailablage übernimmt eine Outlook-/Exchange-Regel auf dem Server:
 
 ```text
 Betreff enthält: Importbericht OpenImmo XML
-Zielordner:       Inseratestudio – Importberichte
+Zielordner:       21_Statusmeldungen
 ```
 
 Das Inseratestudio liest danach ausschließlich den direkten Ordner
-`Livinghaus / Inseratestudio – Importberichte`. Die lokalen Selektoren können
+`Livinghaus / 21_Statusmeldungen`. Die lokalen Selektoren können
 ohne Zugangsdaten gesetzt werden:
 
 ```bash
 FPI_IMPORT_REPORT_MAIL_ACCOUNT="Livinghaus"
-FPI_IMPORT_REPORT_MAILBOX="Inseratestudio – Importberichte"
+FPI_IMPORT_REPORT_MAILBOX="21_Statusmeldungen"
 ```
 
 Der Accountname muss genau einmal vorkommen; der von Apple Mail für Exchange
@@ -1046,7 +1046,7 @@ Der vollständige Datenfluss lautet:
 Immoprofessional
 → E-Mail
 → Outlook-/Exchange-Regel
-→ Inseratestudio – Importberichte
+→ 21_Statusmeldungen
 → lokaler Helper (read-only)
 → strikter Parser
 → eindeutige Objektnummer und Uploadbeleg

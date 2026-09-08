@@ -15,6 +15,10 @@ import {
 
 const accountId = "synthetic-account-id";
 
+test("production import reports are bound to the Livinghaus status folder", () => {
+  assert.equal(IMPORT_REPORT_MAIL_FOLDER, "21_Statusmeldungen");
+});
+
 function operation(script) {
   return /FPI_OPERATION:([A-Z_]+)/u.exec(script)?.[1] || "UNKNOWN";
 }

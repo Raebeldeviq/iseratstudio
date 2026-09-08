@@ -12,7 +12,7 @@ const INVALID_CONNECTION_RETRY_DELAYS_MS = Object.freeze([150, 400]);
 
 export const LIVE_CANARY_DELETE_MAIL_ACCOUNT = "Livinghaus";
 export const LIVE_CANARY_DELETE_MAILBOXES = Object.freeze([
-  "Inseratestudio – Importberichte",
+  "21_Statusmeldungen",
   "Posteingang",
 ]);
 

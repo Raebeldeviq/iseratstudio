@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { sharedAppleMailReadAccessGuard } from "./apple-mail-read-access-guard.mjs";
 import { IMMOPROFESSIONAL_IMPORT_REPORT_SUBJECT } from "./immoprofessional-import-report-parser.mjs";
 
-export const IMPORT_REPORT_MAIL_FOLDER = "Inseratestudio – Importberichte";
+export const IMPORT_REPORT_MAIL_FOLDER = "21_Statusmeldungen";
 export const DEFAULT_IMPORT_REPORT_MAIL_ACCOUNT = "Livinghaus";
 
 const PROCESS_TIMEOUT_MS = 45_000;

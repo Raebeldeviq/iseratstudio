@@ -185,7 +185,7 @@ export function createImmoprofessionalImportReportService(options) {
       const failure = mailFailureStatus(error);
       const setupRequired = failure.setupRequired;
       const message = setupRequired
-        ? "Importbericht-Ordner nicht verfügbar. Livinghaus / Inseratestudio – Importberichte muss serverseitig eindeutig vorhanden sein."
+        ? "Importbericht-Ordner nicht verfügbar. Livinghaus / 21_Statusmeldungen muss serverseitig eindeutig vorhanden sein."
         : reason;
       await storeMailStatus(options.store, failure.status, message, now).catch(() => undefined);
       await writeLog("scan-failed", {
