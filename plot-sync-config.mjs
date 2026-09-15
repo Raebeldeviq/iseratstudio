@@ -1,17 +1,10 @@
 import { join } from "node:path";
-import { homedir } from "node:os";
 import { APPLICATION_DATA_DIRECTORY } from "./platform-paths.mjs";
 
 export const PLOT_SYNC_CONFIG = Object.freeze({
   sourcePath: String(process.env.FPI_PLOT_SYNC_SOURCE_PATH || join(
-    homedir(),
-    "Library",
-    "Mobile Documents",
-    "com~apple~CloudDocs",
-    "Life Business-System",
-    "01_HANDELSVERTRETUNG",
-    "02_GRUNDSTUECKE",
-    "09_KI-GESUCHT",
+    APPLICATION_DATA_DIRECTORY,
+    "inputs",
     "KI_Grundstuecke.xlsx",
   )),
   worksheet: String(process.env.FPI_PLOT_SYNC_WORKSHEET || "Grundstücke"),

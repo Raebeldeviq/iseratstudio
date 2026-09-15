@@ -530,6 +530,8 @@ export type ImportReportReview = {
 
 export type StudioState = {
   version: 1;
+  catalogIntegrityRevision?: number;
+  catalogRepairReview?: { automaticProductionAllowed: boolean; unresolved: Array<{ kind: string; projectId: string; listingId: string; externalId?: string }> };
   dataSchemaVersion?: number;
   plotSchemaVersion?: number;
   houses: HouseTemplate[];

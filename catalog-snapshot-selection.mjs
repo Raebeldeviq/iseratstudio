@@ -42,6 +42,8 @@ export function selectCatalogSnapshot(candidates = []) {
   const newest = available[0] || null;
   const device = available.find((candidate) => candidate.source === "device") || null;
   if (!newest || !device || newest === device || newest.source === "device") return newest;
+  // A reconciled persistent catalog must not be replaced by an old browser cache.
+  if (Number(device.state?.catalogIntegrityRevision || 0) > Number(newest.state?.catalogIntegrityRevision || 0)) return device;
 
   const newestSummary = catalogSnapshotSummary(newest);
   const deviceSummary = catalogSnapshotSummary(device);

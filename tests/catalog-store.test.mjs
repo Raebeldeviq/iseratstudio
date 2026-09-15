@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { createPersistentLease } from '../persistent-lease.mjs';
 
 import {
   commitCatalogSnapshot,
@@ -14,6 +15,28 @@ import {
   saveCatalogSnapshot,
   startCatalogSnapshot,
 } from "../catalog-store.mjs";
+
+test('concurrent commits cannot both pass CAS or replace the winner', async (context) => {
+  const directory=await mkdtemp(join(tmpdir(),'catalog-commit-race-'));
+  context.after(()=>rm(directory,{recursive:true,force:true}));
+  const state={version:1,houses:[],projects:[],provider:{}};
+  for(const id of ['first','second']) await startCatalogSnapshot({state:{...state,testMarker:id},savedAt:'2026-09-14T12:00:00.000Z',expectedSavedAt:'',sessionId:id},directory);
+  const results=await Promise.allSettled(['first','second'].map(id=>commitCatalogSnapshot(id,directory)));
+  assert.equal(results.filter(r=>r.status==='fulfilled').length,1);
+  assert.equal(results.find(r=>r.status==='rejected').reason.code,'CATALOG_CONFLICT');
+  const winner=results[0].status==='fulfilled'?'first':'second';
+  assert.equal((await loadCatalogManifest(directory)).state.testMarker,winner);
+  assert.equal((await readdir(directory)).includes('catalog-commit.lock'),false);
+});
+
+test('existing catalog writer lock fails closed and is not removed by a contender',async(context)=>{
+  const directory=await mkdtemp(join(tmpdir(),'catalog-commit-owner-'));
+  context.after(()=>rm(directory,{recursive:true,force:true}));
+  const lease=await createPersistentLease(join(directory,'catalog-commit.lock')).acquire();
+  try{await assert.rejects(commitCatalogSnapshot('other',directory),{code:'CATALOG_CONFLICT'});
+    assert.ok((await readdir(directory)).includes('catalog-commit.lock'));
+  }finally{await lease.release();}
+});
 
 test("stores and restores the complete local catalog including images", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "fabian-pascal-catalog-test-"));

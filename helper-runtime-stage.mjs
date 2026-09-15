@@ -67,11 +67,11 @@ async function copyRuntimeDirectory(source, destination) {
   });
 }
 
-async function collectRuntimeDependencies(sourceRoot) {
+async function collectRuntimeDependencies(sourceRoot, includeUi = false) {
   const sourceNodeModules = await realpath(join(sourceRoot, "node_modules"));
   const resolved = new Map();
   const queue = [];
-  for (const name of RUNTIME_DEPENDENCIES) {
+  for (const name of [...RUNTIME_DEPENDENCIES, ...(includeUi ? ["react", "react-dom"] : [])]) {
     queue.push({ name, path: await realpath(join(sourceNodeModules, name)), optional: false });
   }
   while (queue.length) {
@@ -105,8 +105,8 @@ async function collectRuntimeDependencies(sourceRoot) {
   return resolved;
 }
 
-async function copyRuntimeDependencies(sourceRoot, destinationRoot) {
-  const dependencies = await collectRuntimeDependencies(sourceRoot);
+async function copyRuntimeDependencies(sourceRoot, destinationRoot, includeUi = false) {
+  const dependencies = await collectRuntimeDependencies(sourceRoot, includeUi);
   await mkdir(destinationRoot, { recursive: false });
   for (const [name, source] of [...dependencies.entries()].sort(([left], [right]) => left.localeCompare(right, "en"))) {
     const destination = join(destinationRoot, name);
@@ -181,7 +181,12 @@ export async function stageHelperRuntime(options = {}) {
   for (const name of RUNTIME_RESOURCE_DIRECTORIES) {
     await copyRuntimeDirectory(join(sourceRoot, name), join(staging, name));
   }
-  const dependencyCount = await copyRuntimeDependencies(sourceRoot, join(staging, "node_modules"));
+  const includeUi = await access(join(sourceRoot, "dist", "server", "ssr", "index.js")).then(() => true, () => false);
+  if (includeUi) {
+    await copyRuntimeDirectory(join(sourceRoot, "dist"), join(staging, "dist"));
+    await copyRuntimeDirectory(join(sourceRoot, "public"), join(staging, "public"));
+  }
+  const dependencyCount = await copyRuntimeDependencies(sourceRoot, join(staging, "node_modules"), includeUi);
 
   for (const name of REQUIRED_RUNTIME_FILES) await access(join(staging, name), constants.R_OK);
   await access(join(staging, "node_modules", "basic-ftp"), constants.R_OK);
@@ -197,6 +202,7 @@ export async function stageHelperRuntime(options = {}) {
     runtimeSupportFileCount: supportFiles.length,
     runtimeDependencyCount: dependencyCount,
     includesBundledMedia: true,
+    includesBuiltUi: includeUi,
     includesDependencies: true,
     excludesSecretsAndWorkingData: true,
   };

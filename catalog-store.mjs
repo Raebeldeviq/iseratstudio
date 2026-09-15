@@ -1,9 +1,11 @@
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { gunzip, gzip } from "node:zlib";
 import { promisify } from "node:util";
 import { APPLICATION_DATA_DIRECTORY } from "./platform-paths.mjs";
 import { cleanupStudioState, STUDIO_DATA_SCHEMA_VERSION } from "./data-integrity.mjs";
+import { createPersistentLease } from "./persistent-lease.mjs";
+import { assertBrowserCatalogTransition } from './listing-catalog-view.mjs';
 
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
@@ -124,10 +126,12 @@ export async function startCatalogSnapshot(input, catalogDirectory = CATALOG_V2_
     : null;
   const currentSavedAt = currentManifest?.savedAt || "";
   if (expectedSavedAt !== currentSavedAt) throw catalogConflict();
+  if (input.protectLifecycle === true) assertBrowserCatalogTransition(currentManifest?.state, state);
   const manifest = {
     format: 2,
     savedAt: normalizeSavedAt(input.savedAt),
     baseSavedAt: currentSavedAt,
+    ...(input.protectLifecycle === true ? { protectLifecycle: true } : {}),
     state: withoutImageData(state),
   };
   await mkdir(join(catalogDirectory, IMAGES_DIRECTORY), { recursive: true });
@@ -171,6 +175,21 @@ export async function saveCatalogImage(input, catalogDirectory = CATALOG_V2_DIRE
 }
 
 export async function commitCatalogSnapshot(sessionIdValue, catalogDirectory = CATALOG_V2_DIRECTORY) {
+  let lease;
+  try {
+    lease = await createPersistentLease(join(catalogDirectory, 'catalog-commit.lock')).acquire();
+  } catch (error) {
+    if (error?.code === 'LISTING_SCHEDULER_LOCKED') throw catalogConflict('Ein anderer Katalogzugriff wird gerade abgeschlossen. Bitte erneut versuchen.');
+    throw error;
+  }
+  try {
+    return await commitLockedCatalogSnapshot(sessionIdValue, catalogDirectory, lease);
+  } finally {
+    await lease.release();
+  }
+}
+
+async function commitLockedCatalogSnapshot(sessionIdValue, catalogDirectory, lease) {
   const sessionId = safeId(sessionIdValue, "Sicherungssitzung");
   const pendingPath = pendingManifestPath(catalogDirectory, sessionId);
   const manifest = await readV2Manifest(pendingPath);
@@ -178,6 +197,7 @@ export async function commitCatalogSnapshot(sessionIdValue, catalogDirectory = C
   if ((currentManifest?.savedAt || "") !== String(manifest.baseSavedAt || "")) {
     throw catalogConflict();
   }
+  if (manifest.protectLifecycle === true) assertBrowserCatalogTransition(currentManifest?.state, manifest.state);
   for (const image of imageEntries(manifest.state)) {
     if (!await fileExistsWithContent(imagePath(catalogDirectory, image.id))) {
       throw new Error(`Bild ${image.id} fehlt in der lokalen Sicherung.`);
@@ -185,27 +205,11 @@ export async function commitCatalogSnapshot(sessionIdValue, catalogDirectory = C
   }
 
   const manifestPath = join(catalogDirectory, MANIFEST_FILENAME);
-  const previousPath = `${manifestPath}.previous`;
-  await rm(previousPath, { force: true });
-  try {
-    await rename(manifestPath, previousPath);
-  } catch (error) {
-    if (!error || typeof error !== "object" || !("code" in error) || error.code !== "ENOENT") throw error;
-  }
-  try {
-    await rename(pendingPath, manifestPath);
-    await rm(previousPath, { force: true });
-  } catch (error) {
-    if (await fileExistsWithContent(previousPath)) await rename(previousPath, manifestPath);
-    throw error;
-  }
-
-  const liveImageIds = new Set(imageEntries(manifest.state).map((image) => `${image.id}.bin`));
-  for (const filename of await readdir(join(catalogDirectory, IMAGES_DIRECTORY))) {
-    if (/^[a-zA-Z0-9_-]{1,120}\.bin$/.test(filename) && !liveImageIds.has(filename)) {
-      await rm(join(catalogDirectory, IMAGES_DIRECTORY, filename), { force: true });
-    }
-  }
+  await lease.refresh();
+  // Same-filesystem rename atomically replaces the manifest: readers never see a gap.
+  await rename(pendingPath, manifestPath);
+  // Images can also belong to another pending snapshot. Garbage collection is not
+  // safe during a commit; retain unreferenced media for a separate audited cleanup.
   return { savedAt: manifest.savedAt };
 }
 

@@ -1509,3 +1509,16 @@ Umgebungsvariablen `FPI_MEDIA_LIBRARY_ROOT` und
 
 Details zur Sicherheitsanalyse stehen in [SECURITY-ANALYSIS.md](SECURITY-ANALYSIS.md),
 die technische Änderungsübersicht in [CHANGELOG.md](CHANGELOG.md).
+# Sichere Katalogwiederherstellung (14.09.2026)
+
+## Lokaler Betrieb außerhalb von iCloud (15.09.2026)
+
+Entwicklung: `~/Developer/Inseratestudio`. Installierte Releases, Katalog, Logs und Excel-Arbeitsquelle liegen unter `~/Library/Application Support/Fabian-Pascal Inseratestudio` und werden nicht aus Dokumente/iCloud gestartet. Die Excel-Arbeitsquelle ist `inputs/KI_Grundstuecke.xlsx`; eine Cloud-Kopie wird nicht still als Ersatz geladen. Medien kommen ausschließlich aus dem Release oder einem ausdrücklich gesetzten Medienpfad. Die ehemaligen Ordner bleiben Sicherungen und sind keine aktive Runtime. Der Grundstücksmonitor bleibt pausiert; vor seiner erneuten Aktivierung muss auch dessen Arbeitsauftrag auf die lokale Excel-Arbeitsquelle umgestellt werden.
+
+Die Oberfläche bewahrt gespeicherte Veröffentlichungs- und Löschhistorie. Bei einem Katalog-Ladefehler bleibt Autosave gesperrt. Widersprüchliche gleiche Inserat-IDs müssen vor Nutzung evidenzgebunden bereinigt werden; ein leerer Browserstand ist kein Reparaturmittel.
+
+`catalog-lifecycle-repair.mjs` erstellt ausschließlich einen internen Vorschlag aus bestehender positiver Löschprovenienz und der hashgebundenen historischen manuellen Bestandsprüfung. Ein Vorschlag führt keine Provideraktion aus. Vor Anwendung sind Sicherung, unveränderte Eingangsdateien, fehlende aktive Prozesse/Jobs und der persistente CAS-Stand zu prüfen. Fehlende Originale werden ausgewiesen, nicht synthetisch ersetzt.
+
+`catalogRepairReview.automaticProductionAllowed=false` sperrt produktive Schedulerstarts, Uploads und Production-DELETE. Dieser Prüfstatus kann nicht durch normales Browser-Speichern entfernt werden. Ein Release oder grüner Testlauf allein ist keine Bestandsfreigabe.
+
+Der Grundstücksbereich zeigt den separaten Helper-Abgleich als aktiv oder pausiert. Seine Einstellung liegt persistent neben dessen Statusdatei (`.schedule.json`); fehlend/defekt bedeutet pausiert. Ein manueller Abgleich bleibt eine gesonderte Aktion. Unabhängige Aufgabenplanungen werden dadurch weder aktiviert noch geändert.

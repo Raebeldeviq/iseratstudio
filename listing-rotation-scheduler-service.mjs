@@ -1,4 +1,5 @@
 import { createUploadJobId } from "./batch-upload.mjs";
+import { assertCatalogProductionReady } from './listing-catalog-view.mjs';
 import {
   listingControl,
   normalizeListingGroup,
@@ -403,6 +404,14 @@ export function createListingRotationSchedulerService(options) {
     const stepTimestamp = () => String(input.stepNow?.() || input.now || new Date().toISOString());
     const runId = String(input.runId || idFactory());
     const trigger = String(input.trigger || "periodic");
+    const operatingPolicy = await loadOperatingMode(options.operatingModeStore);
+    if (operatingPolicy.mode !== 'off') {
+      try { assertCatalogProductionReady((await options.store.load()).state); }
+      catch (error) {
+        await writeRunLog('aborted', { runId, trigger, startedAt, endedAt: startedAt, abortReason: error.message, errorCode: error.code, errorCount: 1 });
+        return { ok:false, claimed:false, runId, abortReason:error.message, completedListingIds:[], failedListingIds:[] };
+      }
+    }
     let lease;
     try {
       lease = await options.lease.acquire({
@@ -451,7 +460,6 @@ export function createListingRotationSchedulerService(options) {
       return { ok: false, claimed: false, runId, abortReason, completedListingIds: [], failedListingIds: [] };
     }
 
-    const operatingPolicy = await loadOperatingMode(options.operatingModeStore);
     const operatingMode = operatingPolicy.mode;
     const operatingModeFallbackReason = operatingPolicy.fallbackReason || "";
     const productionPolicy = await loadProductionPolicy(options.productionPolicyStore);
@@ -805,6 +813,7 @@ export function createListingRotationSchedulerService(options) {
         await lease.refresh?.({ now: itemCheckAt });
         if (!item.resume) {
           const boundarySnapshot = await options.store.load();
+          assertCatalogProductionReady(boundarySnapshot?.state);
           if (!boundarySnapshot?.stored || !boundarySnapshot.state) {
             throw new Error("Der Katalog konnte vor dem Start der nächsten Rotation nicht sicher gelesen werden.");
           }

@@ -33,6 +33,7 @@ import {
   plotUploadDayKey,
 } from "./plot-daily-upload-guard.mjs";
 import { WORKFLOW_STATUS } from "./workflow-status.mjs";
+import { assertCatalogProductionReady } from "./listing-catalog-view.mjs";
 import {
   analyzePlotExpose,
   archivePlotExpose,
@@ -371,6 +372,8 @@ async function persistedUploadContext(projectId, listingId) {
 }
 
 async function automaticRotationUpload({ state, project, listing, runId, batchOverrideId = "", batchSchedulerRunId = "", effectiveMaxRunItems = null }) {
+  assertCatalogProductionReady(state);
+  assertCatalogProductionReady((await loadCatalogManifest()).state);
   const productionPolicy = await listingRotationProductionPolicyStore.load();
   const runtimeGuard = assertProductionRuntime(RUNTIME_PROVENANCE, productionPolicy);
   const runtimeOwnership = await runtimeOwnershipGuard.assert(productionPolicy);
@@ -494,6 +497,7 @@ async function automaticRotationUpload({ state, project, listing, runId, batchOv
       remotePath,
       status: WORKFLOW_STATUS.PROCESSING,
     });
+    assertCatalogProductionReady((await loadCatalogManifest()).state);
     client = new Client(300_000);
     client.ftp.verbose = false;
     await client.access(ftpAccessOptions(ftp));
@@ -692,10 +696,11 @@ const server = createServer(async (request, response) => {
   const isPlotExposeArchive = request.method === "POST" && pathname === "/plot-exposes/archive";
   const isPlotSyncStatus = request.method === "GET" && pathname === "/plot-sync/status";
   const isPlotSyncRun = request.method === "POST" && pathname === "/plot-sync/run";
+  const isPlotSyncSchedule = request.method === "POST" && pathname === "/plot-sync/schedule";
   const isPlotSyncLog = request.method === "GET" && pathname === "/plot-sync/log";
   const isMailRuntimeProbe = request.method === "POST" && pathname === "/mail-runtime/probe";
   const isExactProductionDelete = request.method === "POST" && pathname === EXACT_PRODUCTION_DELETE_PATH;
-  if (!isHealth && !isRuntimeProvenance && !isUpload && !isBinaryUpload && !isLocalSave && !isTextGeneration && !isImageCaptionGeneration && !isOpenAiKeyValidation && !isCredentialLoad && !isCredentialSave && !isCatalogLoad && !isCatalogSave && !isCatalogV2Start && !isCatalogV2ImageSave && !isCatalogV2Commit && !isCatalogV2ManifestLoad && !isCatalogV2ImageLoad && !isMediaLibraryList && !isMediaLibrarySequence && !isMediaLibraryImage && !isPlotExposeAnalyze && !isPlotExposeCommit && !isPlotExposeLoad && !isPlotExposeArchive && !isPlotSyncStatus && !isPlotSyncRun && !isPlotSyncLog && !isMailRuntimeProbe && !isExactProductionDelete) {
+  if (!isPlotSyncSchedule && !isHealth && !isRuntimeProvenance && !isUpload && !isBinaryUpload && !isLocalSave && !isTextGeneration && !isImageCaptionGeneration && !isOpenAiKeyValidation && !isCredentialLoad && !isCredentialSave && !isCatalogLoad && !isCatalogSave && !isCatalogV2Start && !isCatalogV2ImageSave && !isCatalogV2Commit && !isCatalogV2ManifestLoad && !isCatalogV2ImageLoad && !isMediaLibraryList && !isMediaLibrarySequence && !isMediaLibraryImage && !isPlotExposeAnalyze && !isPlotExposeCommit && !isPlotExposeLoad && !isPlotExposeArchive && !isPlotSyncStatus && !isPlotSyncRun && !isPlotSyncLog && !isMailRuntimeProbe && !isExactProductionDelete) {
     send(response, 404, { ok: false, message: "Nicht gefunden." }, origin);
     return;
   }
@@ -897,6 +902,7 @@ const server = createServer(async (request, response) => {
     }
 
     if (isBinaryUpload) {
+      assertCatalogProductionReady((await loadCatalogManifest()).state);
       const filename = safeFilename(decodedHeader(request, "x-fpi-filename"));
       uploadJob = {
         jobId: decodedHeader(request, "x-fpi-job-id") || `legacy:${randomUUID()}`,
@@ -972,6 +978,7 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (isUpload) assertCatalogProductionReady((await loadCatalogManifest()).state);
     const body = await readJson(request, isCatalogSave ? MAX_CATALOG_BODY_BYTES : MAX_BODY_BYTES);
 
     if (isExactProductionDelete) {
@@ -1028,8 +1035,13 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (isPlotSyncSchedule) {
+      send(response, 200, { ok: true, ...(await plotSyncService.setScheduleEnabled(body.enabled)) }, origin);
+      return;
+    }
+
     if (isCatalogV2Start) {
-      const result = await startCatalogSnapshot(body);
+      const result = await startCatalogSnapshot({ ...body, protectLifecycle: true });
       send(response, 200, { ok: true, ...result }, origin);
       return;
     }

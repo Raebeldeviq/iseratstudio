@@ -15,6 +15,10 @@ test("stages a self-contained helper runtime without secrets, tests or working d
     mkdir(join(root, "bundled-media"), { recursive: true }),
     mkdir(join(root, "tests"), { recursive: true }),
     mkdir(join(root, "work"), { recursive: true }),
+    mkdir(join(root, "dist", "server", "ssr"), { recursive: true }),
+    mkdir(join(root, "public"), { recursive: true }),
+    mkdir(join(dependencies, "react"), { recursive: true }),
+    mkdir(join(dependencies, "react-dom"), { recursive: true }),
     mkdir(join(dependencies, "basic-ftp"), { recursive: true }),
     mkdir(join(dependencies, "jszip"), { recursive: true }),
     mkdir(join(dependencies, "pdfjs-dist"), { recursive: true }),
@@ -30,6 +34,10 @@ test("stages a self-contained helper runtime without secrets, tests or working d
     writeFile(join(root, "work", "credential.json"), "{}\n"),
     writeFile(join(root, "app", "runtime.ts"), "export const runtime = true;\n"),
     writeFile(join(root, "bundled-media", "image.jpg"), "image"),
+    writeFile(join(root, "dist", "server", "ssr", "index.js"), "export default {};"),
+    writeFile(join(root, "public", "icon.svg"), "<svg/>"),
+    writeFile(join(dependencies, "react", "package.json"), "{}"),
+    writeFile(join(dependencies, "react-dom", "package.json"), "{}"),
     writeFile(join(dependencies, "basic-ftp", "package.json"), "{}\n"),
     writeFile(join(dependencies, "jszip", "package.json"), "{}\n"),
     writeFile(join(dependencies, "pdfjs-dist", "package.json"), "{}\n"),
@@ -46,6 +54,9 @@ test("stages a self-contained helper runtime without secrets, tests or working d
     now: new Date("2026-08-17T08:00:00.000Z"),
   });
   assert.equal(result.manifest.format, 2);
+  assert.equal(result.manifest.includesBuiltUi, true);
+  assert.equal(await readFile(join(result.runtimePath, "dist", "server", "ssr", "index.js"), "utf8"), "export default {};");
+  assert.equal(await readFile(join(result.runtimePath, "node_modules", "react", "package.json"), "utf8"), "{}");
   assert.equal(result.manifest.runtimeCommit, "a".repeat(40));
   assert.equal(result.manifest.sourceTreeClean, true);
   assert.equal(result.manifest.releaseId, "release-test");

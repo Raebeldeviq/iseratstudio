@@ -2,6 +2,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { ChangeEvent, useEffect, useState } from "react";
+import { isDraftListing, mergeListingCollection } from "../listing-catalog-view.mjs";
 import {
   captionForImageRole,
   INTERIOR_IMAGE_ROLES,
@@ -202,6 +203,7 @@ type PlotSyncRun = {
 };
 
 type PlotSyncStatus = {
+  scheduleEnabled?: boolean;
   sourceFound: boolean;
   running: boolean;
   nextScheduledRunAt: string;
@@ -261,8 +263,10 @@ function createVariantListing(
   order: number,
   previous?: GeneratedListing | null,
 ): GeneratedListing {
+  if (previous && !isDraftListing(previous)) return { ...previous };
   const version = Math.max(1, previous?.version || 1);
   return {
+    ...previous,
     id: previous?.id || uid(),
     externalId: previous?.externalId
       || `FPI-${project.id.slice(0, 8)}-V${order}-${variantId.slice(0, 6)}`.toUpperCase(),
@@ -281,7 +285,7 @@ function createVariantListing(
     statusMessage: previous?.statusMessage || "Entwurf",
     projectingSettings: fillMissingProjectingDefaults(previous?.projectingSettings),
     listingGroupVariantId: variantId,
-    listingOrigin: "group-source",
+    listingOrigin: previous?.listingOrigin || "group-source",
   };
 }
 
@@ -306,7 +310,8 @@ function normalizeMandatoryListingStandards(inputState: StudioState): StudioStat
   });
   const houseById = new Map(houses.map((house) => [house.id, house]));
   const projects = state.projects.map((project) => {
-      const listings = project.listings.map((listing) => {
+      const listings = mergeListingCollection(project.listings).map((listing: GeneratedListing) => {
+        if (!isDraftListing(listing)) return listing;
         const house = houseById.get(listing.templateId);
         if (!house) return listing;
         const fallbackTexts = generateListingTexts(
@@ -338,9 +343,10 @@ function normalizeMandatoryListingStandards(inputState: StudioState): StudioStat
         const house = houseById.get(selectedIds[index]);
         if (!house) continue;
         const variant = listingGroup.variants[index];
-        const previous = variant.listing
+        const previous = listings.find((listing: GeneratedListing) => listing.id === variant.listing?.id) || variant.listing
           || listings.find((listing) => listing.templateId === house.id && listing.listingOrigin !== "rotation-copy")
           || null;
+        if (previous && !isDraftListing(previous)) continue;
         listingGroup = assignListingGroupVariant(
           listingGroup,
           index + 1,
@@ -351,6 +357,7 @@ function normalizeMandatoryListingStandards(inputState: StudioState): StudioStat
 
       for (const variant of listingGroup.variants) {
         if (!variant.templateId || !variant.listing) continue;
+        if (!isDraftListing(variant.listing)) continue;
         const house = houseById.get(variant.templateId);
         if (!house || house.approved === false) continue;
         listingGroup = assignListingGroupVariant(
@@ -366,14 +373,19 @@ function normalizeMandatoryListingStandards(inputState: StudioState): StudioStat
         .filter((variant) => variant.active && variant.listing)
         .slice(0, HOUSES_PER_PROJECT)
         .map((variant) => variant.listing as GeneratedListing);
-      const rotationCopies = listings.filter((listing) => listing.listingOrigin === "rotation-copy");
+      const mergedListings = mergeListingCollection(listings, sourceListings);
+      const canonicalById = new Map(mergedListings.map((listing: GeneratedListing) => [listing.id, listing]));
+      listingGroup = { ...listingGroup, variants: listingGroup.variants.map((variant) => ({
+        ...variant,
+        listing: variant.listing ? canonicalById.get(variant.listing.id) || variant.listing : null,
+      })) };
       return {
         ...project,
         selectedHouseIds: listingGroup.variants
           .filter((variant) => variant.active && variant.templateId)
           .slice(0, HOUSES_PER_PROJECT)
           .map((variant) => variant.templateId),
-        listings: [...sourceListings, ...rotationCopies],
+        listings: mergedListings,
         listingGroup: listingGroup as ListingGroup,
       };
     });
@@ -745,6 +757,7 @@ export default function InseratStudio() {
   const [tab, setTab] = useState<Tab>("plots");
   const [state, setState] = useState<StudioState>(initialState);
   const [ready, setReady] = useState(false);
+  const [catalogLoadError, setCatalogLoadError] = useState("");
   const [saveLabel, setSaveLabel] = useState("Lokaler Speicher wird vorbereitet …");
   const [activeHouseId, setActiveHouseId] = useState("");
   const [activeProjectId, setActiveProjectId] = useState("");
@@ -906,8 +919,12 @@ export default function InseratStudio() {
         setActiveOwner(projectOwner(next.projects[0]));
         setSaveLabel(selected?.source === "device" ? "Aus lokaler macOS-Sicherung geladen" : "Doppelt lokal gespeichert");
       })
-      .catch(() => setSaveLabel("Lokaler Speicher nicht verfügbar"))
-      .finally(() => setReady(true));
+      .then(() => setReady(true))
+      .catch((error) => {
+        setReady(false);
+        setCatalogLoadError(error instanceof Error ? error.message : "Lokaler Speicher nicht verfügbar");
+        setSaveLabel("Katalog gesperrt · keine Speicherung");
+      });
 
     const checkHelper = () => {
       helperFetch("/health")
@@ -1273,6 +1290,18 @@ export default function InseratStudio() {
         body: JSON.stringify({ reference: plot.exposeFileReference }),
       }).catch(() => setNotice("Das Grundstück wurde vollständig gelöscht; die lokale Exposé-Datei konnte noch nicht archiviert werden."));
     }
+  };
+
+  const setPlotSyncSchedule = async (enabled: boolean) => {
+    setPlotSyncBusy(true);
+    try {
+      const response = await helperFetch('/plot-sync/schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.message || 'Zeitplan konnte nicht gespeichert werden.');
+      setPlotSyncStatus(data);
+      setNotice(enabled ? 'Automatischer Excel-Abgleich aktiviert.' : 'Automatischer Excel-Abgleich pausiert.');
+    } catch (error) { setNotice(error instanceof Error ? error.message : 'Zeitplanfehler'); }
+    finally { setPlotSyncBusy(false); }
   };
 
   const runPlotSync = async (dryRun: boolean) => {
@@ -2105,15 +2134,15 @@ export default function InseratStudio() {
         .filter((variant) => variant.active && variant.listing)
         .slice(0, HOUSES_PER_PROJECT)
         .map((variant) => variant.listing as GeneratedListing);
-      const rotationCopies = project.listings.filter((listing) => listing.listingOrigin === "rotation-copy");
-      preparedListings += sourceListings.length + rotationCopies.length;
+      const mergedListings = mergeListingCollection(project.listings, sourceListings);
+      preparedListings += sourceListings.length;
       return {
         ...project,
         selectedHouseIds: group.variants
           .filter((variant) => variant.active && variant.templateId)
           .slice(0, HOUSES_PER_PROJECT)
           .map((variant) => variant.templateId),
-        listings: [...sourceListings, ...rotationCopies],
+        listings: mergedListings,
         listingGroup: group,
       };
     });
@@ -2353,6 +2382,10 @@ export default function InseratStudio() {
 
   const generateAiListings = async () => {
     if (!generationInputIsValid() || !activeProject) return;
+    if (selectedVariantEntries.some(({ variant }) => variant.listing && !isDraftListing(variant.listing))) {
+      setNotice("KI-Texte können hier nur für Entwürfe erstellt werden. Veröffentlichte und abgeschlossene Inserate bleiben unverändert.");
+      return;
+    }
     if (!hasStoredOpenAiKey) {
       setTab("settings");
       setNotice("Bitte unter Export & Upload einen vollständigen OpenAI API-Schlüssel einfügen, der mit sk- beginnt, und anschließend prüfen und speichern.");
@@ -2450,6 +2483,7 @@ export default function InseratStudio() {
       );
 
       const sourceListings: GeneratedListing[] = generated.map(({ house, index, variant, previous, texts, version }) => ({
+        ...previous,
         id: previous?.id ?? uid(),
         externalId:
           previous?.externalId ??
@@ -2461,7 +2495,7 @@ export default function InseratStudio() {
         version,
         projectingSettings: fillMissingProjectingDefaults(previous?.projectingSettings),
         listingGroupVariantId: variant?.id,
-        listingOrigin: "group-source",
+        listingOrigin: previous?.listingOrigin || "group-source",
         status: normalizeWorkflowStatus(previous?.status, WORKFLOW_STATUS.DRAFT),
         statusMessage: previous?.statusMessage || "Entwurf",
       }));
@@ -2474,8 +2508,7 @@ export default function InseratStudio() {
           listing,
         ) as ListingGroup;
       }
-      const rotationCopies = projectSnapshot.listings.filter((listing) => listing.listingOrigin === "rotation-copy");
-      const listings = [...sourceListings, ...rotationCopies];
+      const listings = mergeListingCollection(projectSnapshot.listings, sourceListings);
 
       setState((current) => ({
         ...current,
@@ -3150,7 +3183,8 @@ export default function InseratStudio() {
     return (
       <main className="loading-screen">
         <div className="loading-mark">F&amp;P</div>
-        <p>Fabian&amp;Pascal Inseratestudio wird vorbereitet …</p>
+        <p>{catalogLoadError || "Fabian&Pascal Inseratestudio wird vorbereitet …"}</p>
+        {catalogLoadError ? <><p>Der Katalog wurde nicht überschrieben. Bitte die Datenprüfung abschließen und anschließend neu laden.</p><button onClick={() => window.location.reload()}>Erneut laden</button></> : null}
         <AppVersionBadge />
       </main>
     );
@@ -3159,6 +3193,7 @@ export default function InseratStudio() {
   return (
     <main className="studio-shell">
       <AppVersionBadge />
+      {state.catalogRepairReview?.automaticProductionAllowed === false ? <section role="alert" className="notice"><strong>Produktionsschutz aktiv</strong><p>Die Oberfläche ist nutzbar. {state.catalogRepairReview.unresolved.length} historische Zuordnungen benötigen noch Originalbelege. Automatische Uploads und Löschungen bleiben gesperrt.</p></section> : null}
       <header className="topbar">
         <div className="brand-lockup">
           <div className="brand-mark">F&amp;P</div>
@@ -3224,6 +3259,7 @@ export default function InseratStudio() {
           onSave={savePlotRecords}
           onDelete={deletePlot}
           onSync={runPlotSync}
+          onScheduleChange={setPlotSyncSchedule}
         />{centralHousePoolPanel}</>
       ) : null}
 

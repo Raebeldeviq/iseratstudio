@@ -1,5 +1,33 @@
 # Änderungsprotokoll
 
+## Unreleased · Lokale Installation – 15. September 2026
+
+- Projekt, Abhängigkeiten und Sicherungsnachweise außerhalb von iCloud kopiert; alte Arbeitsordner nicht gelöscht oder übernommen.
+- Excel-Abgleich verwendet eine lokale Application-Support-Arbeitsquelle. Der implizite Rückfall der Medienbibliothek auf iCloud entfällt.
+- Grund: Ausgelagerte Dateien blockierten selbst Git, Tests und Desktopstart. Ein lokaler Release darf nicht von nachträglichen Cloud-Downloads abhängen.
+- Grenze: Ein lokaler Dateipfad ersetzt keine fachliche Gebiets- oder Providerprüfung. Ungeklärte historische Vorgänge bleiben produktiv gesperrt; pausierte Aufgaben werden nicht still aktiviert.
+
+## Unreleased · Katalogintegrität und sichere Wiederinbetriebnahme – 14. September 2026
+
+### Report
+
+- UI-Normalisierung erhält vollständige Lifecycle-Datensätze und terminale Historie, statt aktive Varianten als reduzierte Kopien zurückzuschreiben. Widersprüchliche Dubletten stoppen das Laden; nach Ladefehlern wird kein leerer Zustand gespeichert.
+- Katalog-Commits verwenden einen persistenten exklusiven Claim und atomaren Austausch nach CAS-Prüfung. Browser dürfen bestätigte Status-/Löschprovenienz nicht überschreiben. Bildbereinigung während konkurrierender Sicherungen entfällt.
+- Ein beleggebundener, rein lokaler Reparaturplan trennt eindeutig rekonstruierbare historische Löschungen von fehlenden Originaldatensätzen. Ungeklärte Daten sperren Scheduler, Upload und Production-DELETE zusätzlich zu den Betriebsmodi.
+- Reparierte Gerätesicherungen haben Vorrang vor älteren Browserständen. Der separate Grundstücks-Sync hat eine sichtbare persistente Pause; fehlende oder beschädigte Einstellung bedeutet pausiert.
+- Der Startknopf nutzt ausschließlich installierte Release-LaunchAgents. Er führt keinen Katalog-Bootstrap, keine Paketinstallation und keinen Working-Directory-Helperstart mehr aus. Releases können die vorgebaute Oberfläche einschließlich ihrer Laufzeitabhängigkeiten mitführen.
+
+### Begründung
+
+Die Browseransicht darf nicht die allein im Hintergrund geführte Veröffentlichungshistorie zerstören. Reparatur und Wiederanlauf bleiben deshalb getrennt: belegte interne Korrekturen sind möglich, externe Mutationen erst nach geklärtem Bestand.
+
+### Hürden und Risiken
+
+- Fehlende Originalinserate sind ohne belastbare Sicherung bzw. Providerdaten nicht rekonstruierbar. Die Reparatur erfindet keine Inserate oder Importbestätigungen.
+- Ein nach Prozessabbruch übrig gebliebener Commit-Claim wird nicht blind gelöscht. Er erfordert eine Eigentümerprüfung.
+- Der neue Pause-Schalter steuert ausschließlich den Helper-Sync, nicht unabhängige Codex-Automationen. Keine PLZ- oder Grundstücksbereinigung wird aus fehlender Historie abgeleitet.
+- Die vorhandenen Zeitfenster, Tageslimits, Mail-Serialisierung, FTPS-Deduplizierung und Providerbestätigungsverträge bleiben erhalten. Es wurden keine realen Uploads oder Löschungen als Tests ausgeführt.
+
 ## Unreleased · Exklusive 21:00-Schedulergrenze – 7. September 2026
 
 ### Report

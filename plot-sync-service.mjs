@@ -95,6 +95,8 @@ export function createPlotSyncService(options = {}) {
 
   async function loadStatus() {
     const saved = await readJson(config.statePath, emptyStatus(config));
+    let scheduleEnabled = false;
+    try { scheduleEnabled = (await readJson(`${config.statePath}.schedule.json`, null))?.enabled === true; } catch { /* Invalid schedule configuration is paused. */ }
     let sourceFound = false;
     try {
       const info = await dependencies.fileStat(config.sourcePath);
@@ -102,7 +104,7 @@ export function createPlotSyncService(options = {}) {
     } catch (error) {
       if (!isMissing(error)) throw error;
     }
-    return { ...emptyStatus(config), ...saved, config: publicConfig(config), sourceFound, running: Boolean(currentRun) };
+    return { ...emptyStatus(config), ...saved, config: publicConfig(config), sourceFound, running: Boolean(currentRun), scheduleEnabled };
   }
 
   async function acquireLock() {
@@ -264,6 +266,7 @@ export function createPlotSyncService(options = {}) {
 
   async function runIfDue() {
     const status = await loadStatus();
+    if (!status.scheduleEnabled) return { ...status, pauseReason: 'Automatischer Excel-Abgleich pausiert; manuelle Vorschau bleibt verfügbar.' };
     if (!status.lastRun && !status.lastSuccessfulRun) return run({ dryRun: false, trigger: "startup" });
     if (status.nextScheduledRunAt && Date.parse(status.nextScheduledRunAt) <= Date.parse(dependencies.now())) {
       return run({ dryRun: false, trigger: "scheduled" });
@@ -276,5 +279,12 @@ export function createPlotSyncService(options = {}) {
     return status.lastRun;
   }
 
-  return { config, loadStatus, run, runIfDue, lastLog };
+  async function setScheduleEnabled(enabled) {
+    if (typeof enabled !== 'boolean') throw new Error('Zeitplan benötigt eine eindeutige Freigabe.');
+    if (currentRun) throw new Error('Bitte den laufenden Abgleich zuerst abschließen lassen.');
+    await atomicJson(`${config.statePath}.schedule.json`, { format: 1, enabled, updatedAt: dependencies.now() });
+    return loadStatus();
+  }
+
+  return { config, loadStatus, run, runIfDue, lastLog, setScheduleEnabled };
 }

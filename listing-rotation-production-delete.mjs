@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { assertCatalogProductionReady } from './listing-catalog-view.mjs';
 import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 
@@ -704,6 +705,7 @@ export function createProductionDeleteService(options) {
         const currentPolicy = await options.productionPolicyStore.load();
         await options.runtimeOwnershipGuard.assert(currentPolicy);
         const currentSnapshot = await options.store.load();
+        assertCatalogProductionReady(currentSnapshot.state);
         const currentLedger = await options.ledger.read();
         const eligibility = resolveProductionDeleteEligibility(currentSnapshot.state, candidate.projectId, candidate.sourceListingId, currentLedger);
         await options.mutationGuard?.assert?.({

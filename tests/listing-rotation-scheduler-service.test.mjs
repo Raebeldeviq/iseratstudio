@@ -28,6 +28,20 @@ import { WORKFLOW_STATUS } from "../workflow-status.mjs";
 
 const RUNTIME_COMMIT = "a".repeat(40);
 
+test('unresolved catalog repair stops active scheduler before any lease, preflight or upload',async()=>{
+ let claims=0;let preflights=0;let uploads=0;
+ const service=createListingRotationSchedulerService({
+  operatingModeStore:{load:async()=>({format:1,valid:true,mode:'active'})},
+  store:{load:async()=>({stored:true,state:{catalogRepairReview:{automaticProductionAllowed:false,unresolved:[{}]}}}),update:async()=>{throw new Error('must not save');}},
+  lease:{acquire:async()=>{claims++;throw new Error('must not claim');}},
+  lifecycleCoordinator:{preflight:async()=>{preflights++;return {ok:true};}},
+  upload:async()=>{uploads++;},
+ });
+ const result=await service.run({now:'2026-09-14T10:00:00Z'});
+ assert.equal(result.ok,false);assert.equal(result.claimed,false);
+ assert.deepEqual([claims,preflights,uploads],[0,0,0]);
+});
+
 function createListingRotationSchedulerService(options) {
   return createSchedulerService({
     ...options,

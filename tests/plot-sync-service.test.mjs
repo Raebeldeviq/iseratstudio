@@ -47,6 +47,20 @@ test("missing source is logged without modifying catalog data", async (context) 
   assert.equal(item.savedState(), null);
 });
 
+test('automatic synchronization defaults to paused, survives restart and rejects corrupt authorization',async(context)=>{
+  const item=await fixture(context);
+  assert.equal((await item.service.runIfDue()).scheduleEnabled,false);
+  assert.equal(item.savedState(),null);
+  await item.service.setScheduleEnabled(true);
+  const restarted=createPlotSyncService({config:item.service.config});
+  assert.equal((await restarted.loadStatus()).scheduleEnabled,true);
+  await item.service.setScheduleEnabled(false);
+  assert.equal((await restarted.runIfDue()).scheduleEnabled,false);
+  await writeFile(`${item.service.config.statePath}.schedule.json`,'broken');
+  assert.equal((await restarted.runIfDue()).scheduleEnabled,false);
+  assert.equal(item.savedState(),null);
+});
+
 test("parallel starts are rejected by the in-process job lock", async (context) => {
   let release;
   const gate = new Promise((resolve) => { release = resolve; });

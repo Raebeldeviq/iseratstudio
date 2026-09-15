@@ -54,6 +54,7 @@ type Props = {
   onSave: (plots: PlotRecord[], message: string) => void;
   onDelete: (plot: PlotRecord) => void;
   onSync: (dryRun: boolean) => void;
+  onScheduleChange: (enabled: boolean) => void;
 };
 
 type PlotSortKey = "city" | "postalCode" | "plotSizeSqm" | "purchasePrice" | "uploadDate" | "listingCount";
@@ -75,6 +76,7 @@ type PlotSyncRun = {
 };
 
 type PlotSyncStatus = {
+  scheduleEnabled?: boolean;
   sourceFound: boolean;
   running: boolean;
   nextScheduledRunAt: string;
@@ -129,6 +131,7 @@ export default function PlotManagement({
   onSave,
   onDelete,
   onSync,
+  onScheduleChange,
 }: Props) {
   const [logOpen, setLogOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -437,7 +440,7 @@ export default function PlotManagement({
         </div>
 
         <section className="plot-sync-card" aria-label="Automatischer Grundstücksabgleich">
-          <div><span className="eyebrow">Excel-Abgleich · alle 3 Tage um 07:00 Uhr</span><b>{syncStatus?.sourceFound ? "Quelldatei gefunden" : "Quelldatei nicht gefunden"}</b><small>{syncStatus?.config.sourcePath || "Status wird vom lokalen Helfer geladen …"}</small></div>
+          <div><span className="eyebrow">Excel-Abgleich · {syncStatus?.scheduleEnabled ? 'Zeitplan aktiv: alle 3 Tage um 07:00 Uhr' : 'Automatik pausiert'}</span><b>{syncStatus?.sourceFound ? "Quelldatei gefunden" : "Quelldatei nicht gefunden"}</b><small>{syncStatus?.config.sourcePath || "Status wird vom lokalen Helfer geladen …"}</small><button className="secondary" disabled={!helperOnline || syncBusy} onClick={() => onScheduleChange(!syncStatus?.scheduleEnabled)}>{syncStatus?.scheduleEnabled ? 'Zeitplan pausieren' : 'Zeitplan aktivieren'}</button></div>
           <dl>
             <div><dt>Letzter Erfolg</dt><dd>{syncStatus?.lastSuccessfulRun ? new Date(syncStatus.lastSuccessfulRun.startedAt).toLocaleString("de-DE") : "–"}</dd></div>
             <div><dt>Nächster Lauf</dt><dd>{syncStatus?.nextScheduledRunAt ? new Date(syncStatus.nextScheduledRunAt).toLocaleString("de-DE") : "–"}</dd></div>

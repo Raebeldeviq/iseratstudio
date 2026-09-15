@@ -10,6 +10,12 @@ function snapshot(source, savedAt, state) {
   return { source, savedAt, state: { version: 1, houses: [], projects: [], ...state } };
 }
 
+test('reconciled device state outranks a newer stale browser cache',()=>{
+ const device=snapshot('device','2026-09-14T10:00:00Z',{catalogIntegrityRevision:1});
+ const browser=snapshot('browser','2026-09-14T11:00:00Z',{});
+ assert.equal(selectCatalogSnapshot([device,browser]),device);
+});
+
 test("keeps a productive device catalog ahead of a newer empty browser shell", () => {
   const device = snapshot("device", "2026-07-25T10:00:00.000Z", {
     houses: [{ id: "sun-113", housePrice: 355122, images: [{ id: "cover" }] }],

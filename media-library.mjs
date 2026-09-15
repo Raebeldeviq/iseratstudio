@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { basename, dirname, extname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,9 +19,9 @@ export const LEGACY_MEDIA_LIBRARY_ROOT =
 export const LEGACY_INTERIOR_LIBRARY_ROOT =
   "/Users/pascalfrohlich/Library/Mobile Documents/com~apple~CloudDocs/Life Business-System/01_HANDELSVERTRETUNG/03_MARKETING/01_RENDERING/Inneneinrichtung";
 export const DEFAULT_MEDIA_LIBRARY_ROOT = process.env.FPI_MEDIA_LIBRARY_ROOT
-  || (existsSync(BUNDLED_MEDIA_LIBRARY_ROOT) ? BUNDLED_MEDIA_LIBRARY_ROOT : LEGACY_MEDIA_LIBRARY_ROOT);
+  || BUNDLED_MEDIA_LIBRARY_ROOT;
 export const DEFAULT_INTERIOR_LIBRARY_ROOT = process.env.FPI_INTERIOR_LIBRARY_ROOT
-  || (existsSync(BUNDLED_INTERIOR_LIBRARY_ROOT) ? BUNDLED_INTERIOR_LIBRARY_ROOT : LEGACY_INTERIOR_LIBRARY_ROOT);
+  || BUNDLED_INTERIOR_LIBRARY_ROOT;
 
 const SUPPORTED_EXTENSIONS = new Map([
   [".jpg", "image/jpeg"],
