@@ -2745,3 +2745,9 @@ damit keine Bestätigung zwischen zwei Ordnern verloren geht.
 - Der offene DELETE für `30460-708152` wird durch die Ordnerumstellung nicht
   nachträglich bestätigt. Ohne objektbezogenen Bericht oder einen separat
   freigegebenen Evidenzvertrag bleibt er `delete_pending_confirmation`.
+
+## Bedienprüfung der lokalen Installation – 15.09.2026
+
+- Inseratsmanager zeigt den gesamten persistenten Katalog statt nur der Arbeitsauswahl. So bleiben bei leerer Auswahl veröffentlichte Inserate und terminale Historie sichtbar.
+- Zeitplan-Konfiguration wird nicht mehr als tatsächliche Produktionsfreigabe dargestellt; irreführende Aussagen zu Fehlerisolation und dauerhaft deaktiviertem DELETE entfernt.
+- Reine Anzeigeänderung: keine Scheduler-, Upload- oder DELETE-Freigabe geändert. Integrationstest schützt die Auswahlunabhängigkeit. Die historische Katalogprüfung bleibt eine notwendige Produktionssperre.

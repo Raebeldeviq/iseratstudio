@@ -1152,7 +1152,7 @@ export default function InseratStudio() {
   const selectedUploadIds = batchPlan.addresses.flatMap((address: { items: Array<{ listingId: string }> }) =>
     address.items.map((item) => item.listingId));
   const scheduler = normalizeListingScheduler(state.scheduler) as NonNullable<StudioState["scheduler"]>;
-  const managedListings = selectedWorkflowProjects.flatMap((project) => {
+  const managedListings = state.projects.flatMap((project) => {
     const group = normalizeListingGroup(project.listingGroup, project.id) as ListingGroup;
     return project.listings.map((listing) => {
       const rotationPlan = planListingRotation(state, project.id, listing.id, {
@@ -3705,10 +3705,10 @@ export default function InseratStudio() {
               <div>
                 <span className="eyebrow">Global und inseratsbezogen</span>
                 <h2>Inseratsmanager</h2>
-                <small className="section-note">Der lokale Background-Helper verarbeitet alle aktiven Inserate mit eingeschalteter Automatik auch ohne geöffnete Browserseite. Die Grundstücksauswahl bleibt reine UI-/Arbeitsauswahl; ein Fehler stoppt niemals andere Inserate.</small>
+                <small className="section-note">Hier stehen alle gespeicherten Inserate einschließlich ihrer Historie, unabhängig von der Grundstücksauswahl. Der Background-Helper arbeitet nur bei gültiger Produktionsfreigabe; Sicherheitsfehler stoppen weitere Aktionen.</small>
               </div>
-              <span className={scheduler.settings.paused || !scheduler.settings.enabled ? "status offline" : "status online"}>
-                {scheduler.settings.paused || !scheduler.settings.enabled ? "Automatik pausiert" : "Automatik aktiv"}
+              <span className="status offline">
+                {state.catalogRepairReview?.automaticProductionAllowed === false ? "Produktionsschutz aktiv" : scheduler.settings.paused || !scheduler.settings.enabled ? "Zeitplan pausiert" : "Zeitplan konfiguriert · Helper-Freigabe erforderlich"}
               </span>
             </div>
             <div className="scheduler-settings-grid">
@@ -3734,7 +3734,7 @@ export default function InseratStudio() {
               <button className="primary" onClick={runGlobalSchedulerDryRun}>Globalen Dry Run starten</button>
               <button className="secondary" onClick={prepareGlobalDailyRun}>Fälligen Tageslauf vorbereiten</button>
             </div>
-            <p className="security-note">Sicherheitsgrenze: Der Helper erstellt und überträgt fällige Rotationskopien automatisch. Ein FTPS-Erfolg bleibt „Importbestätigung ausstehend“; erst ein separates bestätigtes Importereignis wird „Veröffentlicht“. Automatisches und externes Löschen bleibt vollständig deaktiviert.</p>
+            <p className="security-note">Die Einstellungen hier sind keine Produktionsfreigabe. Übertragungen benötigen zusätzlich den freigegebenen Helper-Betriebsmodus und einen geklärten Katalog. FTPS-Erfolg ist keine Importbestätigung. Externe Löschungen benötigen eine eigene gültige Freigabe und eindeutige Bestätigung des Ersatzinserats.</p>
             {state.mailImportReportStatus && ["review_required", "setup_required", "access_failed", "mail_move_manual_review_required"].includes(state.mailImportReportStatus.status) ? <p className="validation-error"><b>{state.mailImportReportStatus.status === "setup_required" ? "Importbericht-Ordner nicht verfügbar" : "Importbericht prüfen"}</b><br />{state.mailImportReportStatus.message}</p> : null}
           </div>
 
@@ -3777,7 +3777,7 @@ export default function InseratStudio() {
                   </div>
                 </article>
               ))}</section>)}
-              {!managedListings.length ? <div className="empty-state large"><b>Noch keine verwalteten Inserate</b><span>Wähle in Schritt 01 mindestens ein Grundstück und eine vollständige Hausverteilung aus.</span></div> : null}
+              {!managedListings.length ? <div className="empty-state large"><b>Noch keine verwalteten Inserate</b><span>Im gespeicherten Katalog sind noch keine Inserate vorhanden.</span></div> : null}
             </div>
           </div>
         </section>

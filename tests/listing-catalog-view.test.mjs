@@ -1,10 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFile } from 'node:fs/promises';
 import { assertBrowserCatalogTransition, assertCatalogProductionReady, mergeListingCollection } from '../listing-catalog-view.mjs';
 
 const listing = { id:'listing-1', externalId:'TEST-1', status:'published', listingOrigin:'rotation-copy',
   importConfirmedAt:'2026-09-01T10:00:00Z', supersededByListingId:'listing-2', externalDeletionPending:true,
   creativeSelection:{heroImageId:'hero-1'}, texts:{title:'Original'}, version:2 };
+
+test('manager integrates the full persisted catalog independently of the UI selection', async () => {
+  const source = await readFile(new URL('../app/InseratStudio.tsx', import.meta.url), 'utf8');
+  assert.match(source, /const managedListings = state\.projects\.flatMap/);
+  assert.doesNotMatch(source, /const managedListings = selectedWorkflowProjects/);
+  assert.match(source, /Zeitplan konfiguriert · Helper-Freigabe erforderlich/);
+  assert.doesNotMatch(source, /ein Fehler stoppt niemals andere Inserate/);
+});
 
 test('active variant cannot duplicate a rotation copy or remove lifecycle provenance', () => {
   const result=mergeListingCollection([listing], [{id:listing.id, externalId:listing.externalId, listingOrigin:'group-source',status:'published'}]);
