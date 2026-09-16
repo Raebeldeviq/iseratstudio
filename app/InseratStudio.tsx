@@ -3,6 +3,7 @@
 
 import { ChangeEvent, useEffect, useState } from "react";
 import { isDraftListing, mergeListingCollection } from "../listing-catalog-view.mjs";
+import { plotAddressSelection, selectablePlotIds, selectablePlotProjects } from "../plot-selection.mjs";
 import {
   captionForImageRole,
   INTERIOR_IMAGE_ROLES,
@@ -881,8 +882,7 @@ export default function InseratStudio() {
           if (cancelled || !snapshot || snapshot.savedAt !== data.catalogSavedAt) return;
           knownDeviceCatalogSavedAt = snapshot.savedAt;
           const loaded = normalizeMandatoryListingStandards(normalizeProjectOwners(snapshot.state));
-          const activeLoadedPlotIds = new Set((loaded.plots || []).filter((plot) => plot.isActive !== false).map((plot) => plot.id));
-          setState({ ...loaded, selectedPlotIds: (loaded.selectedPlotIds || []).filter((id) => activeLoadedPlotIds.has(id)) });
+          setState({ ...loaded, selectedPlotIds: selectablePlotIds(loaded.plots, loaded.selectedPlotIds) });
           setNotice("Der automatische Grundstücksabgleich wurde in die geöffnete App übernommen.");
         }
       } catch {
@@ -1047,27 +1047,27 @@ export default function InseratStudio() {
       })
     : [];
   const plotRecords = (state.plots || []) as PlotRecord[];
-  const activePlotIds = new Set(plotRecords.filter((plot) => plot.isActive !== false).map((plot) => plot.id));
-  const selectedPlotIds = [...new Set((state.selectedPlotIds || []).filter((id) => activePlotIds.has(id)))];
+  const activePlotIds = new Set(plotRecords.filter((plot) => plotAddressSelection(plot).selectable).map((plot) => plot.id));
+  const selectedPlotIds = selectablePlotIds(plotRecords, state.selectedPlotIds) as string[];
   const setSelectedPlotIds = (next: string[] | ((ids: string[]) => string[])) => {
     setState((current) => {
-      const activeIds = new Set((current.plots || []).filter((plot) => plot.isActive !== false).map((plot) => plot.id));
-      const currentIds = (current.selectedPlotIds || []).filter((id) => activeIds.has(id));
+      const currentIds = selectablePlotIds(current.plots, current.selectedPlotIds) as string[];
       const resolved = typeof next === "function" ? next(currentIds) : next;
-      return { ...current, selectedPlotIds: [...new Set(resolved.filter((id) => activeIds.has(id)))] };
+      return { ...current, selectedPlotIds: selectablePlotIds(current.plots, resolved) };
     });
   };
   const linkedProjectCounts = state.projects.reduce<Record<string, number>>((counts, project) => {
     if (project.plotId) counts[project.plotId] = (counts[project.plotId] || 0) + 1;
     return counts;
   }, {});
-  const activePlotProjects = state.projects.filter((project) => project.isActive !== false && Boolean(project.plotId) && activePlotIds.has(project.plotId || ""));
+  const eligibleProjects = selectablePlotProjects(plotRecords, state.projects) as ProjectInput[];
+  const activePlotProjects = eligibleProjects.filter((project) => Boolean(project.plotId));
   const selectedWorkflowProjects = activePlotProjects.filter((project) => selectedPlotIds.includes(project.plotId || ""));
   const projectSource = selectedWorkflowProjects.length
     ? selectedWorkflowProjects
     : activePlotProjects.length
       ? activePlotProjects
-      : state.projects.filter((project) => project.isActive !== false);
+      : eligibleProjects;
   const ownerProjects = [...projectSource].sort(compareProjectsByRegion);
   const activeProject =
     ownerProjects.find((project) => project.id === activeProjectId) ??
@@ -1093,7 +1093,7 @@ export default function InseratStudio() {
     houseDistribution.projects.map((record) => [record.projectId, record]),
   );
   const plotSelectionMeta = Object.fromEntries(plotRecords.map((plot) => {
-    const linked = activePlotProjects.filter((project) => project.plotId === plot.id);
+    const linked = state.projects.filter((project) => project.plotId === plot.id);
     const resolvedRegion = resolvePostalRegion(postalRegionIndex, plot.postalCode, plot.city);
     const uploadDate = linked.flatMap((project) => project.listings.map((listing) => listing.lastUploadedAt || ""))
       .filter(Boolean)
@@ -1336,8 +1336,8 @@ export default function InseratStudio() {
   };
 
   const updateCentralPlotSelection = (plotIds: string[]) => {
-    const activeIds = [...new Set(plotIds.filter((id) => activePlotIds.has(id)))];
-    const selectedPlots = plotRecords.filter((plot) => activeIds.includes(plot.id) && plot.isActive !== false);
+    const activeIds = selectablePlotIds(plotRecords, plotIds) as string[];
+    const selectedPlots = plotRecords.filter((plot) => activeIds.includes(plot.id));
     if (!selectedPlots.length) {
       setSelectedPlotIds([]);
       setNotice("Die zentrale Grundstücksauswahl wurde geleert.");
@@ -3217,7 +3217,7 @@ export default function InseratStudio() {
           </p>
         </div>
         <div className="workflow-summary">
-          <div><b>{plotRecords.filter((plot) => plot.isActive !== false).length}</b><span>aktive Grundstücke</span></div>
+          <div><b>{activePlotIds.size}</b><span>auswählbare Grundstücke</span></div>
           <div><b>{state.houses.length}</b><span>von {MAX_HOUSE_TEMPLATES} Haustypen</span></div>
           <div><b>{activeListingGroup?.variants.filter((variant) => variant.templateId).length || 0}</b><span>aktive Varianten</span></div>
         </div>

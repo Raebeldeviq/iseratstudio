@@ -15,7 +15,7 @@ import {
   replacePlotRecord,
 } from "../../plot-records.mjs";
 import type { AddressOwner, PlotRecord } from "../types";
-import { plotListingCountAppearance } from "../../plot-selection.mjs";
+import { plotAddressSelection, plotListingCountAppearance, selectablePlotIds } from "../../plot-selection.mjs";
 
 const MAX_IMPORT_BYTES = 10 * 1024 * 1024;
 const MAX_PDF_BYTES = 30 * 1024 * 1024;
@@ -135,6 +135,7 @@ export default function PlotManagement({
 }: Props) {
   const [logOpen, setLogOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [showReview, setShowReview] = useState(false);
   const [cityFilter, setCityFilter] = useState("");
   const [sortKey, setSortKey] = useState<PlotSortKey>("city");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
@@ -149,10 +150,13 @@ export default function PlotManagement({
   const pdfInput = useRef<HTMLInputElement>(null);
 
   const activePlots = useMemo(() => plots.filter((plot) => plot.isActive !== false), [plots]);
+  const selectablePlots = useMemo(() => activePlots.filter((plot) => plotAddressSelection(plot).selectable), [activePlots]);
+  const reviewPlots = useMemo(() => activePlots.filter((plot) => !plotAddressSelection(plot).selectable), [activePlots]);
+  const displayedPlots = showReview ? reviewPlots : selectablePlots;
   const cityOptions = useMemo(() => [...new Set(activePlots.map((plot) => plot.city).filter(Boolean))].sort((a, b) => a.localeCompare(b, "de")), [activePlots]);
   const visiblePlots = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase("de-DE");
-    return activePlots.filter((plot) => {
+    return displayedPlots.filter((plot) => {
       if (cityFilter && plot.city !== cityFilter) return false;
       if (!needle) return true;
       return [formatPlotStreet(plot), plot.postalCode, plot.city]
@@ -160,8 +164,8 @@ export default function PlotManagement({
         .toLocaleLowerCase("de-DE")
         .includes(needle);
     });
-  }, [activePlots, cityFilter, query]);
-  const visibleIds = visiblePlots.map((plot) => plot.id);
+  }, [displayedPlots, cityFilter, query]);
+  const visibleIds = selectablePlotIds(visiblePlots, visiblePlots.map((plot) => plot.id));
   const allVisibleSelected = Boolean(visibleIds.length) && visibleIds.every((id) => selectedPlotIds.includes(id));
   const selectionGroups = useMemo(() => {
     const collator = new Intl.Collator("de-DE", { numeric: true, sensitivity: "base" });
@@ -213,6 +217,7 @@ export default function PlotManagement({
   };
 
   const togglePlot = (plotId: string) => {
+    if (!selectablePlotIds(plots, [plotId]).length) return;
     onSelectionChange(selectedPlotIds.includes(plotId)
       ? selectedPlotIds.filter((id) => id !== plotId)
       : [...selectedPlotIds, plotId]);
@@ -431,7 +436,7 @@ export default function PlotManagement({
     <section className="workspace plot-workspace">
       <div className="content-card plot-management-card">
         <div className="section-heading">
-          <div><span className="eyebrow">Zentrale Datenbasis und einzige Auswahl</span><h2>{activePlots.length} Grundstücke</h2><small className="section-note">Bearbeitung, Mehrfachauswahl und Exposés befinden sich ausschließlich hier. Änderungen gelten direkt für alle nachfolgenden Schritte.</small></div>
+          <div><span className="eyebrow">Zentrale Datenbasis und einzige Auswahl</span><h2>{selectablePlots.length} auswählbare Grundstücke · {reviewPlots.length} Prüffälle</h2><small className="section-note">Grundstücke ohne öffentliche Straße bleiben zur Recherche erhalten und sind nicht auswählbar. Bestehende Online-Inserate bleiben erhalten – auch ohne Eintrag in der aktuellen Excel.</small></div>
           <div className="button-row">
             <input ref={excelInput} type="file" accept=".xlsx,.xls" hidden onChange={importExcel} />
             <button className="secondary" disabled={importBusy} onClick={() => excelInput.current?.click()}>{importBusy ? "Excel wird gelesen …" : "Excel importieren"}</button>
@@ -453,6 +458,12 @@ export default function PlotManagement({
 
         {message ? <div className="plot-inline-message" role="status">{message}</div> : null}
 
+        <div className="button-row" aria-label="Adressprüfung">
+          <button className={!showReview ? 'primary' : 'secondary'} aria-pressed={!showReview} onClick={() => setShowReview(false)}>Auswählbare Grundstücke ({selectablePlots.length})</button>
+          <button className={showReview ? 'primary' : 'secondary'} aria-pressed={showReview} onClick={() => setShowReview(true)}>Müssen geprüft werden ({reviewPlots.length})</button>
+        </div>
+        {showReview ? <p role="note">Nur Recherche und Bearbeitung möglich. Diese Grundstücke werden nicht in „Alle sichtbaren wählen“ übernommen. Bestehende Inserate und ihre Historie bleiben unverändert im Inseratsmanager.</p> : null}
+
         <div className="plot-toolbar">
           <label className="field"><span>Suche</span><input value={query} placeholder="Straße, PLZ oder Ort" onChange={(event) => setQuery(event.target.value)} /></label>
           <label className="field"><span>Ort filtern</span><select value={cityFilter} onChange={(event) => setCityFilter(event.target.value)}><option value="">Alle Orte</option>{cityOptions.map((city) => <option key={city}>{city}</option>)}</select></label>
@@ -466,11 +477,12 @@ export default function PlotManagement({
           const listingCount = selectionMeta[plot.id]?.listingCount || 0;
           const uploadDate = selectionMeta[plot.id]?.uploadDate || "";
           const appearance = plotListingCountAppearance(listingCount);
+          const address = plotAddressSelection(plot);
           return <article className={`plot-selection-card ${appearance.tone}${selectedPlotIds.includes(plot.id) ? " selected" : ""}`} key={plot.id}>
-            <label className="plot-selection-main"><input type="checkbox" checked={selectedPlotIds.includes(plot.id)} onChange={() => togglePlot(plot.id)} /><span><b>{formatPlotStreet(plot) || "–"}</b><small>{plot.postalCode || "–"} {plot.city || "–"}</small></span></label>
+            <label className="plot-selection-main"><input type="checkbox" disabled={!address.selectable} checked={address.selectable && selectedPlotIds.includes(plot.id)} onChange={() => togglePlot(plot.id)} aria-label={`${formatPlotStreet(plot) || 'Adresse offen'} auswählen`} /><span><b>{formatPlotStreet(plot) || "–"}</b><small>{plot.postalCode || "–"} {plot.city || "–"}</small>{!address.selectable ? <small>{address.reason}</small> : address.houseNumberUnconfirmed ? <small>Hausnummer unbestätigt – vor Veröffentlichung prüfen</small> : null}</span></label>
             <div className="plot-selection-facts"><span><small>Grundstück</small><b>{plot.plotSizeSqm ? `${number(plot.plotSizeSqm)} m²` : "–"}</b></span><span><small>Kaufpreis</small><b>{plot.purchasePrice ? euro(plot.purchasePrice) : "–"}</b></span><span><small>Plattform-Upload</small><b>{uploadDate ? date(uploadDate) : "Noch nicht hochgeladen"}</b></span></div>
             <em>{listingCount} Inserate{appearance.detail ? <small>{appearance.detail}</small> : null}</em>
-            <div className="plot-actions"><button onClick={() => beginEdit(plot)}>Bearbeiten</button>{plot.exposeFileReference ? <button onClick={() => openExpose(plot)}>Exposé öffnen</button> : null}<button className="danger-link" onClick={() => removePlot(plot)}>Löschen</button></div>
+            <div className="plot-actions"><button onClick={() => beginEdit(plot)}>Bearbeiten</button>{plot.exposeFileReference ? <button onClick={() => openExpose(plot)}>Exposé öffnen</button> : null}{!showReview ? <button className="danger-link" onClick={() => removePlot(plot)}>Löschen</button> : null}</div>
           </article>;
         })}</div></section>)}</div>
         {!visiblePlots.length ? <div className="empty-state"><b>Keine Grundstücke gefunden</b><span>Importiere eine Excel-Datei oder lege ein Grundstück manuell an.</span></div> : null}
