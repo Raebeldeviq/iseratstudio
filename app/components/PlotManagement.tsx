@@ -16,6 +16,7 @@ import {
 } from "../../plot-records.mjs";
 import type { AddressOwner, PlotRecord } from "../types";
 import { plotAddressSelection, plotListingCountAppearance, selectablePlotIds } from "../../plot-selection.mjs";
+import { partitionPlotsByTerritory } from "../../plot-territory.mjs";
 
 const MAX_IMPORT_BYTES = 10 * 1024 * 1024;
 const MAX_PDF_BYTES = 30 * 1024 * 1024;
@@ -76,6 +77,7 @@ type PlotSyncRun = {
 };
 
 type PlotSyncStatus = {
+  territory?: { available: boolean; postalCodes: string[]; message: string };
   scheduleEnabled?: boolean;
   sourceFound: boolean;
   running: boolean;
@@ -137,7 +139,7 @@ export default function PlotManagement({
   const [query, setQuery] = useState("");
   const [showReview, setShowReview] = useState(false);
   const [cityFilter, setCityFilter] = useState("");
-  const [sortKey, setSortKey] = useState<PlotSortKey>("city");
+  const [sortKey, setSortKey] = useState<PlotSortKey>("postalCode");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [draft, setDraft] = useState<PlotRecord | null>(null);
   const [pdfReview, setPdfReview] = useState<PdfReview | null>(null);
@@ -167,7 +169,7 @@ export default function PlotManagement({
   }, [displayedPlots, cityFilter, query]);
   const visibleIds = selectablePlotIds(visiblePlots, visiblePlots.map((plot) => plot.id));
   const allVisibleSelected = Boolean(visibleIds.length) && visibleIds.every((id) => selectedPlotIds.includes(id));
-  const selectionGroups = useMemo(() => {
+  const territorySections = useMemo(() => {
     const collator = new Intl.Collator("de-DE", { numeric: true, sensitivity: "base" });
     const compare = (left: PlotRecord, right: PlotRecord) => {
       const leftMeta = selectionMeta[left.id] || { listingCount: 0, uploadDate: "" };
@@ -184,18 +186,17 @@ export default function PlotManagement({
       const ordered = numeric || collator.compare([left.city, left.postalCode, formatPlotStreet(left)].join(" "), [right.city, right.postalCode, formatPlotStreet(right)].join(" "));
       return sortDirection === "asc" ? ordered : -ordered;
     };
-    const groups = new Map<string, PlotRecord[]>();
-    for (const plot of visiblePlots) {
-      const label = selectionMeta[plot.id]?.regionLabel || "Nicht zugeordnet";
-      groups.set(label, [...(groups.get(label) || []), plot]);
-    }
-    return [...groups.entries()]
-      .sort(([left], [right]) => left.localeCompare(right, "de"))
-      .map(([label, entries]) => ({
-        label,
-        plots: entries.sort(compare),
-      }));
-  }, [selectionMeta, sortDirection, sortKey, visiblePlots]);
+    return partitionPlotsByTerritory(visiblePlots, helperOnline ? syncStatus?.territory : null).map((section) => {
+      const groups = new Map<string, PlotRecord[]>();
+      for (const plot of section.plots) {
+        const label = selectionMeta[plot.id]?.regionLabel || "Nicht zugeordnet";
+        groups.set(label, [...(groups.get(label) || []), plot]);
+      }
+      return { ...section, groups: [...groups.entries()]
+        .map(([label, entries]) => ({ label, firstPostalCode: entries.map((plot) => plot.postalCode).sort()[0] || "", plots: entries.sort(compare) }))
+        .sort((left, right) => collator.compare(left.firstPostalCode, right.firstPostalCode) || collator.compare(left.label, right.label)) };
+    });
+  }, [selectionMeta, sortDirection, sortKey, visiblePlots, helperOnline, syncStatus?.territory]);
   const displayedSyncRun = syncStatus?.lastSuccessfulRun || syncStatus?.lastRun;
 
   const beginEdit = (plot?: PlotRecord) => {
@@ -473,7 +474,12 @@ export default function PlotManagement({
           <div className="button-row"><button className="secondary" disabled={!visibleIds.length} onClick={toggleAllVisible}>{allVisibleSelected ? "Sichtbare abwählen" : "Alle sichtbaren wählen"}</button><button className="secondary" disabled={!selectedPlotIds.length} onClick={() => onSelectionChange([])}>Auswahl aufheben</button></div>
         </div>
 
-        <div className="plot-region-groups">{selectionGroups.map((group) => <section key={group.label}><header><b>{group.label}</b><span>{group.plots.length} Grundstücke</span></header><div>{group.plots.map((plot) => {
+        <p role="note">Gebietsabgleich: aktive PLZ im Excel-Blatt „Suchgebiet“. Grundstücke außerhalb bleiben erlaubt und bei gültiger Anschrift auswählbar. Bestehende Online-Inserate bleiben unverändert.</p>
+        {(!helperOnline || !syncStatus?.territory?.available) ? <p role="status">{syncStatus?.territory?.message || "Gebietszuordnung nicht verfügbar – Verbindung und aktive PLZ-Liste werden geprüft."}</p> : null}
+        <div className="plot-territory-sections">{territorySections.map((territory) => <section className={`plot-territory-section ${territory.id}`} key={territory.id} aria-label={territory.label}>
+          <header className="plot-territory-heading"><h3>{territory.label}</h3><span>{territory.plots.length} Grundstücke</span></header>
+          {!territory.plots.length ? <p>Keine Grundstücke in diesem Bereich für den aktuellen Filter.</p> : null}
+          <div className="plot-region-groups">{territory.groups.map((group) => <section key={group.label}><header><b>{group.label}</b><span>{group.plots.length} Grundstücke</span></header><div>{group.plots.map((plot) => {
           const listingCount = selectionMeta[plot.id]?.listingCount || 0;
           const uploadDate = selectionMeta[plot.id]?.uploadDate || "";
           const appearance = plotListingCountAppearance(listingCount);
@@ -485,6 +491,7 @@ export default function PlotManagement({
             <div className="plot-actions"><button onClick={() => beginEdit(plot)}>Bearbeiten</button>{plot.exposeFileReference ? <button onClick={() => openExpose(plot)}>Exposé öffnen</button> : null}{!showReview ? <button className="danger-link" onClick={() => removePlot(plot)}>Löschen</button> : null}</div>
           </article>;
         })}</div></section>)}</div>
+        </section>)}</div>
         {!visiblePlots.length ? <div className="empty-state"><b>Keine Grundstücke gefunden</b><span>Importiere eine Excel-Datei oder lege ein Grundstück manuell an.</span></div> : null}
       </div>
 

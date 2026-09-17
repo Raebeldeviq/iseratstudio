@@ -203,6 +203,12 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
 .plot-actions button, .danger-link { border: 0; border-radius: 7px; padding: 0.42rem 0.5rem; background: #edf1e9; color: var(--ink); font-size: 0.66rem; font-weight: 700; }
 .plot-actions .danger-link, .danger-link { color: var(--danger); background: #fff0ee; }
 .plot-region-groups { display: grid; gap: 0.75rem; max-height: 720px; overflow: auto; padding-right: 0.25rem; }
+.plot-territory-sections { display: grid; gap: 1.5rem; }
+.plot-territory-section { min-width: 0; }
+.plot-territory-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; padding: 0.8rem 0; border-bottom: 2px solid var(--line); margin-bottom: 0.75rem; }
+.plot-territory-heading h3 { margin: 0; }
+.plot-territory-heading span { color: var(--muted); }
+.plot-territory-section.outside { border-top: 2px solid var(--line); padding-top: 0.75rem; }
 .plot-region-groups > section { overflow: hidden; border: 1px solid var(--line); border-radius: 12px; }
 .plot-region-groups > section > header { position: sticky; top: 0; z-index: 1; display: flex; justify-content: space-between; padding: 0.65rem 0.8rem; background: #edf4e5; }
 .plot-region-groups > section > header b { font-size: 0.71rem; }

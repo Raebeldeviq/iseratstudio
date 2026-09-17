@@ -204,6 +204,7 @@ type PlotSyncRun = {
 };
 
 type PlotSyncStatus = {
+  territory?: { available: boolean; postalCodes: string[]; message: string };
   scheduleEnabled?: boolean;
   sourceFound: boolean;
   running: boolean;

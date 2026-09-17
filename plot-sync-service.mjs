@@ -9,6 +9,7 @@ import {
 } from "./catalog-store.mjs";
 import { applyPlotSyncRows, parsePlotSyncRows } from "./plot-excel-sync.mjs";
 import { PLOT_SYNC_CONFIG } from "./plot-sync-config.mjs";
+import { loadPlotTerritory } from "./plot-territory-source.mjs";
 import { localDateKey, nextPlotSyncAt } from "./plot-sync-schedule.mjs";
 import { createStructuredFileLogger } from "./structured-log.mjs";
 
@@ -88,6 +89,7 @@ export function createPlotSyncService(options = {}) {
     commitCatalog: options.commitCatalog || ((sessionId) => commitCatalogSnapshot(sessionId)),
     fileHash: options.fileHash || sha256File,
     fileStat: options.fileStat || stat,
+    loadTerritory: options.loadTerritory || (() => loadPlotTerritory(config.sourcePath)),
     now: options.now || (() => new Date().toISOString()),
   };
   const writeLog = options.writeLog || createStructuredFileLogger(config.logPath, { jobType: "plot-excel-sync" });
@@ -104,7 +106,8 @@ export function createPlotSyncService(options = {}) {
     } catch (error) {
       if (!isMissing(error)) throw error;
     }
-    return { ...emptyStatus(config), ...saved, config: publicConfig(config), sourceFound, running: Boolean(currentRun), scheduleEnabled };
+    const territory = await dependencies.loadTerritory();
+    return { ...emptyStatus(config), ...saved, config: publicConfig(config), sourceFound, running: Boolean(currentRun), scheduleEnabled, territory };
   }
 
   async function acquireLock() {
