@@ -73,6 +73,7 @@ import {
   createBatchUploadPlan,
   runSequentialBatchUpload,
 } from "../batch-upload.mjs";
+import { createManualBatchResumptionPlan } from "../manual-batch-upload.mjs";
 import {
   choosePromotionImage,
   enforceSinglePromotionAssignment,
@@ -2679,9 +2680,39 @@ export default function InseratStudio() {
       setNotice("Der lokale Upload-Helfer ist nicht erreichbar. Bitte die Anwendung über den Startknopf öffnen.");
       return;
     }
-    const estimatedMinutes = Math.max(1, Math.ceil(batchPlan.estimatedSeconds / 60));
+    let runPlan = batchPlan;
+    let protectedListingIds: string[] = [];
+    try {
+      const parameters = new URLSearchParams();
+      for (const projectId of effectiveBatchProjectIds) parameters.append("projectId", projectId);
+      const response = await helperFetch(`/manual-batch-resumption?${parameters.toString()}`);
+      const data = (await response.json()) as { ok?: boolean; protectedListingIds?: string[]; message?: string };
+      if (!response.ok || !data.ok || !Array.isArray(data.protectedListingIds)) {
+        throw new Error(data.message || "Der lokale Übertragungsstatus ist nicht verfügbar.");
+      }
+      const resumed = createManualBatchResumptionPlan(state, effectiveBatchProjectIds, {
+        jobs: data.protectedListingIds.map((listingId) => ({
+          projectId: state.projects.find((project) => project.listings.some((listing) => listing.id === listingId))?.id || "",
+          listingId,
+          status: WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT,
+        })),
+      }, {
+        excludedListingIds: excludedUploadIds,
+        promotionOverrides,
+      });
+      runPlan = resumed.plan;
+      protectedListingIds = resumed.protectedListingIds;
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Der lokale Übertragungsstatus konnte nicht geprüft werden.");
+      return;
+    }
+    if (!runPlan.totalListings) {
+      setNotice(`Kein offenes Inserat für den manuellen Sammel-Upload. ${protectedListingIds.length} bereits übertragene Inserate bleiben geschützt.`);
+      return;
+    }
+    const estimatedMinutes = Math.max(1, Math.ceil(runPlan.estimatedSeconds / 60));
     const confirmed = window.confirm(
-      `${batchPlan.totalAddresses} Adresse(n) mit insgesamt ${batchPlan.totalListings} Inseraten jetzt nacheinander an ${ftpHost} übertragen?\n\nGeschätzte Laufzeit: ca. ${estimatedMinutes} Minute(n). Fehler einzelner Inserate werden protokolliert und die Warteschlange läuft weiter. Die Weitergabe an Portale ist im Paket deaktiviert.${ftpSecure === "none" ? "\n\nWARNUNG: Der Transport ist unverschlüsselt konfiguriert." : ""}`,
+      `${runPlan.totalAddresses} Adresse(n) mit insgesamt ${runPlan.totalListings} offenen Inseraten jetzt nacheinander an ${ftpHost} übertragen?\n\n${protectedListingIds.length} bereits übertragene Inserat(e) werden idempotent übersprungen. Geschätzte Laufzeit: ca. ${estimatedMinutes} Minute(n). Fehler einzelner Inserate werden protokolliert und die Warteschlange läuft weiter. Die Weitergabe an Portale ist im Paket deaktiviert.${ftpSecure === "none" ? "\n\nWARNUNG: Der Transport ist unverschlüsselt konfiguriert." : ""}`,
     );
     if (!confirmed) return;
 
@@ -2691,18 +2722,18 @@ export default function InseratStudio() {
     setBatchUploadProgress({
       running: true,
       addressIndex: 0,
-      addressTotal: batchPlan.totalAddresses,
+      addressTotal: runPlan.totalAddresses,
       listingIndex: 0,
       listingTotal: 0,
       processed: 0,
-      total: batchPlan.totalListings,
+      total: runPlan.totalListings,
       successful: 0,
       failed: 0,
       status: "Vorbereitung abgeschlossen",
     });
     try {
       const uploadState = state;
-      const result = await runSequentialBatchUpload(batchPlan, async ({ address, item, addressIndex, listingIndex }: {
+      const result = await runSequentialBatchUpload(runPlan, async ({ address, item, addressIndex, listingIndex }: {
         address: { projectId: string; items: unknown[] };
         item: { jobId: string; listingId: string; templateName: string; promotionImageId: string };
         addressIndex: number;
@@ -2715,7 +2746,7 @@ export default function InseratStudio() {
           ? normalizePromotionLibrary(uploadState).promotionImages.find((image) => image.id === item.promotionImageId)
           : null;
         const promotionImagesByListingId = promotionImage ? { [listing.id]: promotionImage } : {};
-        const position = `${addressIndex + 1}/${batchPlan.totalAddresses} · ${listingIndex + 1}/${address.items.length}`;
+        const position = `${addressIndex + 1}/${runPlan.totalAddresses} · ${listingIndex + 1}/${address.items.length}`;
         setUploadStatus(`${position} · ${listing.templateName} wird gepackt …`);
         const packageResult = await buildImportPackage(
           packageInput(project, [listing], promotionImagesByListingId, uploadState),
@@ -2769,11 +2800,11 @@ export default function InseratStudio() {
           setBatchUploadProgress({
             running: true,
             addressIndex: addressIndex + 1,
-            addressTotal: batchPlan.totalAddresses,
+            addressTotal: runPlan.totalAddresses,
             listingIndex: listingIndex + 1,
             listingTotal: address.items.length,
             processed,
-            total: batchPlan.totalListings,
+            total: runPlan.totalListings,
             successful,
             failed,
             status: `${item.templateName} wird übertragen`,
@@ -2804,14 +2835,14 @@ export default function InseratStudio() {
 
       const timestamp = new Date().toISOString();
       let nextState = uploadState;
-      const newLogs: BatchUploadLog[] = batchPlan.addresses
+      const newLogs: BatchUploadLog[] = runPlan.addresses
         .filter((address: { items: unknown[] }) => !address.items.length)
         .map((address: { projectId: string; address: string; error: string }) => {
           const project = uploadState.projects.find((candidate) => candidate.id === address.projectId);
           return {
             id: uid(),
-            jobId: `skip:${batchPlan.id}:${address.projectId}`,
-            batchId: batchPlan.id,
+            jobId: `skip:${runPlan.id}:${address.projectId}`,
+            batchId: runPlan.id,
             projectId: address.projectId,
             address: address.address,
             listingId: "",
@@ -2831,7 +2862,7 @@ export default function InseratStudio() {
         const listing = project?.listings.find((candidate) => candidate.id === itemResult.listingId);
         if (!project || !listing) continue;
         const log = createBatchUploadLog(project, listing, itemResult, {
-          batchId: batchPlan.id,
+          batchId: runPlan.id,
           promotionImageId: itemResult.promotionImageId,
           now: timestamp,
           updateIntervalDays: scheduler.settings.updateIntervalDays,

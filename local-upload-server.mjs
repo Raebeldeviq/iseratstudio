@@ -28,6 +28,11 @@ import { getMediaLibraryItem, queryMediaLibrary, recommendedMediaSequence } from
 import { createStructuredFileLogger } from "./structured-log.mjs";
 import { createUploadJobLedger } from "./upload-job-ledger.mjs";
 import {
+  completedManualBatchListingIds,
+  requiresPlotDailyUploadClaim,
+  UPLOAD_ORIGIN,
+} from "./manual-batch-upload.mjs";
+import {
   collectPlotUploadEvidence,
   createPlotDailyUploadGuard,
   plotUploadDayKey,
@@ -674,6 +679,7 @@ const server = createServer(async (request, response) => {
   const isRuntimeProvenance = request.method === "GET" && pathname === "/runtime-provenance";
   const isUpload = request.method === "POST" && pathname === "/upload";
   const isBinaryUpload = request.method === "POST" && pathname === "/upload-binary";
+  const isManualBatchResumption = request.method === "GET" && pathname === "/manual-batch-resumption";
   const isLocalSave = request.method === "POST" && pathname === "/save-package";
   const isTextGeneration = request.method === "POST" && pathname === "/generate-texts";
   const isImageCaptionGeneration = request.method === "POST" && pathname === "/generate-image-captions";
@@ -700,7 +706,7 @@ const server = createServer(async (request, response) => {
   const isPlotSyncLog = request.method === "GET" && pathname === "/plot-sync/log";
   const isMailRuntimeProbe = request.method === "POST" && pathname === "/mail-runtime/probe";
   const isExactProductionDelete = request.method === "POST" && pathname === EXACT_PRODUCTION_DELETE_PATH;
-  if (!isPlotSyncSchedule && !isHealth && !isRuntimeProvenance && !isUpload && !isBinaryUpload && !isLocalSave && !isTextGeneration && !isImageCaptionGeneration && !isOpenAiKeyValidation && !isCredentialLoad && !isCredentialSave && !isCatalogLoad && !isCatalogSave && !isCatalogV2Start && !isCatalogV2ImageSave && !isCatalogV2Commit && !isCatalogV2ManifestLoad && !isCatalogV2ImageLoad && !isMediaLibraryList && !isMediaLibrarySequence && !isMediaLibraryImage && !isPlotExposeAnalyze && !isPlotExposeCommit && !isPlotExposeLoad && !isPlotExposeArchive && !isPlotSyncStatus && !isPlotSyncRun && !isPlotSyncLog && !isMailRuntimeProbe && !isExactProductionDelete) {
+  if (!isPlotSyncSchedule && !isHealth && !isRuntimeProvenance && !isUpload && !isBinaryUpload && !isManualBatchResumption && !isLocalSave && !isTextGeneration && !isImageCaptionGeneration && !isOpenAiKeyValidation && !isCredentialLoad && !isCredentialSave && !isCatalogLoad && !isCatalogSave && !isCatalogV2Start && !isCatalogV2ImageSave && !isCatalogV2Commit && !isCatalogV2ManifestLoad && !isCatalogV2ImageLoad && !isMediaLibraryList && !isMediaLibrarySequence && !isMediaLibraryImage && !isPlotExposeAnalyze && !isPlotExposeCommit && !isPlotExposeLoad && !isPlotExposeArchive && !isPlotSyncStatus && !isPlotSyncRun && !isPlotSyncLog && !isMailRuntimeProbe && !isExactProductionDelete) {
     send(response, 404, { ok: false, message: "Nicht gefunden." }, origin);
     return;
   }
@@ -739,6 +745,13 @@ const server = createServer(async (request, response) => {
       processId: process.pid,
       productionGuard: verifyProductionRuntime(RUNTIME_PROVENANCE, productionPolicy),
     }, origin);
+    return;
+  }
+
+  if (isManualBatchResumption) {
+    const projectIds = requestUrl.searchParams.getAll("projectId");
+    const protectedListingIds = completedManualBatchListingIds(await uploadJobLedger.read(), projectIds);
+    send(response, 200, { ok: true, protectedListingIds }, origin);
     return;
   }
 
@@ -909,6 +922,7 @@ const server = createServer(async (request, response) => {
         projectId: decodedHeader(request, "x-fpi-project-id"),
         listingId: decodedHeader(request, "x-fpi-listing-id"),
         jobType: "immoprofessional-upload",
+        uploadOrigin: UPLOAD_ORIGIN.MANUAL_BATCH,
       };
       const claim = await uploadJobLedger.claim(uploadJob);
       if (claim.alreadyCompleted) {
@@ -917,7 +931,7 @@ const server = createServer(async (request, response) => {
         return;
       }
       uploadJobClaimed = true;
-      {
+      if (requiresPlotDailyUploadClaim(uploadJob.uploadOrigin)) {
         const context = await persistedUploadContext(uploadJob.projectId, uploadJob.listingId);
         plotDailyUploadClaim = await claimPlotDailyUpload({ ...context, uploadJob });
         uploadJob = { ...uploadJob, plotId: plotDailyUploadClaim.plotId, plotUploadDayKey: plotDailyUploadClaim.plotUploadDayKey };
@@ -965,9 +979,9 @@ const server = createServer(async (request, response) => {
       });
       if (ftp.ftpPath && ftp.ftpPath !== "/") await client.cd(ftp.ftpPath);
       await uploadLog("connected", { filename, host: ftp.ftpHost, remotePath: ftp.ftpPath, transport: ftp.ftpSecure });
-      await plotDailyUploadGuard.markTransferStarted(plotDailyUploadClaim);
+      if (plotDailyUploadClaim) await plotDailyUploadGuard.markTransferStarted(plotDailyUploadClaim);
       await client.uploadFrom(temporaryUploadPath, filename);
-      await plotDailyUploadGuard.complete(plotDailyUploadClaim);
+      if (plotDailyUploadClaim) await plotDailyUploadGuard.complete(plotDailyUploadClaim);
       await uploadJobLedger.complete(uploadJob);
       uploadJobCompleted = true;
       await uploadLog("transferred", { filename, archiveBytes, host: ftp.ftpHost, remotePath: ftp.ftpPath, transport: ftp.ftpSecure });
@@ -1134,6 +1148,7 @@ const server = createServer(async (request, response) => {
       projectId: String(body.projectId || ""),
       listingId: String(body.listingId || ""),
       jobType: "immoprofessional-upload",
+      uploadOrigin: UPLOAD_ORIGIN.LEGACY_MANUAL,
     };
     const claim = await uploadJobLedger.claim(uploadJob);
     if (claim.alreadyCompleted) {
@@ -1142,7 +1157,7 @@ const server = createServer(async (request, response) => {
       return;
     }
     uploadJobClaimed = true;
-    {
+    if (requiresPlotDailyUploadClaim(uploadJob.uploadOrigin)) {
       const context = await persistedUploadContext(uploadJob.projectId, uploadJob.listingId);
       plotDailyUploadClaim = await claimPlotDailyUpload({ ...context, uploadJob });
       uploadJob = { ...uploadJob, plotId: plotDailyUploadClaim.plotId, plotUploadDayKey: plotDailyUploadClaim.plotUploadDayKey };
@@ -1161,9 +1176,9 @@ const server = createServer(async (request, response) => {
 
     if (remotePath && remotePath !== "/") await client.cd(remotePath);
     await uploadLog("connected", { filename, host: String(ftp.ftpHost), remotePath, transport: ftp.ftpSecure });
-    await plotDailyUploadGuard.markTransferStarted(plotDailyUploadClaim);
+    if (plotDailyUploadClaim) await plotDailyUploadGuard.markTransferStarted(plotDailyUploadClaim);
     await client.uploadFrom(Readable.from(archive), filename);
-    await plotDailyUploadGuard.complete(plotDailyUploadClaim);
+    if (plotDailyUploadClaim) await plotDailyUploadGuard.complete(plotDailyUploadClaim);
     await uploadJobLedger.complete(uploadJob);
     uploadJobCompleted = true;
     await uploadLog("transferred", { filename, archiveBytes: archive.length, host: String(ftp.ftpHost), remotePath, transport: ftp.ftpSecure });

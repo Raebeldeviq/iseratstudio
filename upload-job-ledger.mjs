@@ -60,6 +60,7 @@ function jobRecord(input, current, status, now) {
     plotId: text(input.plotId || current?.plotId, 200),
     plotUploadDayKey: text(input.plotUploadDayKey || current?.plotUploadDayKey, 260),
     jobType: text(input.jobType || "immoprofessional-upload", 100),
+    uploadOrigin: text(input.uploadOrigin || current?.uploadOrigin, 100),
     status,
     createdAt: current?.createdAt || now,
     updatedAt: now,
