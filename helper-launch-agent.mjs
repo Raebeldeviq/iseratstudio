@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
 export const HELPER_LAUNCH_AGENT_LABEL = "com.fabianpascal.inseratstudio.helper";
+export const UI_LAUNCH_AGENT_LABEL = "com.fabianpascal.inseratstudio.ui";
 
 function xml(value) {
   return String(value)
@@ -18,6 +19,10 @@ export function helperLaunchAgentPath(homeDirectory = homedir()) {
   return join(homeDirectory, "Library", "LaunchAgents", `${HELPER_LAUNCH_AGENT_LABEL}.plist`);
 }
 
+export function uiLaunchAgentPath(homeDirectory = homedir()) {
+  return join(homeDirectory, "Library", "LaunchAgents", `${UI_LAUNCH_AGENT_LABEL}.plist`);
+}
+
 export function helperRuntimeWorkingDirectory(homeDirectory = homedir()) {
   return join(
     homeDirectory,
@@ -28,14 +33,16 @@ export function helperRuntimeWorkingDirectory(homeDirectory = homedir()) {
   );
 }
 
-export function buildHelperLaunchAgentPlist(options) {
+function buildLaunchAgentPlist(options) {
   const homeDirectory = resolve(String(options?.homeDirectory || homedir()));
   const projectRoot = resolve(String(options?.projectRoot || ""));
   const nodePath = resolve(String(options?.nodePath || ""));
   const workingDirectory = resolve(String(options?.workingDirectory || helperRuntimeWorkingDirectory(homeDirectory)));
-  const standardOutPath = resolve(String(options?.standardOutPath || join(homeDirectory, "Library", "Logs", "Fabian-Pascal Inseratestudio", "helper.out.log")));
-  const standardErrorPath = resolve(String(options?.standardErrorPath || join(homeDirectory, "Library", "Logs", "Fabian-Pascal Inseratestudio", "helper.err.log")));
-  if (![projectRoot, nodePath, workingDirectory, standardOutPath, standardErrorPath].every(isAbsolute)) {
+  const entrypoint = resolve(String(options?.entrypoint || ""));
+  const label = String(options?.label || "").trim();
+  const standardOutPath = resolve(String(options?.standardOutPath || ""));
+  const standardErrorPath = resolve(String(options?.standardErrorPath || ""));
+  if (!label || ![projectRoot, nodePath, workingDirectory, entrypoint, standardOutPath, standardErrorPath].every(isAbsolute)) {
     throw new Error("LaunchAgent-Pfade müssen absolut sein.");
   }
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -43,11 +50,11 @@ export function buildHelperLaunchAgentPlist(options) {
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>${xml(HELPER_LAUNCH_AGENT_LABEL)}</string>
+  <string>${xml(label)}</string>
   <key>ProgramArguments</key>
   <array>
     <string>${xml(nodePath)}</string>
-    <string>${xml(join(projectRoot, "local-helper-launcher.mjs"))}</string>
+    <string>${xml(entrypoint)}</string>
   </array>
   <key>WorkingDirectory</key>
   <string>${xml(workingDirectory)}</string>
@@ -70,6 +77,40 @@ export function buildHelperLaunchAgentPlist(options) {
 `;
 }
 
+export function buildHelperLaunchAgentPlist(options) {
+  const homeDirectory = resolve(String(options?.homeDirectory || homedir()));
+  const projectRoot = resolve(String(options?.projectRoot || ""));
+  return buildLaunchAgentPlist({
+    ...options,
+    homeDirectory,
+    projectRoot,
+    label: HELPER_LAUNCH_AGENT_LABEL,
+    entrypoint: join(projectRoot, "local-helper-launcher.mjs"),
+    standardOutPath: options?.standardOutPath || join(homeDirectory, "Library", "Logs", "Fabian-Pascal Inseratestudio", "helper.out.log"),
+    standardErrorPath: options?.standardErrorPath || join(homeDirectory, "Library", "Logs", "Fabian-Pascal Inseratestudio", "helper.err.log"),
+  });
+}
+
+export function buildUiLaunchAgentPlist(options) {
+  const homeDirectory = resolve(String(options?.homeDirectory || homedir()));
+  const projectRoot = resolve(String(options?.projectRoot || ""));
+  return buildLaunchAgentPlist({
+    ...options,
+    homeDirectory,
+    projectRoot,
+    label: UI_LAUNCH_AGENT_LABEL,
+    entrypoint: join(projectRoot, "production-server.mjs"),
+    standardOutPath: options?.standardOutPath || join(homeDirectory, "Library", "Logs", "Fabian-Pascal Inseratestudio", "ui.out.log"),
+    standardErrorPath: options?.standardErrorPath || join(homeDirectory, "Library", "Logs", "Fabian-Pascal Inseratestudio", "ui.err.log"),
+  });
+}
+
+async function writeLaunchAgent(path, plist) {
+  const temporaryPath = `${path}.${process.pid}.tmp`;
+  await writeFile(temporaryPath, plist, { encoding: "utf8", mode: 0o600 });
+  await rename(temporaryPath, path);
+}
+
 export async function installHelperLaunchAgent(options = {}) {
   const homeDirectory = resolve(String(options.homeDirectory || homedir()));
   const projectRoot = resolve(String(options.projectRoot || process.cwd()));
@@ -78,8 +119,10 @@ export async function installHelperLaunchAgent(options = {}) {
   const workingDirectory = resolve(String(options.workingDirectory || helperRuntimeWorkingDirectory(homeDirectory)));
   const logsDirectory = join(homeDirectory, "Library", "Logs", "Fabian-Pascal Inseratestudio");
   const destination = resolve(String(options.destination || helperLaunchAgentPath(homeDirectory)));
+  const uiDestination = resolve(String(options.uiDestination || uiLaunchAgentPath(homeDirectory)));
   await access(join(projectRoot, "local-helper-launcher.mjs"), constants.R_OK);
   await access(join(projectRoot, "local-upload-server.mjs"), constants.R_OK);
+  await access(join(projectRoot, "production-server.mjs"), constants.R_OK);
   await access(nodePath, constants.X_OK);
   await mkdir(workingDirectory, { recursive: true });
   await mkdir(logsDirectory, { recursive: true });
@@ -90,14 +133,20 @@ export async function installHelperLaunchAgent(options = {}) {
     nodePath,
     workingDirectory,
   });
-  const temporaryPath = `${destination}.${process.pid}.tmp`;
-  await writeFile(temporaryPath, plist, { encoding: "utf8", mode: 0o600 });
-  await rename(temporaryPath, destination);
+  const uiPlist = buildUiLaunchAgentPlist({
+    homeDirectory,
+    projectRoot,
+    nodePath,
+    workingDirectory,
+  });
+  await writeLaunchAgent(destination, plist);
+  await writeLaunchAgent(uiDestination, uiPlist);
   return {
     label: HELPER_LAUNCH_AGENT_LABEL,
     path: destination,
     projectRoot,
     workingDirectory,
     nodePath,
+    ui: { label: UI_LAUNCH_AGENT_LABEL, path: uiDestination },
   };
 }

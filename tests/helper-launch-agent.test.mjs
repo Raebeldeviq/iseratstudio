@@ -3,7 +3,9 @@ import test from "node:test";
 
 import {
   buildHelperLaunchAgentPlist,
+  buildUiLaunchAgentPlist,
   HELPER_LAUNCH_AGENT_LABEL,
+  UI_LAUNCH_AGENT_LABEL,
 } from "../helper-launch-agent.mjs";
 
 test("user LaunchAgent is Aqua-bound, single-instance and contains no credentials", () => {
@@ -26,5 +28,17 @@ test("user LaunchAgent is Aqua-bound, single-instance and contains no credential
     plist,
     /<key>WorkingDirectory<\/key>\s*<string>\/Users\/example\/Fabian &amp; Pascal\/Inseratestudio<\/string>/u,
   );
+  assert.doesNotMatch(plist, /FPI_SESSION_TOKEN|password|passwort|credential|ftp|secret/iu);
+});
+
+test("the UI LaunchAgent uses the same release root and never contains credentials", () => {
+  const plist = buildUiLaunchAgentPlist({
+    homeDirectory: "/Users/example",
+    projectRoot: "/Users/example/Fabian & Pascal/Inseratestudio",
+    nodePath: "/Users/example/.local/bin/node",
+  });
+  assert.match(plist, new RegExp(UI_LAUNCH_AGENT_LABEL, "u"));
+  assert.match(plist, /production-server\.mjs/u);
+  assert.match(plist, /Fabian &amp; Pascal/u);
   assert.doesNotMatch(plist, /FPI_SESSION_TOKEN|password|passwort|credential|ftp|secret/iu);
 });

@@ -53,6 +53,8 @@ Der reale, rein lokale Dry-Run gegen den aktuellen Katalog und Upload-Job-Ledger
 
 Die Ausnahme liegt am eindeutig manuellen HTTP-Endpunkt statt an einem globalen Schalter oder einem vom Browser frei wählbaren Flag. Damit bleibt der automatische Pfad fail-closed. Die Auswahl schützt sich zusätzlich über den persistenten Job-Ledger statt über kurzlebige Browserzustände.
 
+Der lokale Runtime-Installer schreibt Helper- und UI-LaunchAgent stets mit demselben Release-Pfad. Damit kann nach einer Runtime-Aktualisierung keine Oberfläche gegen einen älteren Helper laufen.
+
 ## Hürden und Risiken
 
 Die erfolgreiche FTPS-Übertragung ist noch keine Importbestätigung. Die zehn geschützten Einträge bleiben daher `transferred_pending_import`; sie werden nicht zu `published` hochgestuft. Die manuelle Ausnahme lockert ausschließlich das pro Grundstück tägliche Aufnahme-Limit. Sie deaktiviert weder Job-Idempotenz noch Katalogprüfung, Rotation, Scheduler, Portalexport oder Löschmechanismen.
