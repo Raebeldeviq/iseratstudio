@@ -1,5 +1,44 @@
 # Änderungsprotokoll
 
+## Unreleased · Globale Bildrollenübernahme – 22. September 2026
+
+### Report
+
+- Die Bildkarten **Emotionaler Catch**, **Auszeichnungen**,
+  **Vertrauensbild** und **QR-Abschluss** erhalten im Haustyp-Editor eine
+  bestätigte Aktion „Auf alle Haustypen anwenden“.
+- Die Übernahme ersetzt vorhandene Karten derselben Rolle vollständig,
+  ergänzt fehlende Karten und entfernt nur Dubletten dieser einen Rolle.
+  Andere Bildkarten bleiben unverändert.
+- Die komplette fachliche Bildkarte einschließlich Asset-ID/-Referenz,
+  Beschriftung, MIME-Typ und Metadaten wird in allen vorhandenen Haustypen
+  referenziert. Die transaktionale Katalogsicherung speichert das gemeinsame
+  Asset daher nur einmal.
+- Vor dem Erfolgshinweis werden Browser- und – sofern verfügbar – die
+  transaktionale macOS-Katalogsicherung aktualisiert. Fehler belassen die
+  sichtbare Katalogansicht unverändert und werden verständlich angezeigt.
+
+### Begründung
+
+Die globale Regel ist als geschlossene, explizite Rollenliste umgesetzt. So
+bleiben haustypspezifische Rollen wie Büro, Außenansicht und Grundrisse
+unberührt. Die bestehende kanonische Rollensortierung bleibt zuständig für die
+Positionen: Sie verhindert Positionskonflikte, ohne fremde Bildkarten zu
+löschen, und erhält die Innenraumreihenfolge.
+
+### Hürden und Risiken
+
+- Die Position einer Karte ist im Katalog kein separates Feld, sondern die
+  geordnete Stelle im Bildarray. Die Übernahme verwendet deshalb bewusst die
+  vorhandene `orderHouseImages`-Logik statt eine konkurrierende Positionierung
+  einzuführen.
+- Die Dualspeicherung besteht aus einer Browserkopie und einer atomaren
+  macOS-Katalogsicherung. Der Gerätekatalog wird bei erreichbarem Helfer zuerst
+  transaktional bestätigt; bei einem Fehler gibt es keinen Erfolgshinweis.
+- Neue Tests decken die Rollenbegrenzung, Ersetzen und Ergänzen, den
+  Dublettenschutz, die Reihenfolge, die Sperre normaler Rollen und die
+  persistente Einmalablage des gemeinsamen Assets ab.
+
 ## Unreleased · Lokale Installation – 15. September 2026
 
 - Projekt, Abhängigkeiten und Sicherungsnachweise außerhalb von iCloud kopiert; alte Arbeitsordner nicht gelöscht oder übernommen.

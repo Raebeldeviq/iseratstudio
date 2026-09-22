@@ -482,6 +482,13 @@ input:focus, textarea:focus, select:focus { border-color: #91bc47; box-shadow: 0
 .image-card.role-cover, .image-card.role-promotion { border-color: #9cbd6f; background: #f5faee; }
 .image-card[class*="role-floorplan"] { border-color: #b9cddd; background: #f3f7fa; }
 .image-card .text-danger { align-self: flex-start; padding: 0; }
+.image-global-apply { width: 100%; padding: 0.58rem 0.65rem; font-size: 0.71rem; }
+.image-propagation-backdrop { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 1rem; background: rgba(20, 37, 32, 0.58); backdrop-filter: blur(4px); }
+.image-propagation-dialog { width: min(520px, 100%); box-shadow: 0 24px 90px rgba(12, 30, 24, 0.28); }
+.image-propagation-dialog h2 { margin: 0; font-size: clamp(1.45rem, 3vw, 2rem); letter-spacing: -0.04em; }
+.image-propagation-dialog p { margin: 0.85rem 0 0; color: var(--ink); font-size: 0.88rem; line-height: 1.58; }
+.image-propagation-dialog small { display: block; margin-top: 0.7rem; color: var(--muted); font-size: 0.72rem; line-height: 1.5; }
+.image-propagation-actions { justify-content: flex-end; margin-top: 1.35rem; }
 .sequence-status { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin: 0 0 1rem; padding: 0.85rem 1rem; border: 1px solid; border-radius: 12px; }
 .sequence-status > div { display: flex; flex-direction: column; gap: 0.22rem; }
 .sequence-status b { font-size: 0.78rem; }

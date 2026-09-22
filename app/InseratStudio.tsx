@@ -16,6 +16,10 @@ import {
   parseHouseVariant,
   TITLE_IMAGE_CAPTIONS,
 } from "../image-sequence.mjs";
+import {
+  isGlobalImageRole,
+  propagateGlobalImageRole,
+} from "../global-image-role-propagation.mjs";
 import { housePriceCatalogEntries, resolveHousePrice } from "../house-price-catalog.mjs";
 import { applyConfirmedHouseModelDetails } from "../house-template-presets.mjs";
 import {
@@ -174,6 +178,12 @@ type MediaLibraryItem = {
 type MediaLibraryGroup = { name: string; count: number };
 
 type PromotionOverride = { imageId?: string; listingId?: string };
+type GlobalImageRole = "emotion" | "awards" | "trust" | "qr";
+type GlobalImagePropagationTarget = {
+  sourceHouseId: string;
+  sourceImageId: string;
+  role: GlobalImageRole;
+};
 
 type BatchUploadProgress = {
   running: boolean;
@@ -797,6 +807,8 @@ export default function InseratStudio() {
   const [credentialsReady, setCredentialsReady] = useState(false);
   const [credentialSaveLabel, setCredentialSaveLabel] = useState("Verschlüsselter Zugangstresor wird vorbereitet …");
   const [savingHouses, setSavingHouses] = useState(false);
+  const [globalImagePropagationTarget, setGlobalImagePropagationTarget] = useState<GlobalImagePropagationTarget | null>(null);
+  const [applyingGlobalImageRole, setApplyingGlobalImageRole] = useState(false);
   const [savingCredentials, setSavingCredentials] = useState(false);
   const [captioningImageIds, setCaptioningImageIds] = useState<string[]>([]);
   const [replacingAllImageCaptions, setReplacingAllImageCaptions] = useState(false);
@@ -1807,6 +1819,44 @@ export default function InseratStudio() {
         };
       })),
     });
+  };
+
+  const requestGlobalImagePropagation = (image: HouseImage) => {
+    if (!activeHouse) return;
+    const role = inferImageRole(image) as ImageRole;
+    if (!isGlobalImageRole(role)) return;
+    setGlobalImagePropagationTarget({
+      sourceHouseId: activeHouse.id,
+      sourceImageId: image.id,
+      role: role as GlobalImageRole,
+    });
+  };
+
+  const applyGlobalImagePropagation = async () => {
+    if (!globalImagePropagationTarget || applyingGlobalImageRole) return;
+
+    setApplyingGlobalImageRole(true);
+    try {
+      const propagation = propagateGlobalImageRole(state.houses, globalImagePropagationTarget);
+      const nextState: StudioState = { ...state, houses: propagation.houses as HouseTemplate[] };
+      const savedAt = new Date().toISOString();
+
+      // The macOS catalog commit is transactional and performed before the
+      // browser mirror is updated. A failed device write therefore leaves the
+      // currently displayed catalog untouched.
+      if (helperOnline) await queueDeviceCatalogSnapshot(nextState, savedAt);
+      await saveStudioState(nextState, savedAt);
+
+      setState(nextState);
+      setSaveLabel(helperOnline ? "Browser + macOS-Sicherung aktuell" : "Lokal im Browser gespeichert");
+      setGlobalImagePropagationTarget(null);
+      setNotice(`„${IMAGE_ROLE_LABELS[propagation.role as ImageRole]}“ wurde auf ${propagation.targetHouseCount} Haustypen angewendet und gespeichert.`);
+    } catch (error) {
+      setSaveLabel("Speichern fehlgeschlagen");
+      setNotice(`Die globale Bildübernahme wurde nicht angewendet. ${error instanceof Error ? error.message : "Der Katalog konnte nicht gespeichert werden."}`);
+    } finally {
+      setApplyingGlobalImageRole(false);
+    }
   };
 
   const moveImage = (id: string, targetIndex: number) => {
@@ -3630,6 +3680,11 @@ export default function InseratStudio() {
                           ))}
                         </select>
                       </label>
+                      {isGlobalImageRole(role) ? (
+                        <button className="secondary image-global-apply" type="button" onClick={() => requestGlobalImagePropagation(image)}>
+                          Auf alle Haustypen anwenden
+                        </button>
+                      ) : null}
                       <button className="text-danger" onClick={() => updateHouse({ images: activeHouse.images.filter((item) => item.id !== image.id) })}>Entfernen</button>
                     </article>
                     );
@@ -3971,6 +4026,21 @@ export default function InseratStudio() {
             <div className="button-row"><button className="secondary" onClick={exportCatalog}>Sicherung herunterladen</button><label className="secondary file-label">Sicherung einlesen<input type="file" accept="application/json" onChange={importCatalog} /></label></div>
           </div>
         </section>
+      ) : null}
+
+      {globalImagePropagationTarget ? (
+        <div className="image-propagation-backdrop" role="presentation">
+          <section className="content-card image-propagation-dialog" role="dialog" aria-modal="true" aria-labelledby="global-image-propagation-title">
+            <span className="eyebrow">Globale Bildübernahme</span>
+            <h2 id="global-image-propagation-title">Bildkarte auf alle Haustypen anwenden?</h2>
+            <p>Dieses Bild wird für die Kategorie „{IMAGE_ROLE_LABELS[globalImagePropagationTarget.role]}“ bei allen {state.houses.length} Haustypen übernommen. Bereits vorhandene Inhalte dieser Kategorie werden ersetzt.</p>
+            <small>Andere Bildkarten bleiben erhalten. Die feste Bildreihenfolge wird mit der bestehenden Sortierlogik gesichert.</small>
+            <div className="button-row image-propagation-actions">
+              <button className="secondary" type="button" disabled={applyingGlobalImageRole} onClick={() => setGlobalImagePropagationTarget(null)}>Abbrechen</button>
+              <button className="primary" type="button" disabled={applyingGlobalImageRole} onClick={applyGlobalImagePropagation}>{applyingGlobalImageRole ? "Wird gespeichert …" : "Auf alle anwenden"}</button>
+            </div>
+          </section>
+        </div>
       ) : null}
     </main>
   );
