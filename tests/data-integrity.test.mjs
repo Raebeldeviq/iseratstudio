@@ -115,3 +115,27 @@ test("schema four removes legacy soft-delete ghosts but preserves Excel-deactiva
   assert.equal(cleaned.report.actions.removedLegacyArchivedPlots, 1);
   assert.equal(cleaned.report.actions.removedLegacyArchivedProjects, 1);
 });
+
+test("cleanup compares shared image payloads without constructing an oversized string", () => {
+  const sharedDataUrl = `data:image/webp;base64,${"A".repeat(7 * 1024 * 1024)}`;
+  const state = {
+    version: 1,
+    dataSchemaVersion: STUDIO_DATA_SCHEMA_VERSION,
+    provider: {},
+    plots: [],
+    projects: [],
+    promotionImages: [],
+    promotionUsage: [],
+    uploadHistory: [],
+    houses: Array.from({ length: 80 }, (_, index) => ({
+      id: `house-${index + 1}`,
+      name: `Haus ${index + 1}`,
+      images: [{ id: "shared-emotion", dataUrl: sharedDataUrl, role: "emotion" }],
+    })),
+  };
+
+  const cleaned = cleanupStudioState(state, { apply: true, now: "2026-09-23T06:00:00.000Z" });
+
+  assert.equal(cleaned.state.houses[0].images[0].dataUrl, sharedDataUrl);
+  assert.equal(cleaned.state.houses.at(-1).images[0].dataUrl, sharedDataUrl);
+});

@@ -26,7 +26,14 @@ function normalizedText(value) {
 }
 
 function exactKey(value) {
-  return JSON.stringify(value);
+  // Image binaries are kept in the device catalog and represented in the UI
+  // as data URLs. They are immutable payloads for integrity purposes: no
+  // cleanup rule changes their bytes. Excluding them avoids constructing a
+  // multi-hundred-megabyte comparison string when one shared image card is
+  // intentionally referenced by every house template.
+  return JSON.stringify(value, (key, candidate) => (
+    key === "dataUrl" && typeof candidate === "string" ? "[image-data]" : candidate
+  ));
 }
 
 function duplicateGroups(values, keyFor) {

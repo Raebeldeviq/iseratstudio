@@ -38,6 +38,10 @@ löschen, und erhält die Innenraumreihenfolge.
 - Neue Tests decken die Rollenbegrenzung, Ersetzen und Ergänzen, den
   Dublettenschutz, die Reihenfolge, die Sperre normaler Rollen und die
   persistente Einmalablage des gemeinsamen Assets ab.
+- Die Integritätsprüfung lässt unveränderliche `dataUrl`-Nutzdaten beim
+  Zustandsvergleich aus. Damit wird beim Laden eines Katalogs mit global
+  referenzierten Bildkarten kein mehrere hundert Megabyte großer Vergleichsstring
+  aufgebaut; die Bilddaten selbst bleiben unverändert erhalten.
 
 ## Unreleased · Lokale Installation – 15. September 2026
 
