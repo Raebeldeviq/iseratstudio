@@ -88,6 +88,7 @@ Es wurden keine aktiven Inserate, macOS-Katalogdaten, IndexedDB-Daten, Pending-S
 
 ## Noch offen für Phase 2B+
 
+- Read-only-Bestandsklassifizierung ist über `phase2b-claim-scan.mjs` und `phase2b-claim-scan-cli.mjs` vorbereitet. Sie verwendet dieselbe zentrale Claim-Policy und besitzt keinen Speicher-, Upload- oder Textgenerierungspfad.
 - Batch-Bereinigung der 44 aktiven Inserate und historischer Snapshots.
 - Weitergehende Nachweisreferenzen/Dokumentenverwaltung für QNG und DGNB sowie vollständige Evidenzmodelle für PV, Speicher, Lüftung, U-Werte und weitere technische Merkmale.
 - Bewusste Freigabe konkret spezifizierter allgemeiner Umweltclaims mit Darstellung auf demselben Medium.

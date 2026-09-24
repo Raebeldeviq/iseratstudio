@@ -14,7 +14,7 @@ import {
   technicalFactSentences,
   validateListingClaims,
 } from "../listing-claim-policy.mjs";
-import { FIXED_DESCRIPTION_CTA, FIXED_EQUIPMENT_TEXT, FIXED_OTHER_TEXT } from "../listing-copy.mjs";
+import { FIXED_DESCRIPTION_CTA, FIXED_OTHER_TEXT } from "../listing-copy.mjs";
 import { completeListingTexts, generateListingTexts } from "../app/lib/text-generator.ts";
 
 const technicalFact = (key, value, overrides = {}) => ({

@@ -25,19 +25,6 @@ function pick<T>(items: T[], seed: string, offset = 0): T {
   return items[(hash(`${seed}:${offset}`) + offset) % items.length];
 }
 
-function sentence(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) return "";
-  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
-}
-
-function withoutConfiguredStreet(value: string, street: string): string {
-  const configuredStreet = street.trim();
-  if (!configuredStreet) return value;
-  const escaped = configuredStreet.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return value.replace(new RegExp(escaped, "giu"), "").replace(/\s{2,}/g, " ").trim();
-}
-
 function joinParagraphs(values: Array<string | false | null | undefined>): string {
   return values.filter(Boolean).join("\n\n");
 }

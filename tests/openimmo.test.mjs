@@ -5,8 +5,6 @@ import { buildImportPackage, buildOpenImmoXml, validateImportPackage } from "../
 import { APP_VERSION } from "../app/lib/app-version.mjs";
 import {
   FIXED_ANNOTATION_TEXT,
-  FIXED_EQUIPMENT_TEXT,
-  FIXED_OTHER_TEXT,
   FACTUAL_BUILDABILITY_NOTE,
   FIXED_PROVISION_TEXT,
   FIXED_RECOMMENDATION_TEXT,
