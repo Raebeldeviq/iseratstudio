@@ -93,6 +93,7 @@ export function buildHouseTemplatePresets(mediaItems, {
 
     return {
       id: `preset_house_${definition.key.replaceAll("-", "_")}`,
+      seriesId: "livinghaus",
       name: definition.name,
       houseType: definition.houseType || priceMatch?.houseType || "Einfamilienhaus",
       livingArea: definition.livingArea,

@@ -38,7 +38,7 @@ const validTexts = enforceListingCopy({
   equipment: "Wird ersetzt.",
   location: longText("Das Grundstück liegt in Schulzendorf und bietet einen stimmigen Rahmen für das geplante Zuhause; alle weiteren Details werden anhand bestätigter Standortdaten beurteilt.", 550),
   other: "Wird ersetzt.",
-}, { house: testHouse, project: testProject });
+}, { house: testHouse, project: testProject, generated: true });
 
 test("removes the exact house number before building the AI source data", () => {
   const source = buildSourceData({
@@ -55,6 +55,21 @@ test("removes the exact house number before building the AI source data", () => 
   assert.doesNotMatch(JSON.stringify(sourceWithoutVolatileId), /Bergstraße|15732|27a/);
 });
 
+test("supplies only released series facts and projected energy values to the AI", () => {
+  const source = buildSourceData({
+    project: { city: "Schulzendorf" },
+    house: { name: "Concept 150", energyDemand: 18, energyClass: "A++" },
+  });
+  assert.ok(source.house.releasedListingFacts.some((fact) => fact.key === "certification" && fact.sourceKind === "verified_series"));
+  assert.ok(source.house.releasedListingFacts.some((fact) => fact.key === "sustainability_label" && fact.sourceKind === "verified_series"));
+  assert.ok(source.house.releasedListingFacts.some((fact) => (
+    fact.key === "energy_demand"
+    && fact.status === "planned"
+    && fact.evidenceKind === "projected_house_value"
+  )));
+  assert.equal(source.house.releasedListingFacts.some((fact) => fact.key === "energy_class"), false);
+});
+
 test("uses the Responses API quality settings and a strict text schema", () => {
   const request = createOpenAiRequest({ model: "gpt-5.6-sol", project: {}, house: {} });
   assert.equal(request.model, "gpt-5.6-sol");
@@ -64,7 +79,8 @@ test("uses the Responses API quality settings and a strict text schema", () => {
   assert.equal(request.text.format.type, "json_schema");
   assert.deepEqual(request.text.format.schema.required, ["description", "location"]);
   assert.deepEqual(Object.keys(request.text.format.schema.properties), ["description", "location"]);
-  assert.match(request.input[0].content[0].text, /gerundeter Wohnfläche, Zimmerzahl/);
+  assert.match(request.input[0].content[0].text, /gerundeter Wohnfläche und Zimmerzahl/);
+  assert.match(request.input[0].content[0].text, /keine allgemeinen Umwelt-, Klima-, Nachhaltigkeits- oder Energieversprechen/);
 });
 
 test("uses GPT-5.6 Luna as the economical default", () => {
@@ -102,11 +118,10 @@ test("accepts complete texts and rejects short or Markdown-formatted output", ()
   assert.ok(errors.some((value) => value.includes("Markdown")));
 });
 
-test("requires the checklist headline with place, rounded area and rooms", () => {
+test("requires the factual headline with place, rounded area and rooms", () => {
   const title = buildListingHeadline(testHouse, testProject);
   assert.match(title, /in Schulzendorf:/);
-  assert.match(title, /113 m², 5 Zimmer,/);
-  assert.match(title, /!$/);
+  assert.match(title, /113 m² Wohnfläche und 5 Zimmer$/);
   assert.deepEqual(validateListingTexts(validTexts, testHouse, testProject), []);
   const errors = validateListingTexts({ ...validTexts, title: "Dein Zuhause in Schulzendorf" }, testHouse, testProject);
   assert.ok(errors.some((value) => value.includes("Wohnfläche")));

@@ -13,6 +13,46 @@ import {
   FIXED_TERMS_TEXT,
 } from "../listing-copy.mjs";
 
+function energyScenarioInput({ energyDemand = 18, listingFacts = [] } = {}) {
+  return {
+    project: {
+      id: "energy-project", name: "Energie-Test", street: "Teststraße", houseNumber: "1", zip: "15732", city: "Schulzendorf", district: "",
+      plotArea: 600, plotPrice: 0, additionalCosts: 0, locationFacts: "", transportFacts: "", familyFacts: "", natureFacts: "", selectedHouseIds: ["energy-house"], listings: [], createdAt: "2026-09-23T00:00:00.000Z",
+    },
+    listings: [{
+      id: "energy-listing", externalId: "30460-199", templateId: "energy-house", templateName: "Energie-Testhaus", price: 500000, version: 1, listingFacts,
+      texts: { title: "Energie-Testhaus", description: "Sachliche Objektbeschreibung.", equipment: "Sachliche Ausstattung.", location: "Sachliche Lage.", other: "Sachliche Hinweise." },
+    }],
+    houses: [{
+      id: "energy-house", name: "Energie-Testhaus", houseType: "Einfamilienhaus", livingArea: 150, rooms: 5, bedrooms: 3, bathrooms: 2, floors: 2,
+      housePrice: 400000, constructionYear: 2027, energyDemand, energyClass: "A++", heatingType: "", energySource: "", architecture: "", equipmentHighlights: "", useStandardPackage: true,
+      images: Array.from({ length: 4 }, (_, index) => ({
+        id: `energy-image-${index + 1}`, name: `energie-${index + 1}.jpg`, mimeType: "image/jpeg", dataUrl: "data:image/jpeg;base64,/9j/2Q==", caption: `Energie Bild ${index + 1}`, isFloorplan: false,
+      })),
+    }],
+    provider: { providerNumber: "30435", company: "Testanbieter", firstName: "Max", lastName: "Mustermann", email: "test@example.com", phone: "0000" },
+  };
+}
+
+test("exports planned energy values as planning data and prioritizes a later energy certificate", () => {
+  const projectedXml = buildOpenImmoXml(energyScenarioInput());
+  assert.doesNotMatch(projectedXml, /<energiepass>/);
+  assert.match(projectedXml, /feldname="Projektierter Endenergiebedarf"><!\[CDATA\[18 kWh\/\(m²·a\) – Planungswert, kein individueller Energieausweis\]\]><\/user_defined_simplefield>/u);
+  assert.doesNotMatch(projectedXml, /Projektierte Energieeffizienzklasse/);
+
+  const certificateFacts = [
+    { key: "energy_demand", value: "42", source: "project", scope: "house", status: "verified", verified: true, evidenceKind: "energy_certificate", evidenceReference: "Energieausweis EA-2026-17" },
+    { key: "energy_class", value: "A+", source: "project", scope: "house", status: "verified", verified: true, evidenceKind: "energy_certificate", evidenceReference: "Energieausweis EA-2026-17" },
+  ];
+  const certificateXml = buildOpenImmoXml(energyScenarioInput({ listingFacts: certificateFacts }));
+  assert.match(certificateXml, /<energiepass>[\s\S]*<endenergiebedarf>42<\/endenergiebedarf>[\s\S]*<wertklasse>A\+<\/wertklasse>[\s\S]*<\/energiepass>/u);
+  assert.match(certificateXml, /feldname="Energieklasse gemäß Energieausweis"><!\[CDATA\[A\+\]\]><\/user_defined_simplefield>/u);
+  assert.doesNotMatch(certificateXml, /Projektierter Endenergiebedarf/);
+
+  const unknownXml = buildOpenImmoXml(energyScenarioInput({ energyDemand: 0 }));
+  assert.doesNotMatch(unknownXml, /<energiepass>|Projektierter Endenergiebedarf|Projektierte Energieeffizienzklasse/);
+});
+
 test("exports listings with the OpenImmo CHANGE upsert action", async () => {
   const input = {
     project: {
@@ -103,19 +143,19 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
   assert.match(xml, /<kueche ebk="true" offen="true" \/>/);
   assert.match(xml, /<user_defined_simplefield feldname="Umgebung"><!\[CDATA\[Bus, Einkaufsmöglichkeit\]\]><\/user_defined_simplefield>/);
   assert.match(xml, /<ausstatt_kategorie WERTIGKEIT="GEHOBEN" \/>/);
-  assert.match(xml, /<heizungsart fussboden="true" \/>/);
-  assert.match(xml, /<befeuerung elektro="true" luftwp="true" \/>/);
+  assert.match(xml, /<heizungsart fussboden="false" \/>/);
+  assert.match(xml, /<befeuerung elektro="false" luftwp="false" \/>/);
   assert.match(xml, /<gartennutzung>true<\/gartennutzung>/);
-  assert.match(xml, /<energietyp kfw40="true" kfw55="true" \/>/);
+  assert.match(xml, /<energietyp kfw40="false" kfw55="false" \/>/);
   assert.match(xml, /<dachboden>true<\/dachboden>/);
   assert.match(xml, /<gaestewc>true<\/gaestewc>/);
   assert.match(xml, /<zustand zustand_art="PROJEKTIERT" \/>/);
-  assert.match(xml, /<wertklasse>A\+<\/wertklasse>/);
+  assert.doesNotMatch(xml, /<energiepass>|<wertklasse>/);
   assert.match(xml, /<provisionspflichtig>false<\/provisionspflichtig>/);
-  assert.match(xml, /<user_defined_simplefield feldname="Energieklasse"><!\[CDATA\[A\+\+\]\]><\/user_defined_simplefield>/);
+  assert.doesNotMatch(xml, /feldname="Energieklasse"/);
   assert.ok(xml.includes(FIXED_PROVISION_TEXT));
-  assert.ok(xml.includes(FIXED_EQUIPMENT_TEXT));
-  assert.ok(xml.includes(FIXED_OTHER_TEXT));
+  assert.ok(xml.includes("Ausstattung"));
+  assert.ok(xml.includes("Sonstiges"));
   assert.ok(xml.includes(FACTUAL_BUILDABILITY_NOTE));
   assert.ok(xml.includes(FIXED_ANNOTATION_TEXT));
   assert.ok(xml.includes(FIXED_TERMS_TEXT));
@@ -266,14 +306,14 @@ test("does not overwrite explicit projecting values during export", () => {
   assert.match(xml, /<gartennutzung>false<\/gartennutzung>/);
   assert.match(xml, /<energietyp kfw40="false" kfw55="false" \/>/);
   assert.match(xml, /<zustand zustand_art="ERSTBEZUG" \/>/);
-  assert.match(xml, /<wertklasse>C<\/wertklasse>/);
+  assert.doesNotMatch(xml, /<wertklasse>/);
   assert.match(xml, /<provisionspflichtig>true<\/provisionspflichtig>/);
   assert.match(xml, /<bad dusche="false" wanne="false" fenster="false" \/>/);
   assert.match(xml, /<kueche ebk="false" offen="false" \/>/);
   assert.match(xml, /<dachboden>false<\/dachboden>/);
   assert.match(xml, /<gaestewc>false<\/gaestewc>/);
   assert.match(xml, /<user_defined_simplefield feldname="Umgebung"><!\[CDATA\[Einkaufsmöglichkeit\]\]><\/user_defined_simplefield>/);
-  assert.match(xml, /<user_defined_simplefield feldname="Energieklasse"><!\[CDATA\[B\]\]><\/user_defined_simplefield>/);
+  assert.doesNotMatch(xml, /feldname="Energieklasse"/);
 });
 
 test("rejects malformed project and unsupported image data before packaging", () => {
@@ -285,6 +325,34 @@ test("rejects malformed project and unsupported image data before packaging", ()
   });
   assert.ok(errors.length >= 7);
   assert.match(errors.join(" "), /Postleitzahl|Grundstücksfläche|Anbieter-E-Mail/);
+});
+
+test("blocks XML and ZIP creation when a manual legacy text contains an unverified environmental claim", async () => {
+  const input = {
+    project: {
+      id: "claim-block-project", name: "Claim block", street: "Teststraße", houseNumber: "1", zip: "15732", city: "Schulzendorf", district: "",
+      plotArea: 600, plotPrice: 0, additionalCosts: 0, locationFacts: "", transportFacts: "", familyFacts: "", natureFacts: "", selectedHouseIds: ["claim-block-house"], listings: [], createdAt: "2026-09-23T00:00:00.000Z",
+    },
+    listings: [{
+      id: "claim-block-listing", externalId: "30460-104", templateId: "claim-block-house", templateName: "Claim block house", price: 500000, version: 1,
+      texts: { title: "Nachhaltiges Familienhaus", description: "Sachliche Beschreibung", equipment: "Sachliche Ausstattung", location: "Sachliche Lage", other: "Sachlicher Hinweis" },
+    }],
+    houses: [{
+      id: "claim-block-house", name: "Claim block house", houseType: "Einfamilienhaus", livingArea: 150, rooms: 5, bedrooms: 3, bathrooms: 2, floors: 2,
+      housePrice: 400000, constructionYear: 2027, energyDemand: 0, energyClass: "", heatingType: "", energySource: "", architecture: "", equipmentHighlights: "", useStandardPackage: false,
+      images: Array.from({ length: 4 }, (_, index) => ({ id: `claim-image-${index}`, name: `claim-${index}.jpg`, mimeType: "image/jpeg", dataUrl: "data:image/jpeg;base64,/9j/2Q==", caption: `Bild ${index}`, isFloorplan: false })),
+    }],
+    provider: { providerNumber: "30435", company: "Test GmbH", firstName: "Max", lastName: "Mustermann", email: "test@example.com", phone: "0000" },
+  };
+  assert.throws(
+    () => buildOpenImmoXml(input),
+    (error) => error.code === "LISTING_CLAIM_VALIDATION_FAILED"
+      && /Export blockiert.*GENERIC_ENVIRONMENTAL_CLAIM/iu.test(error.message),
+  );
+  await assert.rejects(
+    buildImportPackage(input),
+    (error) => error.code === "LISTING_CLAIM_VALIDATION_FAILED",
+  );
 });
 
 test("exports the fixed role sequence and keeps the action image in front", () => {

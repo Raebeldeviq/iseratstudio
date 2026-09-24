@@ -5,6 +5,12 @@ import type {
   ProviderSettings,
 } from "../types";
 import { enforceListingCopy, fillMissingListingCopy } from "../../listing-copy.mjs";
+import {
+  LIVING_HAUS_SERIES_ID,
+  seriesFactSentences,
+  technicalFactSentences,
+  validateListingClaims,
+} from "../../listing-claim-policy.mjs";
 
 function hash(value: string): number {
   let result = 2166136261;
@@ -48,6 +54,22 @@ function providerName(provider: ProviderSettings): string {
   return `${provider.firstName} ${provider.lastName}`.trim();
 }
 
+function releasedEquipmentStatements(house: HouseTemplate, project: ProjectInput): string[] {
+  const context = { house, project, houseSeries: LIVING_HAUS_SERIES_ID };
+  return [
+    ...technicalFactSentences(context),
+    ...seriesFactSentences(context),
+  ];
+}
+
+function appendReleasedEquipmentStatements(equipment: string, house: HouseTemplate, project: ProjectInput): string {
+  const missingStatements = releasedEquipmentStatements(house, project)
+    .filter((statement) => !equipment.includes(statement));
+  return missingStatements.length
+    ? joinParagraphs([equipment, ...missingStatements])
+    : equipment;
+}
+
 export function totalPrice(house: HouseTemplate, project: ProjectInput): number {
   return Math.max(0, house.housePrice + project.plotPrice + project.additionalCosts);
 }
@@ -60,11 +82,31 @@ export function completeListingTexts(
   version = 1,
 ): ListingTexts {
   const fallbackTexts = generateListingTexts(house, project, provider, version);
-  return fillMissingListingCopy(
+  const completed = fillMissingListingCopy(
     texts,
     fallbackTexts,
-    { house, project },
+    { house, project, generated: true, allowGeneratedEquipment: true },
   ) as ListingTexts;
+  const completedWithReleasedFacts = {
+    ...completed,
+    equipment: appendReleasedEquipmentStatements(completed.equipment, house, project),
+  };
+  const claimValidation = validateListingClaims({
+    texts: completedWithReleasedFacts,
+    house,
+    project,
+    houseSeries: LIVING_HAUS_SERIES_ID,
+  });
+  if (!claimValidation.blockingIssues.length) return completedWithReleasedFacts;
+
+  // Nur automatische Erzeugung erreicht diesen Pfad. Der sichere
+  // deterministische Fallback wird vor einer Speicherung erneut geprüft.
+  return enforceListingCopy(fallbackTexts, {
+    house,
+    project,
+    generated: true,
+    allowGeneratedEquipment: true,
+  }) as ListingTexts;
 }
 
 export function generateListingTexts(
@@ -82,7 +124,6 @@ export function generateListingTexts(
   const plotArea = project.plotArea
     ? `${formatNumber(project.plotArea)} m² großen Grundstück`
     : "ausgewählten Grundstück";
-  const standardPackage = house.useStandardPackage !== false;
 
   const title = pick(
     [
@@ -112,9 +153,7 @@ export function generateListingTexts(
     2,
   );
 
-  const architecture = house.architecture.trim()
-    ? sentence(house.architecture)
-    : "Die klare Architektur schafft helle Gemeinschaftsbereiche und gut nutzbare private Rückzugsräume.";
+  const architecture = "Die Raumaufteilung verbindet Gemeinschaftsbereiche mit gut nutzbaren privaten Rückzugsräumen.";
 
   const descriptionMiddle = pick(
     [
@@ -136,38 +175,9 @@ export function generateListingTexts(
     4,
   );
 
-  const standardBenefits = standardPackage
-    ? joinParagraphs([
-        section(
-          pick(["Deine Vorteile mit Living Haus", "Rundum gut begleitet mit Living Haus"], seed, 5),
-          "",
-        ).trim(),
-        section(
-          "Individuell geplante Traumküche",
-          "Die Küche wird passend zum Grundriss geplant. Moderne Küchentechnik, funktionale Arbeitsbereiche und clevere Stauraumlösungen verbinden Design und Alltagstauglichkeit.",
-        ),
-        section(
-          "Digitales Living Haus Bau-Cockpit",
-          "Termine, Unterlagen und wichtige Informationen zum Bauprojekt sind jederzeit übersichtlich verfügbar. Auch die Abstimmung mit den Ansprechpartnern erfolgt einfach und transparent.",
-        ),
-        section(
-          "Energieeffizientes I-KON-Konzept",
-          "Das Konzept verbindet eine moderne Gebäudehülle mit zeitgemäßer Haustechnik, Photovoltaikanlage und Batteriespeicher. Das Haus ist als Effizienzhaus 40 QNG konzipiert und auf einen niedrigen Energieverbrauch ausgerichtet.",
-        ),
-        section(
-          "Finanzierung individuell abgestimmt",
-          "Das Zuhause-Darlehen eröffnet interessante Finanzierungsmöglichkeiten. Gemeinsam wird geprüft, welche Konditionen und Fördermöglichkeiten zur persönlichen Situation und zum Bauvorhaben passen.",
-        ),
-        section(
-          "Hochwertiges Zuhause-Paket",
-          "Aufeinander abgestimmte Bodenbeläge, Innentüren und Sanitärelemente bilden eine hochwertige Grundlage für die Gestaltung der neuen Wohnräume.",
-        ),
-        section(
-          "Professionelles DIY-Ausbau-Coaching",
-          "Im dreitägigen Ausbau-Coaching zeigen erfahrene Profis praxisnah, wie ausgewählte Innenausbauarbeiten fachgerecht umgesetzt werden. So kannst du dein Zuhause aktiv mitgestalten und das Budget gezielt entlasten.",
-        ),
-      ])
-    : null;
+  // Serien- und Standardpaketinformationen werden nicht zu Objektfakten
+  // erhoben. Sie benötigen künftig einen eigenen Evidenzdatensatz.
+  const standardBenefits = null;
 
   const descriptionClosing = pick(
     [
@@ -187,54 +197,7 @@ export function generateListingTexts(
       )
     : "Gerne besprechen wir Grundstück, Hausplanung, Ausstattung und Finanzierung in einem persönlichen Beratungstermin.";
 
-  const configuredEquipment = house.equipmentHighlights.trim()
-    ? section("Individuelle Ausstattungsmerkmale", sentence(house.equipmentHighlights))
-    : "Materialien, Oberflächen und Ausstattungsdetails werden im Rahmen der Bemusterung gemeinsam ausgewählt.";
-
-  const energyParagraph = house.energyDemand
-    ? `Für das Projekt ist ein Endenergiebedarf von ${formatNumber(house.energyDemand)} kWh/(m²·a) bei der Energieeffizienzklasse ${house.energyClass || "gemäß Planung"} vorgesehen. Als Wärmeversorgung ist ${house.heatingType || "eine moderne Heiztechnik"}${house.energySource ? ` auf Basis von ${house.energySource}` : ""} geplant. Die endgültigen Werte ergeben sich aus der konkreten Planung und dem Energieausweis.`
-    : "Die moderne, auf das Gebäude abgestimmte Haustechnik unterstützt einen energieeffizienten und komfortablen Betrieb. Die endgültigen Energiewerte ergeben sich aus der konkreten Planung und dem Energieausweis.";
-
-  const standardEquipment = standardPackage
-    ? joinParagraphs([
-        section(
-          "Planungssicherheit von Anfang an",
-          "Ab dem Tag der Auftragsbestätigung gilt eine 18-monatige Festpreisgarantie. Damit bleibt der vereinbarte Hauspreis in diesem Zeitraum planbar; sinken die maßgeblichen Baupreise, wird der Preis entsprechend angepasst.",
-        ),
-        "Wichtige Bauversicherungen sind bereits berücksichtigt. Dazu gehören unter anderem Bauherrenhaftpflicht-, Bauleistungs-, Wohngebäude- und Bauhelfer-Unfallversicherung sowie ein Bauträgerfinanzierungsschutz.",
-        section(
-          "Finanzierung und digitale Projektsteuerung",
-          "Das Zuhause-Darlehen bietet – abhängig von den jeweiligen Voraussetzungen – Finanzierungsmöglichkeiten von bis zu 250.000 Euro zu attraktiven Konditionen. Über das Living Haus Bau-Cockpit bleiben Termine, Dokumente und die Kommunikation mit den Ansprechpartnern übersichtlich gebündelt.",
-        ),
-        section(
-          "Nachhaltige und geprüfte Bauqualität",
-          "Zur qualitätsorientierten Bauweise gehören die DGNB-Serienzertifizierung in Gold, die QDF-Zertifizierung und eine digitale Hausbauakte. Auf die Grundkonstruktion des Hauses gelten 30 Jahre Garantie; für die weiteren Bauleistungen gilt eine Gewährleistung von fünf Jahren.",
-        ),
-        section(
-          "Moderne und energieeffiziente Haustechnik",
-          "Wärmepumpentechnik, Komfortlüftung mit Wärmerückgewinnung sowie die I-KON-Lösung mit Photovoltaikanlage und Batteriespeicher unterstützen ein angenehmes Raumklima und die eigene Stromerzeugung.",
-        ),
-        section(
-          "Hochwertiges Zuhause-Paket",
-          "Das Zuhause-Paket umfasst unter anderem hochwertige Bodenbeläge, moderne Innentüren, bodengleiche Duschen mit Echtglasabtrennung, Fliesen im gesamten Erdgeschoss und eine stilvolle Sanitärausstattung. Aluminiumgeschäumte Rollläden unterstützen den sommerlichen Hitzeschutz und die Wärmedämmung im Winter.",
-        ),
-        section(
-          "Planung und Baustelleneinrichtung",
-          "Enthalten sind zwei Tage persönliche Ausstattungsberatung in der Haus-Statterei, die Bauantragsplanung durch erfahrene Architekten und ein Bodengutachten. Auch die Organisation von Abfallcontainer, Baustellen-WC, Montagekran und Gerüst ist vorgesehen.",
-        ),
-        section(
-          "Kosten sparen durch Eigenleistung",
-          "Das professionelle DIY-Ausbau-Coaching bereitet dich praxisnah auf ausgewählte Arbeiten im Innenausbau vor. So kannst du Eigenleistungen gezielt einbringen und dein persönliches „Wie ich es will“-Fertighaus gestalten.",
-        ),
-      ])
-    : null;
-
-  const locationFacts = [
-    sentence(withoutConfiguredStreet(project.locationFacts, project.street)),
-    sentence(withoutConfiguredStreet(project.familyFacts, project.street)),
-    sentence(withoutConfiguredStreet(project.natureFacts, project.street)),
-    sentence(withoutConfiguredStreet(project.transportFacts, project.street)),
-  ].filter(Boolean);
+  const releasedTechnicalStatements = releasedEquipmentStatements(house, project);
 
   const locationOpening = pick(
     [
@@ -258,31 +221,9 @@ export function generateListingTexts(
 
   const location = joinParagraphs([
     locationOpening,
-    locationFacts.length
-      ? locationFacts
-      : `Das Grundstück befindet sich in ${place}. Konkrete Aussagen zu Versorgung, Bildung, Freizeit und Verkehr werden ausschließlich aus geprüften Ortsinformationen ergänzt.`,
+    `Das Grundstück befindet sich in ${place}. Konkrete Aussagen zu Versorgung, Bildung, Freizeit und Verkehr werden ausschließlich aus geprüften Ortsinformationen ergänzt.`,
     locationClosing,
   ].flat());
-
-  const priceNote = project.plotPrice > 0
-    ? standardPackage
-      ? "Das im Angebotspreis berücksichtigte Grundstück wird einem Living-Haus-Bauherren ohne zusätzliche Käuferprovision zur Verfügung gestellt."
-      : "Der konfigurierte Angebotspreis berücksichtigt den eingetragenen Haus- und Grundstückspreis."
-    : null;
-
-  const additionalCosts = project.additionalCosts
-    ? `In der Kalkulation wurden ${formatNumber(project.additionalCosts)} Euro als konfigurierte Nebenkosten berücksichtigt. Weitere grundstücks- oder projektabhängige Kosten können hinzukommen und werden vor Vertragsabschluss transparent ermittelt.`
-    : "Weitere grundstücks- oder projektabhängige Baunebenkosten können hinzukommen. Bei der individuellen Kalkulation unterstützen wir dich gerne.";
-
-  const funding = standardPackage
-    ? "Wir bieten passende Finanzierungslösungen an und unterstützen auch bei der Beantragung möglicher Fördermittel."
-    : null;
-
-  const imageDisclaimer = "Die dargestellten Haus- und Inneneinrichtungsbilder sowie Grundrisse können beispielhaft sein und Sonderausstattungen, Möblierungen oder Außenanlagen zeigen, die nicht im angegebenen Kaufpreis enthalten sind. Maßgeblich sind die individuell vereinbarte Bau- und Leistungsbeschreibung und die abschließende Planung.";
-
-  const otherContact = provider.phone.trim()
-    ? `Haben wir dein Interesse geweckt? Dann vereinbare einen kostenlosen Beratungstermin${contactName ? ` mit ${contactName}` : ""} unter ${provider.phone}.`
-    : "Haben wir dein Interesse geweckt? Dann vereinbare einen kostenlosen persönlichen Beratungstermin.";
 
   return enforceListingCopy({
     title,
@@ -297,23 +238,16 @@ export function generateListingTexts(
       "Das Haus ist projektiert. Individuelle Anpassungen sind von den technischen, planerischen und baurechtlichen Voraussetzungen abhängig.",
     ]),
     equipment: joinParagraphs([
-      section(
-        "Umfangreiche Ausstattung und Planungssicherheit",
-        `Das ${house.name} verbindet eine durchdachte Ausstattung, moderne Energielösungen und persönliche Gestaltungsmöglichkeiten.`,
-      ),
-      configuredEquipment,
-      energyParagraph,
-      standardEquipment,
+      section("Ausstattung und Planung", `Die Ausstattung des ${house.name} wird im weiteren Planungsprozess für das konkrete Angebot festgelegt.`),
+      ...releasedTechnicalStatements,
+      "Materialien, Oberflächen, Sanitärdetails und weitere Ausstattungsoptionen werden im Bemusterungsprozess abgestimmt. Visualisierungen und Grundrisse können beispielhafte Darstellungen enthalten. Verbindlich sind die für das konkrete Projekt vereinbarten Unterlagen.",
       "Welche Leistungen im konkreten Angebot enthalten sind, wird transparent in der individuellen Bau- und Leistungsbeschreibung festgehalten.",
     ]),
     location,
     other: joinParagraphs([
-      priceNote,
-      additionalCosts,
-      funding,
-      imageDisclaimer,
-      "Gute Beratung ist entscheidend für den Erfolg. Gemeinsam analysieren wir Vorstellungen, Wünsche und Bedürfnisse, damit Haus, Grundstück und Finanzierung zueinander passen.",
-      otherContact,
+      "Das Angebot beschreibt ein projektiertes Haus. Maßgeblich für Preis, Umfang und Ausführung sind die individuellen Vereinbarungen und die Bau- und Leistungsbeschreibung.",
+      "Hausabbildungen, Grundrisse und Innenansichten können beispielhafte Ausstattungen oder Möblierungen zeigen. Diese sind nicht automatisch Bestandteil des Angebots.",
+      "Grundstücks- und projektbezogene Nebenkosten können hinzukommen und werden im Rahmen der individuellen Kalkulation erläutert.",
     ]),
-  }, { house, project }) as ListingTexts;
+  }, { house, project, generated: true, allowGeneratedEquipment: true }) as ListingTexts;
 }

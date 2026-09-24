@@ -56,7 +56,6 @@ import {
 import {
   fillMissingProjectingDefaults,
   FACTUAL_BUILDABILITY_NOTE,
-  fillMissingListingCopy,
   FIXED_ANNOTATION_TEXT,
   FIXED_DESCRIPTION_CTA,
   FIXED_EQUIPMENT_TEXT,
@@ -64,9 +63,6 @@ import {
   FIXED_PROVISION_TEXT,
   FIXED_RECOMMENDATION_TEXT,
   FIXED_TERMS_TEXT,
-  HOUSE_ENERGY_DEFAULTS,
-  IMMOPROFESSIONAL_DEFAULTS,
-  isMissingProjectingValue,
 } from "../listing-copy.mjs";
 import PlotManagement from "./components/PlotManagement";
 import { APP_VERSION } from "./lib/app-version.mjs";
@@ -108,6 +104,11 @@ import {
   plotFromProject,
 } from "../plot-records.mjs";
 import { normalizeWorkflowStatus, workflowStatusLabel, WORKFLOW_STATUS } from "../workflow-status.mjs";
+import {
+  formatClaimIssue,
+  LIVING_HAUS_SERIES_ID,
+  validateListingClaims,
+} from "../listing-claim-policy.mjs";
 import {
   compareProjectsByRegion,
   enrichProjectWithPostalRegion,
@@ -276,7 +277,9 @@ function createVariantListing(
   order: number,
   previous?: GeneratedListing | null,
 ): GeneratedListing {
-  if (previous && !isDraftListing(previous)) return { ...previous };
+  // Bestehende Texte bleiben Bestandsdaten. Eine Neugenerierung erfolgt nur
+  // auf ausdrückliche Nutzeraktion und nie während der Normalisierung.
+  if (previous) return { ...previous };
   const version = Math.max(1, previous?.version || 1);
   return {
     ...previous,
@@ -310,39 +313,11 @@ function normalizeMandatoryListingStandards(inputState: StudioState): StudioStat
     return {
       ...house,
       approved: house.approved !== false,
-      energyClass: isMissingProjectingValue(house.energyClass)
-        ? HOUSE_ENERGY_DEFAULTS.energyClass
-        : house.energyClass,
-      heatingType: isMissingProjectingValue(house.heatingType)
-        ? HOUSE_ENERGY_DEFAULTS.heatingType
-        : house.heatingType,
-      energySource: isMissingProjectingValue(house.energySource)
-        ? HOUSE_ENERGY_DEFAULTS.energySource
-        : house.energySource,
     };
   });
   const houseById = new Map(houses.map((house) => [house.id, house]));
   const projects = state.projects.map((project) => {
-      const listings = mergeListingCollection(project.listings).map((listing: GeneratedListing) => {
-        if (!isDraftListing(listing)) return listing;
-        const house = houseById.get(listing.templateId);
-        if (!house) return listing;
-        const fallbackTexts = generateListingTexts(
-          house,
-          project,
-          state.provider,
-          listing.version || 1,
-        );
-        return {
-          ...listing,
-          projectingSettings: fillMissingProjectingDefaults(listing.projectingSettings),
-          texts: fillMissingListingCopy(
-            listing.texts,
-            fallbackTexts,
-            { house, project },
-          ) as ListingTexts,
-        };
-      });
+      const listings = mergeListingCollection(project.listings);
       let listingGroup = normalizeListingGroup(project.listingGroup, project.id) as ListingGroup;
       const assignedIds = listingGroup.variants
         .filter((variant) => variant.templateId)
@@ -1436,6 +1411,17 @@ export default function InseratStudio() {
     }));
   };
 
+  const assertGeneratedImageCaptions = (house: HouseTemplate, captions: Array<{ id: string; caption: string }>) => {
+    const claimValidation = validateListingClaims({
+      house,
+      houseSeries: LIVING_HAUS_SERIES_ID,
+      images: captions.map((caption) => ({ id: caption.id, caption: caption.caption })),
+    });
+    if (claimValidation.blockingIssues.length) {
+      throw new Error(`Bildtext nicht gespeichert: ${formatClaimIssue(claimValidation.blockingIssues[0])}`);
+    }
+  };
+
   const createAutomaticImageCaptions = async (
     house: HouseTemplate,
     images: HouseImage[],
@@ -1447,13 +1433,12 @@ export default function InseratStudio() {
       return "local";
     }
     const imageIds = editableImages.map((image) => image.id);
-    replaceHouseImageCaptions(
-      house.id,
-      new Map(editableImages.map((image, index) => [
-        image.id,
-        localImageCaption(image.name, image.isFloorplan, index),
-      ])),
-    );
+    const localCaptions = editableImages.map((image, index) => ({
+      id: image.id,
+      caption: localImageCaption(image.name, image.isFloorplan, index),
+    }));
+    assertGeneratedImageCaptions(house, localCaptions);
+    replaceHouseImageCaptions(house.id, new Map(localCaptions.map((caption) => [caption.id, caption.caption])));
 
     if (!helperOnline || !hasStoredOpenAiKey) {
       if (announce) setNotice(hasStoredOpenAiKey
@@ -1475,7 +1460,7 @@ export default function InseratStudio() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: aiModel,
-          house: { name: house.name, houseType: house.houseType },
+          house: { name: house.name, houseType: house.houseType, listingFacts: house.listingFacts },
           images: preparedImages,
         }),
       });
@@ -1488,6 +1473,7 @@ export default function InseratStudio() {
         throw new Error(data.message || "Die automatischen Bildtexte konnten nicht erstellt werden.");
       }
       const captionById = new Map(data.captions.map((item) => [item.id, item.caption]));
+      assertGeneratedImageCaptions(house, data.captions);
       replaceHouseImageCaptions(house.id, captionById);
       if (announce) setNotice(`${editableImages.length} variable Bildtexte wurden automatisch erstellt. Feste Überschriften blieben unverändert.`);
       return "ai";
@@ -2478,12 +2464,8 @@ export default function InseratStudio() {
                 housePrice: house.housePrice,
                 constructionYear: house.constructionYear,
                 energyDemand: house.energyDemand,
-                energyClass: HOUSE_ENERGY_DEFAULTS.energyClass,
-                heatingType: HOUSE_ENERGY_DEFAULTS.heatingType,
-                energySource: HOUSE_ENERGY_DEFAULTS.energySource,
                 architecture: house.architecture,
-                equipmentHighlights: house.equipmentHighlights,
-                useStandardPackage: house.useStandardPackage,
+                listingFacts: house.listingFacts,
               },
               project: {
                 name: projectSnapshot.name,
@@ -2506,6 +2488,7 @@ export default function InseratStudio() {
                 lastName: state.provider.lastName,
                 phone: state.provider.phone,
               },
+              listingFacts: previous?.listingFacts,
               previousTexts: previous?.texts,
               listingPosition: index + 1,
               listingCount: houseSnapshots.length,
@@ -2662,23 +2645,9 @@ export default function InseratStudio() {
     if (!sourceState.provider.providerNumber || !sourceState.provider.company || !sourceState.provider.email) {
       throw new Error("Bitte Anbieternummer, Firma und E-Mail unter Export & Upload ergänzen.");
     }
-    const completedListings = listings.map((listing) => {
-      const house = sourceState.houses.find((item) => item.id === listing.templateId);
-      if (!house) return listing;
-      return {
-        ...listing,
-        texts: completeListingTexts(
-          house,
-          project,
-          sourceState.provider,
-          listing.texts,
-          listing.version || 1,
-        ),
-      };
-    });
     return {
       project,
-      listings: completedListings,
+      listings,
       houses: sourceState.houses,
       provider: sourceState.provider,
       promotionImagesByListingId,
@@ -3461,8 +3430,8 @@ export default function InseratStudio() {
               <Field label="Badezimmer" type="number" min={0} value={activeHouse.bathrooms} onChange={(value) => updateHouse({ bathrooms: Number(value) })} />
               <Field label="Baujahr geplant" type="number" value={activeHouse.constructionYear} onChange={(value) => updateHouse({ constructionYear: Number(value) })} />
               <Field label="Endenergiebedarf" type="number" min={0} value={activeHouse.energyDemand} suffix="kWh/(m²·a)" onChange={(value) => updateHouse({ energyDemand: Number(value) })} />
-              <Field label="Energieklasse (fest)" value={IMMOPROFESSIONAL_DEFAULTS.energyClass} readOnly onChange={() => undefined} />
-              <Field label="Heizungsart (fest)" value={HOUSE_ENERGY_DEFAULTS.heatingType} readOnly onChange={() => undefined} />
+              <Field label="Energieklasse" value="Nur mit Evidenzdatensatz werblich nutzbar" readOnly onChange={() => undefined} />
+              <Field label="Heizungsart" value="Nur mit Evidenzdatensatz werblich nutzbar" readOnly onChange={() => undefined} />
               <TextField label="Architektur & Grundriss" rows={3} value={activeHouse.architecture} onChange={(value) => updateHouse({ architecture: value })} />
               <TextField label="Ausstattungsmerkmale" rows={3} value={activeHouse.equipmentHighlights} onChange={(value) => updateHouse({ equipmentHighlights: value })} />
               <label className="standard-package field-wide">
@@ -3766,7 +3735,7 @@ export default function InseratStudio() {
                           <TextField label="Objektbeschreibung · Langtext" rows={8} value={listing.texts.description} onChange={(value) => updateListingText(listing.id, "description", value)} />
                           <TextField label="Ausstattung · fest" rows={8} value={listing.texts.equipment} readOnly />
                           <TextField label="Lage · Langtext" rows={7} value={listing.texts.location} onChange={(value) => updateListingText(listing.id, "location", value)} />
-                          <TextField label="Energie · fest" rows={3} value="Fußbodenheizung · Wärmepumpe · KfW40 und KfW55 · Energieklasse A++ · GEG 2022 A+" readOnly />
+                          <TextField label="Technische und Energiefakten" rows={3} value="Werbliche technische Angaben werden nur aus hinterlegten, verifizierten Fakten mit Quelle, Scope und Status übernommen." readOnly />
                           <TextField label="Sachlicher Hinweis zur Bebaubarkeit" rows={3} value={FACTUAL_BUILDABILITY_NOTE} readOnly />
                           <TextField label="Sonstiges · fest" rows={7} value={listing.texts.other} readOnly />
                           <TextField label="Provision · fest" rows={2} value={FIXED_PROVISION_TEXT} readOnly />

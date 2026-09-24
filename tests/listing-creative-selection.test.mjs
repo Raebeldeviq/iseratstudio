@@ -327,6 +327,9 @@ test("prepared copy persists one coherent house, text, price, image and OpenImmo
     { ...source.texts, title: variedTexts.title, description: variedTexts.description },
     copy.version,
   ));
+  assert.match(copy.texts.equipment, /Endenergiebedarf von 18 kWh\/\(m²·a\) vorgesehen/u);
+  assert.match(copy.texts.equipment, /DGNB-Serienzertifizierung/u);
+  assert.match(copy.texts.equipment, /QNG-Serienmerkmal/u);
   assert.equal(copy.creativeSelection.houseId, copy.templateId);
   assert.equal(copy.creativeSelection.houseName, copy.templateName);
   assert.equal(copy.creativeSelection.heroAssetId, copy.creativeSelection.heroImageId);
@@ -343,6 +346,7 @@ test("prepared copy persists one coherent house, text, price, image and OpenImmo
   assert.match(xml, new RegExp(`<kaufpreis>${copy.price}<\\/kaufpreis>`));
   assert.match(xml, new RegExp(`<wohnflaeche>${selectedHouse.livingArea}<\\/wohnflaeche>`));
   assert.match(xml, new RegExp(`<anzahl_zimmer>${selectedHouse.rooms}<\\/anzahl_zimmer>`));
+  assert.match(xml, /feldname="Projektierter Endenergiebedarf"/u);
   assert.ok(xml.includes(selectedHouse.images[0].caption));
 
   const restartCopy = structuredClone(result.state).projects[0].listings.find((item) => item.id === copy.id);

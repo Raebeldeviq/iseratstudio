@@ -97,7 +97,7 @@ test("legacy 4+4 groups migrate assigned snapshots into a dynamic list", () => {
   const restored = normalizeListingGroup(prepared, "project-legacy", { idFactory: ids("restored") });
   assert.equal(restored.schemaVersion, 2);
   assert.ok(restored.variants.every((variant) => variant.role === "variant"));
-  assert.equal(restored.variants[0].listing.projectingSettings.energyCertificateClass, "A+");
+  assert.equal(restored.variants[0].listing.projectingSettings.energyCertificateClass, "");
 });
 
 test("variant snapshots stay coherent and ordering is freely changeable", () => {

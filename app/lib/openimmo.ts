@@ -11,6 +11,12 @@ import {
   FIXED_RECOMMENDATION_TEXT,
   FIXED_TERMS_TEXT,
 } from "../../listing-copy.mjs";
+import {
+  assertListingClaimsCompliant,
+  FACT_EVIDENCE_KIND,
+  LIVING_HAUS_SERIES_ID,
+  releasedTechnicalFacts,
+} from "../../listing-claim-policy.mjs";
 import type {
   GeneratedListing,
   HouseImage,
@@ -153,6 +159,12 @@ function cdata(value: string): string {
   return `<![CDATA[${value.replaceAll("]]>", "]]]]><![CDATA[>")}]]>`;
 }
 
+function decimalFactValue(value: unknown): number | null {
+  const match = String(value ?? "").replace(",", ".").match(/\d+(?:\.\d+)?/u);
+  const number = match ? Number(match[0]) : Number.NaN;
+  return Number.isFinite(number) ? number : null;
+}
+
 function slug(value: string): string {
   return value
     .normalize("NFD")
@@ -259,6 +271,49 @@ function listingXml(
   });
   const texts = enforceListingCopy(listing.texts, { house, project });
   const projecting = fillMissingProjectingDefaults(listing.projectingSettings);
+  const technicalFacts = releasedTechnicalFacts({
+    house,
+    project,
+    listingFacts: listing.listingFacts,
+    houseSeries: LIVING_HAUS_SERIES_ID,
+  });
+  const technicalFact = (key: string) => technicalFacts.find((fact) => fact.key === key);
+  const exportableFact = (key: string) => {
+    const fact = technicalFact(key);
+    return fact?.status === "verified" || fact?.status === "contract_included" ? fact : undefined;
+  };
+  // OpenImmo booleans and numeric metadata cannot express a planning status.
+  // Planned facts remain available as explicitly planned free-text statements.
+  const heatPumpFact = exportableFact("heat_pump");
+  const underfloorHeatingFact = exportableFact("underfloor_heating");
+  const energyCertificateFact = (key: string) => {
+    const fact = technicalFact(key);
+    return fact?.evidenceKind === FACT_EVIDENCE_KIND.ENERGY_CERTIFICATE
+      && (fact.status === "verified" || fact.status === "contract_included")
+      ? fact
+      : undefined;
+  };
+  const plannedEnergyFact = (key: string) => {
+    const fact = technicalFact(key);
+    return fact?.evidenceKind === FACT_EVIDENCE_KIND.PROJECTED_HOUSE_VALUE
+      && fact.status === "planned"
+      ? fact
+      : undefined;
+  };
+  const energyDemandFact = energyCertificateFact("energy_demand");
+  const energyClassFact = energyCertificateFact("energy_class");
+  const plannedEnergyDemandFact = plannedEnergyFact("energy_demand");
+  const plannedEnergyClassFact = plannedEnergyFact("energy_class");
+  const efficiencyStandardFact = exportableFact("efficiency_house_standard");
+  const energyDemand = energyDemandFact ? decimalFactValue(energyDemandFact.value) : null;
+  const energyCertificatePass = energyDemand !== null
+    ? `<energiepass>
+            <epart>BEDARF</epart>
+            <endenergiebedarf>${currency.format(energyDemand)}</endenergiebedarf>
+            ${energyClassFact ? `<wertklasse>${xml(energyClassFact.value)}</wertklasse>` : ""}
+            <baujahr>${xml(house.constructionYear)}</baujahr>
+          </energiepass>`
+    : "";
   const environmentLabels = projectingEnvironmentLabels(projecting);
   const infrastructureXml = environmentLabels.length
     ? `<infrastruktur>
@@ -311,22 +366,17 @@ function listingXml(
           <ausstatt_kategorie WERTIGKEIT="${xml(projecting.equipmentQuality)}" />
           <bad dusche="${projecting.shower}" wanne="${projecting.bathtub}" fenster="${projecting.bathroomWindow}" />
           <kueche ebk="${projecting.fittedKitchen}" offen="${projecting.openKitchen}" />
-          <heizungsart fussboden="${projecting.underfloorHeating}" />
-          <befeuerung elektro="${projecting.electricFuel}" luftwp="${projecting.airSourceHeatPump}" />
+          <heizungsart fussboden="${underfloorHeatingFact ? "true" : "false"}" />
+          <befeuerung elektro="false" luftwp="${heatPumpFact ? "true" : "false"}" />
           <gartennutzung>${projecting.gardenUse}</gartennutzung>
-          <energietyp kfw40="${projecting.kfw40}" kfw55="${projecting.kfw55}" />
+          <energietyp kfw40="${Boolean(efficiencyStandardFact && /(?:effizienzhaus|kfw)\s*[- ]?40\b/iu.test(String(efficiencyStandardFact.value)))}" kfw55="${Boolean(efficiencyStandardFact && /(?:effizienzhaus|kfw)\s*[- ]?55\b/iu.test(String(efficiencyStandardFact.value)))}" />
           <dachboden>${projecting.attic}</dachboden>
           <gaestewc>${projecting.guestWc}</gaestewc>
         </ausstattung>
         <zustand_angaben>
           <baujahr>${xml(house.constructionYear)}</baujahr>
           <zustand zustand_art="${xml(projecting.constructionPhase)}" />
-          <energiepass>
-            <epart>BEDARF</epart>
-            <endenergiebedarf>${currency.format(house.energyDemand)}</endenergiebedarf>
-            <wertklasse>${xml(projecting.energyCertificateClass)}</wertklasse>
-            <baujahr>${xml(house.constructionYear)}</baujahr>
-          </energiepass>
+          ${energyCertificatePass}
         </zustand_angaben>
         ${infrastructureXml}
         <freitexte>
@@ -336,7 +386,9 @@ function listingXml(
           <objektbeschreibung>${cdata(texts.description)}</objektbeschreibung>
           <sonstige_angaben>${cdata(texts.other)}</sonstige_angaben>
           <user_defined_simplefield feldname="Sachlicher Hinweis zur Bebaubarkeit">${cdata(FACTUAL_BUILDABILITY_NOTE)}</user_defined_simplefield>
-          <user_defined_simplefield feldname="Energieklasse">${cdata(projecting.energyClass)}</user_defined_simplefield>
+          ${energyClassFact ? `<user_defined_simplefield feldname="Energieklasse gemäß Energieausweis">${cdata(String(energyClassFact.value))}</user_defined_simplefield>` : ""}
+          ${plannedEnergyDemandFact ? `<user_defined_simplefield feldname="Projektierter Endenergiebedarf">${cdata(`${plannedEnergyDemandFact.value} kWh/(m²·a) – Planungswert, kein individueller Energieausweis`)}</user_defined_simplefield>` : ""}
+          ${plannedEnergyClassFact ? `<user_defined_simplefield feldname="Projektierte Energieeffizienzklasse">${cdata(`${plannedEnergyClassFact.value} – Planungswert, kein individueller Energieausweis`)}</user_defined_simplefield>` : ""}
           <user_defined_simplefield feldname="Living Haus Modell-ID">${cdata(house.id)}</user_defined_simplefield>
           <user_defined_simplefield feldname="Living Haus Modell">${cdata(house.name)}</user_defined_simplefield>
           <user_defined_simplefield feldname="Anmerkung">${cdata(FIXED_ANNOTATION_TEXT)}</user_defined_simplefield>
@@ -363,6 +415,25 @@ export function buildOpenImmoXml(input: PackageInput): string {
   const validationErrors = validateImportPackage(input);
   if (validationErrors.length) {
     throw new Error(`OpenImmo-Prüfung fehlgeschlagen: ${validationErrors.join(" ")}`);
+  }
+  for (const listing of listings) {
+    const house = houses.find((item) => item.id === listing.templateId);
+    if (!house) continue;
+    assertListingClaimsCompliant({
+      texts: listing.texts,
+      house,
+      project,
+      listingFacts: listing.listingFacts,
+      houseSeries: LIVING_HAUS_SERIES_ID,
+      images: listingImages(input, house, listing),
+      advertisingTexts: [
+        FIXED_PROVISION_TEXT,
+        FIXED_ANNOTATION_TEXT,
+        FIXED_TERMS_TEXT,
+        FIXED_RECOMMENDATION_TEXT,
+        FACTUAL_BUILDABILITY_NOTE,
+      ],
+    });
   }
   const timestamp = new Date().toISOString();
   const objects = listings

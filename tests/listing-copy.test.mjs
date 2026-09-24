@@ -22,16 +22,16 @@ import {
 const house = { id: "sun-113-v6", name: "SUN 113 V6", livingArea: 113.49, rooms: 5 };
 const project = { city: "Potsdam", district: "Roskow" };
 
-test("builds a benefit headline with district, rounded area and room count", () => {
+test("builds a factual headline with district, rounded area and room count", () => {
   const title = buildListingHeadline(house, project);
-  assert.match(title, /^Dein .+ in Roskow:/);
-  assert.match(title, /113 m², 5 Zimmer,/);
-  assert.match(title, /!$/);
+  assert.match(title, /in Roskow:/);
+  assert.match(title, /113 m² Wohnfläche und 5 Zimmer$/);
   assert.doesNotMatch(title, /113[,.]\d/u);
+  assert.doesNotMatch(title, /QNG|DGNB|energieeffizient|nachhaltig/iu);
 });
 
-test("enforces every prescribed listing block and keeps the CTA exactly once", () => {
-  const result = enforceListingCopy({
+test("preserves manual free text and enforces safe blocks only for generated copy", () => {
+  const manual = enforceListingCopy({
     title: "Alter Titel",
     description: `Ein emotionaler und individueller Hausabsatz.\n\n${FIXED_DESCRIPTION_CTA}`,
     equipment: "Alter Ausstattungstext",
@@ -39,12 +39,17 @@ test("enforces every prescribed listing block and keeps the CTA exactly once", (
     other: "Alter Sonstiges-Text",
   }, { house, project });
 
-  assert.equal(result.title, buildListingHeadline(house, project));
-  assert.equal(result.equipment, FIXED_EQUIPMENT_TEXT);
-  assert.equal(result.other, FIXED_OTHER_TEXT);
-  assert.equal(result.location, "Roskow bietet ein ruhiges Wohnumfeld.");
-  assert.ok(result.description.endsWith(FIXED_DESCRIPTION_CTA));
-  assert.equal(result.description.split(FIXED_DESCRIPTION_CTA).length - 1, 1);
+  assert.equal(manual.title, "Alter Titel");
+  assert.equal(manual.equipment, "Alter Ausstattungstext");
+  assert.equal(manual.other, "Alter Sonstiges-Text");
+  assert.equal(manual.location, "Roskow bietet ein ruhiges Wohnumfeld.");
+
+  const generated = enforceListingCopy(manual, { house, project, generated: true });
+  assert.equal(generated.title, buildListingHeadline(house, project));
+  assert.equal(generated.equipment, FIXED_EQUIPMENT_TEXT);
+  assert.equal(generated.other, FIXED_OTHER_TEXT);
+  assert.ok(generated.description.endsWith(FIXED_DESCRIPTION_CTA));
+  assert.equal(generated.description.split(FIXED_DESCRIPTION_CTA).length - 1, 1);
 });
 
 test("fills empty existing text fields without overwriting usable dynamic copy", () => {
@@ -57,7 +62,7 @@ test("fills empty existing text fields without overwriting usable dynamic copy",
   }, {
     description: "Lokale Ersatzbeschreibung.",
     location: "Roskow bietet den Rahmen für das geplante Zuhause.",
-  }, { house, project });
+  }, { house, project, generated: true });
 
   assert.match(result.description, /^Vorhandene individuelle Objektbeschreibung\./);
   assert.ok(result.description.endsWith(FIXED_DESCRIPTION_CTA));
@@ -80,14 +85,14 @@ test("keeps the immoprofessional defaults and legal copy explicit", () => {
     attic: true,
     guestWc: true,
     gardenUse: true,
-    underfloorHeating: true,
-    electricFuel: true,
-    airSourceHeatPump: true,
-    kfw40: true,
-    kfw55: true,
-    energyClass: "A++",
+    underfloorHeating: false,
+    electricFuel: false,
+    airSourceHeatPump: false,
+    kfw40: false,
+    kfw55: false,
+    energyClass: "",
     commissionRequired: false,
-    energyCertificateClass: "A+",
+    energyCertificateClass: "",
     fittedKitchen: true,
     openKitchen: true,
     shower: true,
@@ -123,7 +128,7 @@ test("fills only missing projecting defaults and preserves explicit user values"
     guestWc: true,
     gardenUse: true,
     underfloorHeating: false,
-    electricFuel: true,
+    electricFuel: false,
     airSourceHeatPump: false,
     kfw40: false,
     kfw55: true,
@@ -145,14 +150,14 @@ test("fills only missing projecting defaults and preserves explicit user values"
     attic: true,
     guestWc: true,
     gardenUse: true,
-    underfloorHeating: true,
-    electricFuel: true,
-    airSourceHeatPump: true,
-    kfw40: true,
-    kfw55: true,
-    energyClass: "A++",
+    underfloorHeating: false,
+    electricFuel: false,
+    airSourceHeatPump: false,
+    kfw40: false,
+    kfw55: false,
+    energyClass: "",
     commissionRequired: false,
-    energyCertificateClass: "A+",
+    energyCertificateClass: "",
     fittedKitchen: true,
     openKitchen: true,
     shower: true,

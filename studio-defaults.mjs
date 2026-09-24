@@ -16,6 +16,7 @@ export function createEmptyHouse(index = 1) {
   return {
     id: uid(),
     approved: true,
+    seriesId: "livinghaus",
     name: index === 1 ? "Zweifamilienhaus – Muster" : `Haustyp ${index}`,
     houseType: index === 1 ? "Zweifamilienhaus" : "Einfamilienhaus",
     livingArea: index === 1 ? 242 : 150,
@@ -25,11 +26,14 @@ export function createEmptyHouse(index = 1) {
     floors: 2,
     housePrice: 0,
     constructionYear: new Date().getFullYear() + 1,
-    energyDemand: 18,
+    // Kein technischer Kennwert ist ohne Quelle, Scope, Status und Verifikation
+    // ein Inseratfakt. Neue Vorlagen starten daher ohne Energiedefault.
+    energyDemand: 0,
     ...HOUSE_ENERGY_DEFAULTS,
     architecture: DEFAULT_ARCHITECTURE,
     equipmentHighlights: DEFAULT_EQUIPMENT,
     useStandardPackage: true,
+    listingFacts: [],
     images: [],
   };
 }
