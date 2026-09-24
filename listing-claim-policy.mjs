@@ -25,6 +25,7 @@ export const CLAIM_SEVERITY = Object.freeze({
 export const FACT_SCOPE = Object.freeze({
   COMPONENT: "component",
   TECHNICAL_SYSTEM: "technical_system",
+  TECHNICAL_PACKAGE: "technical_package",
   HOUSE: "house",
   HOUSE_SERIES: "house_series",
   PROJECT: "project",
@@ -60,6 +61,7 @@ export const FACT_EVIDENCE_KIND = Object.freeze({
 });
 
 export const LIVING_HAUS_SERIES_ID = "livinghaus";
+export const LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID = "livinghaus-ikon-standard";
 
 /**
  * Die folgenden Fakten sind ausdrücklich freigegebene Living-Haus-
@@ -86,6 +88,54 @@ export const VERIFIED_LIVING_HAUS_SERIES_FACTS = Object.freeze([
     verified: true,
     seriesId: LIVING_HAUS_SERIES_ID,
     evidenceReference: "Verifizierte Living-Haus-Serienfreigabe: QNG",
+  }),
+]);
+
+/**
+ * Verifizierte technische Bestandteile des I-KON-Pakets. Sie werden niemals
+ * global vererbt, sondern ausschließlich bei einem expliziten Paketmarker an
+ * der konkreten Hausvorlage verwendet.
+ */
+export const VERIFIED_LIVING_HAUS_IKON_TECHNICAL_PACKAGE_FACTS = Object.freeze([
+  Object.freeze({
+    key: "photovoltaic",
+    value: "Photovoltaikanlage",
+    source: FACT_SOURCE.OPTIONAL_PACKAGE,
+    scope: FACT_SCOPE.TECHNICAL_PACKAGE,
+    status: FACT_STATUS.VERIFIED,
+    verified: true,
+    packageId: LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID,
+    evidenceReference: "Verifizierte Living-Haus-/I-KON-Technikpaketfreigabe: Photovoltaikanlage",
+  }),
+  Object.freeze({
+    key: "battery_storage",
+    value: "Batteriespeicher",
+    source: FACT_SOURCE.OPTIONAL_PACKAGE,
+    scope: FACT_SCOPE.TECHNICAL_PACKAGE,
+    status: FACT_STATUS.VERIFIED,
+    verified: true,
+    packageId: LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID,
+    evidenceReference: "Verifizierte Living-Haus-/I-KON-Technikpaketfreigabe: Batteriespeicher",
+  }),
+  Object.freeze({
+    key: "heat_pump",
+    value: "Wärmepumpe",
+    source: FACT_SOURCE.OPTIONAL_PACKAGE,
+    scope: FACT_SCOPE.TECHNICAL_PACKAGE,
+    status: FACT_STATUS.VERIFIED,
+    verified: true,
+    packageId: LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID,
+    evidenceReference: "Verifizierte Living-Haus-/I-KON-Technikpaketfreigabe: Wärmepumpe",
+  }),
+  Object.freeze({
+    key: "ventilation",
+    value: "Lüftungsanlage",
+    source: FACT_SOURCE.OPTIONAL_PACKAGE,
+    scope: FACT_SCOPE.TECHNICAL_PACKAGE,
+    status: FACT_STATUS.VERIFIED,
+    verified: true,
+    packageId: LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID,
+    evidenceReference: "Verifizierte Living-Haus-/I-KON-Technikpaketfreigabe: Lüftungsanlage",
   }),
 ]);
 
@@ -229,6 +279,15 @@ function configuredHouseSeries(input = {}) {
   return token(input.houseSeries ?? input.house?.seriesId ?? input.house?.houseSeries);
 }
 
+function configuredTechnicalPackage(input = {}) {
+  return token(input.technicalPackage ?? input.house?.technicalPackage ?? input.house?.technicalPackageId);
+}
+
+/** Matches the persisted I-KON package marker without exposing token normalization to callers. */
+export function isLivingHausIKonTechnicalPackage(value) {
+  return token(value) === token(LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID);
+}
+
 function normalizedFact(raw = {}) {
   return {
     key: normalizedFactKey(raw.key ?? raw.type ?? raw.factKey),
@@ -241,6 +300,7 @@ function normalizedFact(raw = {}) {
     evidenceReference: clean(raw.evidenceReference),
     evidenceKind: energyEvidenceKind(raw),
     seriesId: token(raw.seriesId ?? raw.houseSeries ?? raw.appliesToSeries),
+    packageId: token(raw.packageId ?? raw.technicalPackage ?? raw.appliesToPackage),
     validFrom: clean(raw.validFrom),
     validUntil: clean(raw.validUntil),
     approvedForListing: raw.approvedForListing !== false,
@@ -253,6 +313,14 @@ function isApplicableVerifiedSeriesFact(fact, input = {}) {
     && fact.status === FACT_STATUS.VERIFIED
     && Boolean(fact.seriesId)
     && fact.seriesId === configuredHouseSeries(input);
+}
+
+function isApplicableVerifiedTechnicalPackageFact(fact, input = {}) {
+  return fact.sourceKind === FACT_SOURCE.OPTIONAL_PACKAGE
+    && fact.scope === FACT_SCOPE.TECHNICAL_PACKAGE
+    && fact.status === FACT_STATUS.VERIFIED
+    && Boolean(fact.packageId)
+    && fact.packageId === configuredTechnicalPackage(input);
 }
 
 function projectedTemplateEnergyFacts(input = {}) {
@@ -309,6 +377,7 @@ function uniqueFacts(facts) {
       fact.status,
       fact.evidenceKind,
       fact.seriesId,
+      fact.packageId,
     ].join("|");
     if (seen.has(fingerprint)) return false;
     seen.add(fingerprint);
@@ -372,14 +441,24 @@ export function collectListingFacts(input = {}) {
     .filter((raw) => raw && typeof raw === "object")
     .map(normalizedFact)
     .filter((fact) => fact.key)
-    .filter((fact) => fact.sourceKind !== FACT_SOURCE.VERIFIED_SERIES || isApplicableVerifiedSeriesFact(fact, input));
+    .filter((fact) => {
+      if (fact.sourceKind === FACT_SOURCE.VERIFIED_SERIES) return isApplicableVerifiedSeriesFact(fact, input);
+      if (fact.sourceKind === FACT_SOURCE.OPTIONAL_PACKAGE && fact.scope === FACT_SCOPE.TECHNICAL_PACKAGE) {
+        return isApplicableVerifiedTechnicalPackageFact(fact, input);
+      }
+      return true;
+    });
   const inheritedSeriesFacts = configuredHouseSeries(input) === LIVING_HAUS_SERIES_ID
     ? VERIFIED_LIVING_HAUS_SERIES_FACTS.map(normalizedFact)
+    : [];
+  const inheritedTechnicalPackageFacts = isLivingHausIKonTechnicalPackage(configuredTechnicalPackage(input))
+    ? VERIFIED_LIVING_HAUS_IKON_TECHNICAL_PACKAGE_FACTS.map(normalizedFact)
     : [];
 
   return uniqueFacts(resolveEnergyFactPrecedence([
     ...declaredFacts,
     ...inheritedSeriesFacts,
+    ...inheritedTechnicalPackageFacts,
     ...projectedTemplateEnergyFacts(input),
   ]));
 }
@@ -430,12 +509,21 @@ function factMatchesTechnicalKey(fact, key) {
   return false;
 }
 
+function technicalDesignationMatchesStatement(fact, key, statement) {
+  const value = clean(fact.value).toLocaleLowerCase("de-DE");
+  const text = clean(statement).toLocaleLowerCase("de-DE");
+  if (key === "ventilation" && /komfortlüftung/u.test(text)) return /komfortlüftung/u.test(value);
+  if (key === "heat_pump" && /luft[-\s]?wasser/u.test(text)) return /luft[-\s]?wasser/u.test(value);
+  return true;
+}
+
 function usableTechnicalFact(facts, key, statement) {
   return facts.find((fact) => (
     factMatchesTechnicalKey(fact, key)
     && factHasRequiredEvidence(fact)
     && fact.status !== FACT_STATUS.UNKNOWN
     && statusDisclosed(statement, fact.status)
+    && technicalDesignationMatchesStatement(fact, key, statement)
   ));
 }
 
@@ -703,4 +791,24 @@ export function technicalFactSentences(input = {}) {
     if (factMatchesTechnicalKey(fact, "efficiency_house_standard")) return [planned ? `Der aktuelle Planungsstand sieht den Standard ${value} vor.` : `Der dokumentierte Standard lautet ${value}.`];
     return [];
   });
+}
+
+/** Returns one exact, package-scoped technical sentence for released I-KON components. */
+export function technicalPackageFactSentence(input = {}, requestedKeys = []) {
+  const keys = requestedKeys.length
+    ? [...new Set(requestedKeys)]
+    : ["photovoltaic", "battery_storage", "heat_pump", "ventilation"];
+  const facts = releasedTechnicalFacts(input).filter((fact) => (
+    fact.sourceKind === FACT_SOURCE.OPTIONAL_PACKAGE
+    && fact.scope === FACT_SCOPE.TECHNICAL_PACKAGE
+    && isLivingHausIKonTechnicalPackage(fact.packageId)
+  ));
+  const values = keys.map((key) => facts.find((fact) => fact.key === key)?.value).map(clean);
+  if (values.some((value) => !value)) return "";
+  const list = values.length === 1
+    ? values[0]
+    : values.length === 2
+      ? `${values[0]} und ${values[1]}`
+      : `${values.slice(0, -1).join(", ")} und ${values.at(-1)}`;
+  return `Das I-KON-Technikpaket umfasst ${list}.`;
 }
