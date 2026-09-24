@@ -45,6 +45,9 @@ function state() {
         baseListing("legacy", {
           description: `Individuell formulierter Einstieg.\n\n${LEGACY_FIXED_DESCRIPTION_CTA}`,
         }),
+        baseListing("mixed", {
+          description: `Nachhaltiges Haus mit niedrigeren Energiekosten.\n\n${LEGACY_FIXED_DESCRIPTION_CTA}`,
+        }),
         baseListing("clean", {
           equipment: "Das projektierte Haus gehört zu einer Hausserie mit verifizierter DGNB-Serienzertifizierung. Für die zugehörige Hausserie ist ein verifiziertes QNG-Serienmerkmal hinterlegt.",
         }),
@@ -61,11 +64,13 @@ test("classifies active listings without mutating the catalog state", () => {
 
   assert.deepEqual(input, before);
   assert.equal(report.readOnly, true);
-  assert.equal(report.scannedListingCount, 3);
-  assert.equal(report.affectedListingCount, 2);
+  assert.equal(report.scannedListingCount, 4);
+  assert.equal(report.affectedListingCount, 3);
   assert.equal(report.treatmentCounts[PHASE2B_TREATMENT.NO_ACTION], 1);
   assert.equal(report.findings.some((finding) => finding.listingId === "manual" && finding.proposedTreatment === PHASE2B_TREATMENT.MANUAL_REVIEW), true);
   assert.equal(report.findings.some((finding) => finding.listingId === "legacy" && finding.proposedTreatment === PHASE2B_TREATMENT.SAFE_DETERMINISTIC_REPLACEMENT), true);
+  assert.equal(report.findings.some((finding) => finding.listingId === "mixed" && finding.proposedTreatment === PHASE2B_TREATMENT.MANUAL_REVIEW), true);
+  assert.equal(report.fieldPlans.some((plan) => plan.listingId === "mixed" && plan.proposedTreatment === PHASE2B_TREATMENT.MANUAL_REVIEW), true);
   assert.equal(report.findings.some((finding) => finding.listingId === "clean"), false);
   assert.deepEqual(PHASE2B_SCAN_READ_ONLY_GUARANTEE, {
     writesCatalog: false,
@@ -73,7 +78,7 @@ test("classifies active listings without mutating the catalog state", () => {
     triggersUploads: false,
     regeneratesTexts: false,
   });
-  assert.match(formatPhase2BScanMarkdown(report), /Konkrete Treffer|SAFE_DETERMINISTIC_REPLACEMENT/u);
+  assert.match(formatPhase2BScanMarkdown(report), /Konkrete Feldmaßnahmen|SAFE_DETERMINISTIC_REPLACEMENT/u);
 });
 
 test("CLI reads a provided catalog snapshot once and only returns a report", async () => {

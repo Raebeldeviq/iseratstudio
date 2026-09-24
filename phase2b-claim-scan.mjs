@@ -47,7 +47,8 @@ function activeListing(listing) {
 
 function treatmentFor(issue, listing) {
   const key = fieldKey(issue.field);
-  const text = clean(listing?.texts?.[key]);
+  const rawText = String(listing?.texts?.[key] ?? "");
+  const text = clean(rawText);
 
   if (key && LEGACY_FIXED_FIELD_HASHES[key] === fingerprint(text)) {
     return {
@@ -55,7 +56,11 @@ function treatmentFor(issue, listing) {
       rationale: "Exakt erkannter, früher erzwungener Standardbaustein; die Phase-2A-Ersatzfassung ist bereits festgelegt.",
     };
   }
-  if (key === "description" && text.endsWith(LEGACY_FIXED_DESCRIPTION_CTA)) {
+  const legacyCtaStart = rawText.lastIndexOf(LEGACY_FIXED_DESCRIPTION_CTA);
+  if (key === "description"
+    && legacyCtaStart >= 0
+    && legacyCtaStart + LEGACY_FIXED_DESCRIPTION_CTA.length === rawText.trimEnd().length
+    && issue.position >= legacyCtaStart) {
     return {
       action: PHASE2B_TREATMENT.SAFE_DETERMINISTIC_REPLACEMENT,
       rationale: "Exakt erkannter, früher erzwungener Abschlussbaustein; nur dieser statische Abschluss kann später ersetzt werden.",
@@ -84,11 +89,53 @@ function severityCounts(findings) {
   }, { BLOCK: 0, REVIEW: 0 });
 }
 
-function treatmentCounts(findings, scannedListingCount) {
+function treatmentCounts(entries, scannedListingCount) {
   const counts = Object.values(PHASE2B_TREATMENT).reduce((result, action) => ({ ...result, [action]: 0 }), {});
-  for (const finding of findings) counts[finding.proposedTreatment] += 1;
-  counts[PHASE2B_TREATMENT.NO_ACTION] = scannedListingCount - new Set(findings.map((finding) => finding.listingId)).size;
+  for (const entry of entries) counts[entry.proposedTreatment] += 1;
+  counts[PHASE2B_TREATMENT.NO_ACTION] = scannedListingCount - new Set(entries.map((entry) => entry.listingId)).size;
   return counts;
+}
+
+function fieldTreatment(findings) {
+  const actions = new Set(findings.map((finding) => finding.proposedTreatment));
+  if (actions.has(PHASE2B_TREATMENT.MANUAL_REVIEW)) return PHASE2B_TREATMENT.MANUAL_REVIEW;
+  if (actions.has(PHASE2B_TREATMENT.REGENERATE_FIELD)) return PHASE2B_TREATMENT.REGENERATE_FIELD;
+  return PHASE2B_TREATMENT.SAFE_DETERMINISTIC_REPLACEMENT;
+}
+
+function fieldPlans(findings) {
+  const grouped = new Map();
+  for (const finding of findings) {
+    const key = `${finding.listingId}:${finding.field}`;
+    const group = grouped.get(key) || [];
+    group.push(finding);
+    grouped.set(key, group);
+  }
+
+  return [...grouped.values()].map((fieldFindings) => {
+    const first = fieldFindings[0];
+    const proposedTreatment = fieldTreatment(fieldFindings);
+    const categories = [...new Set(fieldFindings.map((finding) => finding.category))];
+    const excerpts = [...new Set(fieldFindings.map((finding) => finding.excerpt))];
+    const safeOnly = fieldFindings.every((finding) => finding.proposedTreatment === PHASE2B_TREATMENT.SAFE_DETERMINISTIC_REPLACEMENT);
+    return {
+      listingId: first.listingId,
+      externalId: first.externalId,
+      house: first.house,
+      projectId: first.projectId,
+      project: first.project,
+      field: first.field,
+      categories,
+      severity: fieldFindings.some((finding) => finding.severity === "BLOCK") ? "BLOCK" : "REVIEW",
+      claimCount: fieldFindings.length,
+      excerpts: excerpts.slice(0, 3),
+      omittedExcerptCount: Math.max(0, excerpts.length - 3),
+      proposedTreatment,
+      treatmentRationale: safeOnly
+        ? first.treatmentRationale
+        : "Das Feld enthält mindestens einen nicht eindeutig als statisch nachweisbaren Claim. Deshalb ist für das gesamte Feld eine manuelle Prüfung erforderlich.",
+    };
+  });
 }
 
 /**
@@ -132,6 +179,7 @@ export function scanPhase2BClaims(state = {}, options = {}) {
           category: issue.category,
           severity: issue.severity,
           excerpt: issue.excerpt,
+          position: issue.position,
           proposedTreatment: treatment.action,
           treatmentRationale: treatment.rationale,
         });
@@ -140,17 +188,20 @@ export function scanPhase2BClaims(state = {}, options = {}) {
   }
 
   const affectedListingIds = new Set(findings.map((finding) => finding.listingId));
+  const plans = fieldPlans(findings);
   return {
     format: 1,
     readOnly: true,
     scannedAt: clean(options.now) || new Date().toISOString(),
     scannedListingCount: scannedListings.length,
     affectedListingCount: affectedListingIds.size,
-    affectedFieldCount: new Set(findings.map((finding) => `${finding.listingId}:${finding.field}`)).size,
+    affectedFieldCount: plans.length,
     severityCounts: severityCounts(findings),
-    treatmentCounts: treatmentCounts(findings, scannedListings.length),
+    treatmentCounts: treatmentCounts(plans, scannedListings.length),
+    findingTreatmentCounts: treatmentCounts(findings, scannedListings.length),
     scannedListings,
     findings,
+    fieldPlans: plans,
   };
 }
 
@@ -163,24 +214,25 @@ export function formatPhase2BScanMarkdown(report) {
     ["Gescannt", report.scannedListingCount],
     ["Betroffene Inserate", report.affectedListingCount],
     ["Betroffene Felder", report.affectedFieldCount],
-    ["BLOCK", report.severityCounts.BLOCK],
-    ["REVIEW", report.severityCounts.REVIEW],
+    ["BLOCK-Claim-Treffer", report.severityCounts.BLOCK],
+    ["REVIEW-Claim-Treffer", report.severityCounts.REVIEW],
     ...Object.values(PHASE2B_TREATMENT).map((action) => [action, report.treatmentCounts[action]]),
   ];
-  const rows = report.findings.map((finding) => [
-    finding.listingId,
-    finding.house,
-    finding.project,
-    finding.field,
-    finding.category,
-    finding.severity,
-    finding.excerpt,
-    finding.proposedTreatment,
+  const rows = report.fieldPlans.map((plan) => [
+    plan.listingId,
+    plan.house,
+    plan.project,
+    plan.field,
+    plan.categories.join(", "),
+    plan.severity,
+    plan.claimCount,
+    `${plan.excerpts.join(" / ")}${plan.omittedExcerptCount ? ` (+${plan.omittedExcerptCount} weitere)` : ""}`,
+    plan.proposedTreatment,
   ]);
   const table = rows.length
     ? [
-      "| Interne ID | Haus | Projekt | Feld | Kategorie | Severity | Textausschnitt | Behandlung |",
-      "| --- | --- | --- | --- | --- | --- | --- | --- |",
+      "| Interne ID | Haus | Projekt | Feld | Kategorien | Severity | Claims | Textausschnitt | Behandlung |",
+      "| --- | --- | --- | --- | --- | ---: | ---: | --- | --- |",
       ...rows.map((row) => `| ${row.map(markdownCell).join(" | ")} |`),
     ].join("\n")
     : "Keine betroffenen aktiven Inserate gefunden.";
@@ -195,13 +247,13 @@ Stand: ${markdownCell(report.scannedAt)}
 | --- | ---: |
 ${summary.map(([label, value]) => `| ${markdownCell(label)} | ${value} |`).join("\n")}
 
-## Konkrete Treffer
+## Konkrete Feldmaßnahmen
 
 ${table}
 
 ## Empfehlung
 
-Nur Treffer mit \`SAFE_DETERMINISTIC_REPLACEMENT\` können in Phase 2B feldgenau durch den bereits freigegebenen Ersatzbaustein ersetzt werden. \`MANUAL_REVIEW\` bleibt bis zu einer belegten Herkunfts- oder Freigabeentscheidung unverändert. Dieser Scan verändert keine Katalog-, Inserat-, Archiv- oder Uploaddaten.`;
+Die Kategorien sind feldbezogen: Bei einem gemischten Feld hat \`MANUAL_REVIEW\` stets Vorrang. Nur Felder mit \`SAFE_DETERMINISTIC_REPLACEMENT\` können in Phase 2B feldgenau durch den bereits freigegebenen Ersatzbaustein ersetzt werden. \`MANUAL_REVIEW\` bleibt bis zu einer belegten Herkunfts- oder Freigabeentscheidung unverändert. Dieser Scan verändert keine Katalog-, Inserat-, Archiv- oder Uploaddaten.`;
 }
 
 export const PHASE2B_SCAN_READ_ONLY_GUARANTEE = Object.freeze({
