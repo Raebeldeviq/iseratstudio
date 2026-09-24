@@ -41,6 +41,53 @@ export type HouseImage = {
   eligibleForListingHero?: boolean;
 };
 
+/**
+ * Evidenzgebundene Fakten für werbliche technische Aussagen. Legacy-Felder wie
+ * energyClass oder heatingType sind bewusst kein Ersatz für diesen Datensatz.
+ */
+export type ListingFactScope =
+  | "component"
+  | "technical_system"
+  | "house"
+  | "house_series"
+  | "project"
+  | "company";
+
+export type ListingFactStatus =
+  | "verified"
+  | "contract_included"
+  | "planned"
+  | "optional"
+  | "unknown";
+
+export type ListingFactSource =
+  | "project"
+  | "house_template"
+  | "verified_series"
+  | "optional_package"
+  | "legacy_default"
+  | "unknown";
+
+export type ListingFactEvidenceKind =
+  | "projected_house_value"
+  | "energy_certificate";
+
+export type ListingComplianceFact = {
+  key: string;
+  value: string | number | boolean;
+  source: string;
+  sourceKind?: ListingFactSource;
+  scope: ListingFactScope;
+  status: ListingFactStatus;
+  verified: boolean;
+  approvedForListing?: boolean;
+  evidenceReference?: string;
+  evidenceKind?: ListingFactEvidenceKind;
+  seriesId?: string;
+  validFrom?: string;
+  validUntil?: string;
+};
+
 export type PromotionImageAsset = HouseImage & {
   active: boolean;
   priority: number;
@@ -134,6 +181,8 @@ export type HouseDistributionState = {
 export type HouseTemplate = {
   id: string;
   approved?: boolean;
+  /** Optional persisted marker; the current Studio context supplies livinghaus without migrating legacy records. */
+  seriesId?: string;
   name: string;
   houseType: string;
   livingArea: number;
@@ -150,6 +199,7 @@ export type HouseTemplate = {
   architecture: string;
   equipmentHighlights: string;
   useStandardPackage: boolean;
+  listingFacts?: ListingComplianceFact[];
   images: HouseImage[];
 };
 
@@ -201,6 +251,7 @@ export type ProjectInput = {
   transportFacts: string;
   familyFacts: string;
   natureFacts: string;
+  listingFacts?: ListingComplianceFact[];
   selectedHouseIds: string[];
   listings: GeneratedListing[];
   listingGroup?: ListingGroup;
@@ -245,6 +296,7 @@ export type GeneratedListing = {
   templateName: string;
   price: number;
   texts: ListingTexts;
+  listingFacts?: ListingComplianceFact[];
   version: number;
   projectingSettings?: ProjectingSettings;
   listingGroupVariantId?: string;

@@ -4,6 +4,7 @@ import JSZip from "jszip";
 
 import { parseHouseVariant } from "./image-sequence.mjs";
 import { enforceListingCopy } from "./listing-copy.mjs";
+import { assertListingClaimsCompliant, LIVING_HAUS_SERIES_ID } from "./listing-claim-policy.mjs";
 
 export const CREATIVE_PAYLOAD_MISMATCH = "CREATIVE_PAYLOAD_MISMATCH";
 export const PRODUCTION_CREATIVE_SELECTION_MISSING = "PRODUCTION_CREATIVE_SELECTION_MISSING";
@@ -114,7 +115,7 @@ export async function verifyCreativePayload(input) {
     if (!zippedXml.includes(`<user_defined_simplefield feldname="Living Haus Modell">${cdataValue(house?.name)}</user_defined_simplefield>`)) errors.push("Payload enthält nicht den erwarteten Hausnamen.");
     if (!zippedXml.includes(`<wohnflaeche>${xmlValue(payloadNumber(house?.livingArea))}</wohnflaeche>`)) errors.push("Payload-Wohnfläche stimmt nicht mit dem ausgewählten Haus überein.");
     if (!zippedXml.includes(`<kaufpreis>${xmlValue(payloadNumber(listing?.price))}</kaufpreis>`)) errors.push("Payload-Kaufpreis stimmt nicht mit der persistierten Rotationskopie überein.");
-    for (const [tag, field] of [["anzahl_zimmer", "rooms"], ["anzahl_schlafzimmer", "bedrooms"], ["anzahl_badezimmer", "bathrooms"], ["anzahl_etagen", "floors"], ["endenergiebedarf", "energyDemand"]]) {
+    for (const [tag, field] of [["anzahl_zimmer", "rooms"], ["anzahl_schlafzimmer", "bedrooms"], ["anzahl_badezimmer", "bathrooms"], ["anzahl_etagen", "floors"]]) {
       if (!zippedXml.includes(`<${tag}>${xmlValue(payloadNumber(house?.[field]))}</${tag}>`)) {
         errors.push(`Payload-Hausdatenfeld ${field} stimmt nicht mit dem ausgewählten Haus überein.`);
       }
@@ -122,6 +123,14 @@ export async function verifyCreativePayload(input) {
     if (!zippedXml.includes(`<baujahr>${xmlValue(house?.constructionYear)}</baujahr>`)) errors.push("Payload-Baujahr stimmt nicht mit dem ausgewählten Haus überein.");
     if (project) {
       const expectedTexts = enforceListingCopy(listing?.texts, { house, project });
+      assertListingClaimsCompliant({
+        texts: listing?.texts,
+        house,
+        project,
+        listingFacts: listing?.listingFacts,
+        houseSeries: LIVING_HAUS_SERIES_ID,
+        images: house.images,
+      }, "Export blockiert");
       for (const [tag, field] of [["objekttitel", "title"], ["lage", "location"], ["ausstatt_beschr", "equipment"], ["objektbeschreibung", "description"], ["sonstige_angaben", "other"]]) {
         if (!zippedXml.includes(`<${tag}>${cdataValue(expectedTexts[field])}</${tag}>`)) {
           errors.push(`Payload-Textfeld ${field} stimmt nicht mit der ausgewählten Rotationskopie überein.`);

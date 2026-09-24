@@ -5,8 +5,13 @@ import {
   FIXED_DESCRIPTION_CTA,
   FIXED_EQUIPMENT_TEXT,
   FIXED_OTHER_TEXT,
-  HOUSE_ENERGY_DEFAULTS,
 } from "./listing-copy.mjs";
+import {
+  formatClaimIssue,
+  LIVING_HAUS_SERIES_ID,
+  releasedListingFacts,
+  validateListingClaims,
+} from "./listing-claim-policy.mjs";
 
 const DEFAULT_MODEL = "gpt-5.6-luna";
 const ALLOWED_MODELS = new Set([DEFAULT_MODEL, "gpt-5.6-terra", "gpt-5.6-sol"]);
@@ -17,9 +22,9 @@ const MAX_IMAGE_CAPTIONS = 14;
 const FIELD_RULES = {
   title: { min: 55, max: 220, label: "Überschrift" },
   description: { min: 700, max: 6000, label: "Objektbeschreibung" },
-  equipment: { min: 2000, max: 7000, label: "Ausstattung" },
+  equipment: { min: 550, max: 7000, label: "Ausstattung" },
   location: { min: 350, max: 3500, label: "Lage" },
-  other: { min: 700, max: 3500, label: "Sonstiges" },
+  other: { min: 350, max: 3500, label: "Sonstiges" },
 };
 
 const SYSTEM_PROMPT = `Du bist ein sehr erfahrener deutscher Immobilienredakteur für hochwertige, verkaufsstarke und zugleich sachlich saubere Neubau-Exposés von Living Haus.
@@ -40,7 +45,11 @@ Verbindliche Qualitätsregeln:
 10. Weiche deutlich von eventuell gelieferten bisherigen Texten ab: neuer Einstieg, andere Satzstruktur, andere Reihenfolge und frische Formulierungen. Zahlen, Eigennamen und verbindliche Fachbegriffe bleiben unverändert.
 11. Formuliere rechtlich vorsichtig: projektiert/geplant, soweit technisch, planerisch und baurechtlich möglich; endgültige Energiekennwerte gemäß konkreter Planung und Energieausweis; maßgeblich sind individuelle Vereinbarungen und die Bau- und Leistungsbeschreibung.
 12. Prüfe vor der Ausgabe intern Grammatik, Rechtschreibung, Zahlenkonsistenz, Dopplungen und unbelegte Behauptungen.
-13. Die Anwendung erstellt die endgültige Überschrift aus emotionalem Nutzen, Ort beziehungsweise Ortsteil, gerundeter Wohnfläche, Zimmerzahl und zwei Vorteilen aus der Living-Haus-Checkliste. Erfinde dafür keine eigenen Förderzusagen.
+13. Erzeuge keine allgemeinen Umwelt-, Klima-, Nachhaltigkeits- oder Energieversprechen. Leite aus technischen Einzelmerkmalen niemals selbstständig eine positive Umwelt-, Nachhaltigkeits-, Klima-, Energie- oder Kostenwirkung ab.
+14. Technische Eigenschaften dürfen ausschließlich verwendet werden, wenn sie als strukturierte, freigegebene Fakten geliefert sind. Beachte stets Scope und Status: Ein Bauteil oder eine Anlage ist kein Merkmal des gesamten Hauses oder Projekts. Ein geplanter Fakt muss als geplant erkennbar bleiben.
+15. Zertifizierungen, Förderstandards und Nachhaltigkeitssiegel dürfen nur exakt in der Reichweite wiedergegeben werden, die der strukturierte Fakt belegt. Ein freigegebener house_series-Fakt darf nur als Serienmerkmal der zugehörigen Hausserie formuliert werden; er ist kein individueller Zertifikatsnachweis für das konkrete Objekt.
+16. Formuliere keine Umweltwirkung aufgrund einer CO₂-Kompensation und keine zukünftige Umweltleistung aufgrund einer bloßen Planung.
+17. Die Anwendung erstellt die endgültige Überschrift aus Ort beziehungsweise Ortsteil, gerundeter Wohnfläche und Zimmerzahl. Erfinde dafür keine eigenen Förderzusagen oder technischen Vorteile.
 Gib ausschließlich das verlangte JSON aus.`;
 
 function cleanString(value, maxLength = 12000) {
@@ -87,7 +96,7 @@ function publicProject(project = {}) {
   };
 }
 
-function publicHouse(house = {}) {
+function publicHouse(house = {}, listingFacts = []) {
   return {
     name: cleanString(house.name, 180),
     houseType: cleanString(house.houseType, 120),
@@ -98,13 +107,22 @@ function publicHouse(house = {}) {
     floors: finiteNumber(house.floors),
     housePriceEuro: finiteNumber(house.housePrice),
     plannedConstructionYear: finiteNumber(house.constructionYear),
-    plannedEnergyDemandKwhPerSquareMeterYear: finiteNumber(house.energyDemand),
-    plannedEnergyClass: HOUSE_ENERGY_DEFAULTS.energyClass,
-    plannedHeatingType: HOUSE_ENERGY_DEFAULTS.heatingType,
-    plannedEnergySource: HOUSE_ENERGY_DEFAULTS.energySource,
     architectureAndFloorPlan: cleanString(house.architecture),
-    configuredEquipmentHighlights: cleanString(house.equipmentHighlights),
-    standardPackageApproved: house.useStandardPackage !== false,
+    releasedListingFacts: releasedListingFacts({
+      house,
+      listingFacts,
+      houseSeries: LIVING_HAUS_SERIES_ID,
+    }).map((fact) => ({
+      key: fact.key,
+      value: fact.value,
+      source: fact.source,
+      sourceKind: fact.sourceKind,
+      scope: fact.scope,
+      status: fact.status,
+      verified: fact.verified,
+      evidenceReference: fact.evidenceReference || undefined,
+      evidenceKind: fact.evidenceKind || undefined,
+    })),
   };
 }
 
@@ -116,26 +134,8 @@ function publicProvider(provider = {}) {
   };
 }
 
-function standardPackageFacts(enabled) {
-  if (!enabled) return [];
-  return [
-    "Individuelle Küchenplanung; konkrete Ausführung gemäß Vereinbarung.",
-    "Digitales Living Haus Bau-Cockpit für Termine, Unterlagen und Kommunikation.",
-    "I-KON-Konzept mit moderner Gebäudehülle, Photovoltaikanlage und Batteriespeicher; Effizienzhaus 40 QNG ist geplant, endgültige Einordnung gemäß konkreter Planung.",
-    "Zuhause-Darlehen: Finanzierungsmöglichkeiten bis zu 250.000 Euro abhängig von individuellen Voraussetzungen; keine Zusage behaupten.",
-    "Zuhause-Paket mit aufeinander abgestimmten Bodenbelägen, Innentüren und Sanitärelementen gemäß individueller Bau- und Leistungsbeschreibung.",
-    "Dreitägiges DIY-Ausbau-Coaching für ausgewählte Eigenleistungen.",
-    "18-monatige Festpreisgarantie ab Auftragsbestätigung; Preisanpassung nach unten bei sinkenden maßgeblichen Baupreisen gemäß Vertragsbedingungen.",
-    "Bauversicherungen gemäß Leistungsbeschreibung, darunter Bauherrenhaftpflicht, Bauleistung, Wohngebäude und Bauhelfer-Unfall.",
-    "DGNB-Serienzertifizierung in Gold, QDF-Zertifizierung und digitale Hausbauakte.",
-    "30 Jahre Garantie auf die Grundkonstruktion und fünf Jahre Gewährleistung für weitere Bauleistungen gemäß Bedingungen.",
-    "Wärmepumpentechnik und Komfortlüftung mit Wärmerückgewinnung gemäß Planung.",
-    "Zwei Tage persönliche Ausstattungsberatung, Bauantragsplanung und Bodengutachten gemäß Leistungsbeschreibung.",
-  ];
-}
-
 export function buildSourceData(input = {}, retryFeedback = []) {
-  const house = publicHouse(input.house);
+  const house = publicHouse(input.house, input.listingFacts);
   const previousTexts = input.previousTexts && typeof input.previousTexts === "object"
     ? Object.fromEntries(["description", "location"].map((field) => [field, withoutPrivateLocationReferences(input.previousTexts[field], input.project).slice(0, 8000)]))
     : null;
@@ -153,7 +153,7 @@ export function buildSourceData(input = {}, retryFeedback = []) {
       + finiteNumber(input.project?.plotPrice)
       + finiteNumber(input.project?.additionalCosts),
     provider: publicProvider(input.provider),
-    approvedLivingHouseStandardFacts: standardPackageFacts(house.standardPackageApproved),
+    manufacturerOrSeriesInformation: "Zertifizierungen, Serienmerkmale, Förderstandards und technische Merkmale dürfen nur exakt aus releasedListingFacts und nur in der dort belegten Reichweite übernommen werden.",
     previousTextsToAvoid: previousTexts,
     qualityProblemsFromPreviousAttempt: retryFeedback,
     writingDirection: {
@@ -315,7 +315,7 @@ export function validateListingTexts(texts, house = {}, project = {}) {
   const title = typeof texts.title === "string" ? texts.title.trim() : "";
   const requiredTitle = buildListingHeadline(house, project);
   if (title && finiteNumber(house.livingArea) > 0 && finiteNumber(house.rooms) > 0 && (project.city || project.district) && title !== requiredTitle) {
-    errors.push("Die Überschrift enthält nicht vollständig Ort, gerundete Wohnfläche, Zimmer und die vorgesehenen Checklisten-Vorteile.");
+    errors.push("Die Überschrift enthält nicht vollständig Ort, gerundete Wohnfläche und Zimmer.");
   }
   if (texts.description && !String(texts.description).trim().endsWith(FIXED_DESCRIPTION_CTA)) {
     errors.push("Der feste Call-to-Action der Objektbeschreibung fehlt oder wurde verändert.");
@@ -470,11 +470,19 @@ export async function generateAiListing(input = {}) {
   let feedback = [];
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const rawTexts = await requestOnce(apiKey, input, feedback);
-    const texts = enforceListingCopy(rawTexts, { house: input.house, project: input.project });
+    const texts = enforceListingCopy(rawTexts, { house: input.house, project: input.project, generated: true });
+    const claimValidation = validateListingClaims({
+      texts,
+      house: input.house,
+      project: input.project,
+      listingFacts: input.listingFacts,
+      houseSeries: LIVING_HAUS_SERIES_ID,
+    });
     feedback = [
       ...validateListingTexts(texts, input.house, input.project),
       ...validateNovelty(texts, input.previousTexts),
       ...validateLocationPrivacy(texts, input.project),
+      ...claimValidation.blockingIssues.map(formatClaimIssue),
     ];
     if (!feedback.length) {
       return {
@@ -528,6 +536,20 @@ export async function generateAiImageCaptions(input = {}) {
   if (captions.length !== images.length) {
     const error = new Error("Die KI konnte nicht für jedes Bild einen verlässlichen Kurztext erstellen.");
     error.httpStatus = 422;
+    throw error;
+  }
+
+  const claimValidation = validateListingClaims({
+    images: captions.map((caption) => ({ id: caption.id, caption: caption.caption })),
+    house: input.house,
+    project: input.project,
+    listingFacts: input.listingFacts,
+    houseSeries: LIVING_HAUS_SERIES_ID,
+  });
+  if (claimValidation.blockingIssues.length) {
+    const error = new Error(`Die KI-Bildtexte haben die Compliance-Prüfung nicht bestanden: ${formatClaimIssue(claimValidation.blockingIssues[0])}`);
+    error.httpStatus = 422;
+    error.claimIssues = claimValidation.blockingIssues;
     throw error;
   }
 

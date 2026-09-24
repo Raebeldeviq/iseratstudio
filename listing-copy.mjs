@@ -1,35 +1,22 @@
 const DESCRIPTION_CTA_START =
-  "Ruf direkt an und sichere dir deine professionelle und transparente Beratung für energieeffizientes Bauen:";
+  "Ruf direkt an und vereinbare deine persönliche Beratung zu Hausplanung und Grundstück:";
 
-export const FIXED_DESCRIPTION_CTA = `Ruf direkt an und sichere dir deine professionelle und transparente Beratung für energieeffizientes Bauen: +49 160 930 87 202.
-Nur mit dem richtigen Partner macht Bauen richtig Spaß und führt zu dem gewünschten Ergebnis.`;
+export const FIXED_DESCRIPTION_CTA = `Ruf direkt an und vereinbare deine persönliche Beratung zu Hausplanung und Grundstück: +49 160 930 87 202.
+Gemeinsam besprechen wir den aktuellen Planungsstand, mögliche Ausstattungsoptionen und die nächsten Schritte.`;
 
-export const FIXED_EQUIPMENT_TEXT = `Bei Livinghaus erlebst du Hausbau auf einem völlig neuen Level – so einfach, transparent und rundum betreut wie nie zuvor. Hier bekommst du alles, was dein Bauvorhaben braucht, direkt aus einer Hand und bereits im Preis enthalten: von der Bodenplatte über sämtliche Bauherren-Versicherungen bis zu Architektur- und Planungsleistungen, Grundstücks- und Finanzierungsservice und der Festpreisgarantie, die dir absolute Kosten- und Terminsicherheit gibt.
+export const FIXED_EQUIPMENT_TEXT = `Die konkrete Ausstattung wird für dieses Hausprojekt in der individuellen Bau- und Leistungsbeschreibung dokumentiert. Sie bildet zusammen mit der Planung und den vertraglichen Vereinbarungen die maßgebliche Grundlage für Umfang, Ausführung und enthaltene Leistungen.
 
-Das Herzstück ist das IKON-Prinzip – die perfekte Verbindung aus Energieeffizienz, Komfort und nachhaltiger Technik. Photovoltaik-Anlage, Batteriespeicher, Wärmepumpenheizung mit Komfortlüftung und Wärmerückgewinnung sowie die ideal gedämmte Gebäudehülle sind bei Living Haus standardmäßig integriert. Das bedeutet für dich: dauerhaft niedrige Energiekosten, ein gesundes Wohnklima und zukunftssichere Technik, die vom ersten Tag an funktioniert.
+Materialien, Oberflächen, Sanitärausstattung, Küchenplanung und weitere Details werden im Bemusterungs- und Planungsprozess abgestimmt. Abweichungen zwischen Visualisierungen, Grundrissen und der späteren Ausführung sind möglich; verbindlich sind ausschließlich die für das konkrete Projekt vereinbarten Unterlagen.
 
-Auch im Inneren setzt Living Haus Maßstäbe: Die hochwertige Einbauküche ist direkt im angegebenen Preis enthalten und wird gleich mitgeplant und eingebaut. Du ziehst also in ein Haus ein, das von Beginn an perfekt auf dein Leben abgestimmt ist – ohne zusätzliche Abstimmungsrunden oder teure Nachkäufe.
+Technische Anlagen oder energetische Kennwerte werden in diesem Inserat nur genannt, wenn sie für das konkrete Angebot strukturiert belegt und für die jeweilige Aussage freigegeben sind. Bei projektierten Merkmalen bleibt der Planungsstatus ausdrücklich erkennbar.`;
 
-Ob du selbst mit anpacken willst oder alles fix und fertig übergeben bekommst – du entscheidest. Das exklusive Zuhause-Paket liefert dir sämtliche Materialien direkt vor die Haustür, und professionelle Ausbau-Coachings sowie digitale Ausbau-Tutorials führen dich Schritt für Schritt. Damit wird Selbermachen zum echten Erlebnis – oder du genießt das komplette Rundum-sorglos-Paket.
+export const FIXED_OTHER_TEXT = `Das angebotene Grundstück und die Hausplanung bilden die Grundlage dieses projektierten Angebots. Maßgeblich für Preis, Leistungsumfang und Zustandekommen eines Vertrags sind die individuellen Vereinbarungen.
 
-Mit der Bau-Cockpit-App hast du jedes Detail im Blick: alle Termine, jeden Baufortschritt, jedes Dokument. So einfach war Hausbau noch nie. Die DGNB-Zertifizierung garantiert dir geprüfte Nachhaltigkeit und langfristige Wertbeständigkeit – für ein Zuhause, das auch in Zukunft überzeugt.
+Zusätzliche Baunebenkosten sowie grundstücks- und projektbezogene Positionen können hinzukommen. Diese werden im persönlichen Gespräch und in der individuellen Kalkulation erläutert.
 
-Und das Wichtigste: Ich, Pascal Fröhlich – dein persönlicher Living Haus Berater in Berlin-Brandenburg – begleite dich von der ersten Idee bis zum Einzug. Du bist bei mir und meinem Team rundum bestens aufgehoben, bekommst eine klare, ehrliche Beratung und einen Ansprechpartner, der dein Projekt mit voller Leidenschaft vorantreibt.
+Die Hausabbildungen, Grundrisse und Bilder der Inneneinrichtung können beispielhafte Ausstattungen, Möblierungen oder Extras zeigen, die nicht im angegebenen Kaufpreis enthalten sind.
 
-Livinghaus bedeutet: maximaler Komfort, volle Sicherheit und ein Kundenerlebnis, das Maßstäbe setzt. So unkompliziert, planbar und inspirierend war der Weg ins eigene Haus noch nie.
-👉 Ruf mich direkt an und sichere dir deine persönliche Beratung: +49 160 930 87 202.`;
-
-export const FIXED_OTHER_TEXT = `Das hier angebotene Grundstück ist im obigen Preis eingerechnet, es wird ohne zusätzliche Provision an einen Living Haus-Bauherren bereitgestellt.
-
-Zusätzliche Baunebenkosten müssen noch hinzugerechnet werden, hierüber beraten wir dich gern.
-
-Wir bieten auch interessante Finanzierungsmöglichkeiten inklusive Beantragung aller Fördermittel!
-
-Die Hausabbildungen und die Bilder der Inneneinrichtung zeigen möglicherweise Extras, die nicht im angegebenen Kaufpreis inbegriffen sind.
-
-Gute Beratung ist der Anfang von Allem. Deshalb analysieren wir gemeinsam mit euch eure Vorstellungen, Wünsche und Bedürfnisse und finden so das für Dich und Deine Familie passende Living Haus.
-
-Interessiert? Kontaktiere mich und vereinbare noch heute einen kostenlosen und unverbindlichen Beratungstermin unter +49160 93087 202`;
+Gerne besprechen wir Ihre Vorstellungen, die Grundstückssituation und die nächsten Schritte in einem persönlichen Beratungstermin.`;
 
 export const FACTUAL_BUILDABILITY_NOTE =
   "Die konkrete Bebaubarkeit und Positionierung des Hauses werden im weiteren Planungsverlauf anhand der Grundstücksgegebenheiten und der öffentlich-rechtlichen Vorgaben geprüft und abgestimmt.";
@@ -58,14 +45,14 @@ export const IMMOPROFESSIONAL_DEFAULTS = Object.freeze({
   attic: true,
   guestWc: true,
   gardenUse: true,
-  underfloorHeating: true,
-  electricFuel: true,
-  airSourceHeatPump: true,
-  kfw40: true,
-  kfw55: true,
-  energyClass: "A++",
+  underfloorHeating: false,
+  electricFuel: false,
+  airSourceHeatPump: false,
+  kfw40: false,
+  kfw55: false,
+  energyClass: "",
   commissionRequired: false,
-  energyCertificateClass: "A+",
+  energyCertificateClass: "",
   fittedKitchen: true,
   openKitchen: true,
   shower: true,
@@ -76,9 +63,9 @@ export const IMMOPROFESSIONAL_DEFAULTS = Object.freeze({
 });
 
 export const HOUSE_ENERGY_DEFAULTS = Object.freeze({
-  energyClass: IMMOPROFESSIONAL_DEFAULTS.energyClass,
-  heatingType: "Fußbodenheizung mit Luft-Wasser-Wärmepumpe",
-  energySource: "Umweltwärme und Strom",
+  energyClass: "",
+  heatingType: "",
+  energySource: "",
 });
 
 export const IMMOPROFESSIONAL_ENVIRONMENT_OPTIONS = Object.freeze([
@@ -137,19 +124,10 @@ export function projectingEnvironmentLabels(values = {}) {
 }
 
 const HEADLINE_OPENINGS = Object.freeze([
-  "Dein sicheres Zuhause",
-  "Dein planbares Familienzuhause",
-  "Dein zukunftsstarkes Zuhause",
-  "Dein neues Zuhause mit Sicherheit",
-]);
-
-const CHECKLIST_BENEFIT_PAIRS = Object.freeze([
-  "QNG-Potenzial und 18 Monate Festpreis",
-  "I-KON-Technik und digitales Bau-Cockpit",
-  "DGNB-Gold und 30 Jahre Garantie",
-  "Zuhause-Darlehen und starke Bauversicherungen",
-  "individuelle Küchenplanung und DIY-Coaching",
-  "Wärmepumpe und Komfortlüftung",
+  "Dein neues Familienzuhause",
+  "Raum für deinen Alltag",
+  "Dein projektierter Wohntraum",
+  "Platz für Familie und Leben",
 ]);
 
 function hash(value) {
@@ -195,10 +173,9 @@ export function listingPlace(project = {}) {
 export function buildListingHeadline(house = {}, project = {}) {
   const seed = `${clean(house.id)}:${clean(house.name)}:${listingPlace(project)}:${finiteNumber(house.livingArea)}:${finiteNumber(house.rooms)}`;
   const opening = HEADLINE_OPENINGS[hash(`${seed}:opening`) % HEADLINE_OPENINGS.length];
-  const benefits = CHECKLIST_BENEFIT_PAIRS[hash(`${seed}:benefits`) % CHECKLIST_BENEFIT_PAIRS.length];
   const area = germanNumber(Math.round(finiteNumber(house.livingArea)));
   const rooms = germanNumber(house.rooms, 1);
-  return `${opening} in ${listingPlace(project)}: ${area} m², ${rooms} Zimmer, ${benefits}!`;
+  return `${opening} in ${listingPlace(project)}: ca. ${area} m² Wohnfläche und ${rooms} Zimmer`;
 }
 
 function descriptionBody(value) {
@@ -213,14 +190,26 @@ function descriptionBody(value) {
     .trim();
 }
 
-export function enforceListingCopy(texts = {}, { house = {}, project = {} } = {}) {
-  const body = descriptionBody(texts.description);
+export function enforceListingCopy(texts = {}, {
+  house = {},
+  project = {},
+  generated = false,
+  allowGeneratedEquipment = false,
+} = {}) {
+  const suppliedDescription = clean(texts.description);
+  const body = descriptionBody(suppliedDescription);
   return {
-    title: buildListingHeadline(house, project),
-    description: body ? `${body}\n\n${FIXED_DESCRIPTION_CTA}` : FIXED_DESCRIPTION_CTA,
-    equipment: FIXED_EQUIPMENT_TEXT,
-    location: cleanSalesLocationText(texts.location),
-    other: FIXED_OTHER_TEXT,
+    title: generated ? buildListingHeadline(house, project) : clean(texts.title) || buildListingHeadline(house, project),
+    description: generated
+      ? (body ? `${body}\n\n${FIXED_DESCRIPTION_CTA}` : FIXED_DESCRIPTION_CTA)
+      : suppliedDescription || FIXED_DESCRIPTION_CTA,
+    equipment: generated && allowGeneratedEquipment && clean(texts.equipment)
+      ? clean(texts.equipment)
+      : generated
+        ? FIXED_EQUIPMENT_TEXT
+        : clean(texts.equipment) || FIXED_EQUIPMENT_TEXT,
+    location: generated ? cleanSalesLocationText(texts.location) : clean(texts.location),
+    other: generated ? FIXED_OTHER_TEXT : clean(texts.other) || FIXED_OTHER_TEXT,
   };
 }
 
