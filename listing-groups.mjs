@@ -242,6 +242,7 @@ export function createHouseVariantSnapshot(house) {
     heatingType: String(house.heatingType || ""), energySource: String(house.energySource || ""),
     architecture: String(house.architecture || ""), equipmentHighlights: String(house.equipmentHighlights || ""),
     useStandardPackage: house.useStandardPackage !== false,
+    technicalPackage: String(house.technicalPackage || ""),
     images: Array.isArray(house.images) ? house.images.map((image) => ({
       id: String(image.id || ""), name: String(image.name || ""), caption: String(image.caption || ""),
       mimeType: String(image.mimeType || ""), isFloorplan: image.isFloorplan === true,
@@ -361,7 +362,7 @@ export function validateListingGroupVariant(variant, house, options = {}) {
   for (const key of [
     "id", "name", "houseType", "livingArea", "rooms", "bedrooms", "bathrooms", "floors",
     "housePrice", "constructionYear", "energyDemand", "energyClass", "heatingType", "energySource",
-    "architecture", "equipmentHighlights", "useStandardPackage",
+    "architecture", "equipmentHighlights", "useStandardPackage", "technicalPackage",
   ]) {
     if (!valuesEqual(variant.houseSnapshot[key], currentSnapshot[key])) issues.push(`Die gespeicherten Hausdaten sind bei „${key}“ nicht mehr aktuell.`);
   }

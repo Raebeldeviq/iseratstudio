@@ -329,7 +329,7 @@ test("prepared copy persists one coherent house, text, price, image and OpenImmo
   ));
   assert.match(copy.texts.equipment, /Endenergiebedarf von 18 kWh\/\(m²·a\) vorgesehen/u);
   assert.match(copy.texts.equipment, /DGNB-Serienzertifizierung/u);
-  assert.match(copy.texts.equipment, /QNG-Serienmerkmal/u);
+  assert.doesNotMatch(copy.texts.equipment, /QNG/u);
   assert.equal(copy.creativeSelection.houseId, copy.templateId);
   assert.equal(copy.creativeSelection.houseName, copy.templateName);
   assert.equal(copy.creativeSelection.heroAssetId, copy.creativeSelection.heroImageId);
