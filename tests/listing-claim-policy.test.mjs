@@ -121,17 +121,16 @@ test("releases only the fixed projected energy demand, never legacy defaults", (
     .includes(CLAIM_CATEGORY.UNVERIFIED_TECHNICAL_CLAIM));
 });
 
-test("inherits verified Living-Haus series facts only for the matching house series", () => {
+test("inherits only the verified DGNB series fact for the matching house series", () => {
   const context = { houseSeries: LIVING_HAUS_SERIES_ID };
   const released = releasedListingFacts(context);
   assert.ok(released.some((fact) => fact.key === "certification" && fact.sourceKind === FACT_SOURCE.VERIFIED_SERIES));
-  assert.ok(released.some((fact) => fact.key === "sustainability_label" && fact.sourceKind === FACT_SOURCE.VERIFIED_SERIES));
+  assert.equal(released.some((fact) => /qng/iu.test(String(fact.value))), false);
   assert.deepEqual(seriesFactSentences(context), [
     "Das projektierte Haus gehört zu einer Hausserie mit verifizierter DGNB-Serienzertifizierung.",
-    "Für die zugehörige Hausserie ist ein verifiziertes QNG-Serienmerkmal hinterlegt.",
   ]);
   assert.equal(validateListingClaims({
-    texts: { equipment: "Das projektierte Haus gehört zu einer Hausserie mit verifizierter DGNB-Serienzertifizierung. Für die zugehörige Hausserie ist ein verifiziertes QNG-Serienmerkmal hinterlegt." },
+    texts: { equipment: "Das projektierte Haus gehört zu einer Hausserie mit verifizierter DGNB-Serienzertifizierung." },
     ...context,
   }).ok, true);
   assert.ok(issueCategories("Dieses Haus trägt DGNB Gold.", [])
@@ -139,6 +138,41 @@ test("inherits verified Living-Haus series facts only for the matching house ser
   assert.ok(validateListingClaims({
     texts: { equipment: "Das projektierte Haus gehört zu einer Hausserie mit verifizierter DGNB-Serienzertifizierung." },
     houseSeries: "fremdhersteller",
+  }).blockingIssues.some((issue) => issue.category === CLAIM_CATEGORY.UNVERIFIED_CERTIFICATION));
+});
+
+test("keeps QNG planning, object certification and manufacturer QDF strictly separated", () => {
+  const qngProjectBasis = technicalFact("qng_project_basis", "QNG-Projektierungsgrundlage", {
+    source: FACT_SOURCE.VERIFIED_SERIES,
+    scope: FACT_SCOPE.HOUSE_SERIES,
+    seriesId: LIVING_HAUS_SERIES_ID,
+    evidenceReference: "Serienfreigabe QNG-Projektierungsgrundlage",
+  });
+  assert.equal(validateListingClaims({
+    texts: { equipment: "Für die Hausserie ist eine verifizierte QNG-Projektierungsgrundlage dokumentiert." },
+    listingFacts: [qngProjectBasis],
+    houseSeries: LIVING_HAUS_SERIES_ID,
+  }).ok, true);
+  assert.ok(validateListingClaims({
+    texts: { equipment: "Das konkrete Haus ist QNG-zertifiziert." },
+    listingFacts: [qngProjectBasis],
+    houseSeries: LIVING_HAUS_SERIES_ID,
+  }).blockingIssues.some((issue) => issue.category === CLAIM_CATEGORY.UNVERIFIED_SUSTAINABILITY_LABEL));
+
+  const qdfManufacturer = technicalFact("manufacturer_quality", "Qualitätsgemeinschaft Deutscher Fertigbau (QDF)", {
+    source: FACT_SOURCE.VERIFIED_MANUFACTURER,
+    scope: FACT_SCOPE.MANUFACTURER,
+    manufacturerId: "livinghaus",
+    evidenceReference: "Verifizierte Herstellerzuordnung und QDF-Nachweis",
+  });
+  const manufacturerContext = { listingFacts: [qdfManufacturer], manufacturerId: "livinghaus" };
+  assert.equal(validateListingClaims({
+    texts: { equipment: "Der Hersteller erfüllt die Qualitätsanforderungen der Qualitätsgemeinschaft Deutscher Fertigbau (QDF)." },
+    ...manufacturerContext,
+  }).ok, true);
+  assert.ok(validateListingClaims({
+    texts: { equipment: "Das konkrete Haus verfügt über eine QDF-Zertifizierung." },
+    ...manufacturerContext,
   }).blockingIssues.some((issue) => issue.category === CLAIM_CATEGORY.UNVERIFIED_CERTIFICATION));
 });
 
@@ -201,6 +235,13 @@ test("distinguishes a declared house-series certification from a concrete-object
     .includes(CLAIM_CATEGORY.UNVERIFIED_SUSTAINABILITY_LABEL));
 });
 
+test("blocks a DGNB Gold claim unless the verified series fact explicitly carries Gold", () => {
+  assert.ok(validateListingClaims({
+    texts: { equipment: "Für die Hausserie liegt eine DGNB-Serienzertifizierung in Gold vor." },
+    houseSeries: LIVING_HAUS_SERIES_ID,
+  }).blockingIssues.some((issue) => issue.category === CLAIM_CATEGORY.UNVERIFIED_CERTIFICATION));
+});
+
 test("scans captions and CTA texts without silently changing manual input", () => {
   const result = validateListingClaims({
     texts: { title: "Sachlicher Titel" },
@@ -249,7 +290,7 @@ test("deterministic generation uses only structured technical facts and otherwis
   assert.match(generated.equipment, /derzeitigen Planung ist eine Luft-Wasser-Wärmepumpe vorgesehen/u);
   assert.match(generated.equipment, /Endenergiebedarf von 18 kWh\/\(m²·a\) vorgesehen/u);
   assert.match(generated.equipment, /DGNB-Serienzertifizierung/u);
-  assert.match(generated.equipment, /QNG-Serienmerkmal/u);
+  assert.doesNotMatch(generated.equipment, /QNG/u);
   assert.doesNotMatch(generated.description, /nachhaltig|energieeffizient|dgnb|qng/iu);
 
   const completed = completeListingTexts(house, project, provider, {
@@ -268,7 +309,7 @@ test("deterministic generation uses only structured technical facts and otherwis
   assert.ok(completed.description.endsWith(FIXED_DESCRIPTION_CTA));
   assert.match(completed.equipment, /derzeitigen Planung ist eine Luft-Wasser-Wärmepumpe vorgesehen/u);
   assert.match(completed.equipment, /DGNB-Serienzertifizierung/u);
-  assert.match(completed.equipment, /QNG-Serienmerkmal/u);
+  assert.doesNotMatch(completed.equipment, /QNG/u);
   assert.equal(completed.other, FIXED_OTHER_TEXT);
 });
 

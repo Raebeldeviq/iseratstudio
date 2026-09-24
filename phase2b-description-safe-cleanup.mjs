@@ -20,7 +20,6 @@ import {
   FACT_SOURCE,
   FACT_STATUS,
   LIVING_HAUS_SERIES_ID,
-  seriesFactSentences,
   technicalFactSentences,
   validateListingClaims,
 } from "./listing-claim-policy.mjs";
@@ -138,45 +137,6 @@ function factsFor(context) {
   });
 }
 
-function qngSeriesReplacement(context) {
-  const fact = factsFor(context).find((candidate) => (
-    candidate.key === "sustainability_label"
-    && clean(candidate.value) === "QNG-Serienmerkmal"
-    && candidate.sourceKind === FACT_SOURCE.VERIFIED_SERIES
-    && candidate.scope === FACT_SCOPE.HOUSE_SERIES
-    && candidate.status === FACT_STATUS.VERIFIED
-    && candidate.verified === true
-    && candidate.seriesId === LIVING_HAUS_SERIES_ID
-    && clean(candidate.evidenceReference)
-  ));
-  if (!fact) {
-    throw new Error(`PHASE2B_DESCRIPTION_QNG_EVIDENCE_MISSING: ${context.listing.id} hat keinen freigegebenen QNG-Serienfakt.`);
-  }
-  const sentences = seriesFactSentences({
-    listingFacts: context.listing.listingFacts,
-    house: context.house,
-    project: context.project,
-    houseSeries: LIVING_HAUS_SERIES_ID,
-  }).filter((sentence) => /qng/iu.test(sentence));
-  if (sentences.length !== 1) {
-    throw new Error(`PHASE2B_DESCRIPTION_QNG_SENTENCE_MISSING: ${context.listing.id} liefert keine eindeutige zentrale QNG-Sachinformation.`);
-  }
-  if (descriptionBlocks(context, sentences[0]).length) {
-    throw new Error(`PHASE2B_DESCRIPTION_QNG_POLICY_FAILED: Die zentrale QNG-Sachinformation ist nicht policy-konform.`);
-  }
-  return {
-    text: sentences[0],
-    fact: {
-      key: fact.key,
-      value: fact.value,
-      sourceKind: fact.sourceKind,
-      scope: fact.scope,
-      status: fact.status,
-      evidenceReference: fact.evidenceReference,
-    },
-  };
-}
-
 function projectedEnergyReplacement(context, sentence) {
   const fact = factsFor(context).find((candidate) => (
     candidate.key === "energy_demand"
@@ -240,6 +200,13 @@ function replaceExactSentence(text, previous, replacement, code) {
   return text.replace(previous, replacement);
 }
 
+function removeExactSentence(text, sentence, code) {
+  return replaceExactSentence(text, sentence, "", code)
+    .replace(/[ \t]+\n/gu, "\n")
+    .replace(/\n{3,}/gu, "\n\n")
+    .trim();
+}
+
 function analysisScope(report) {
   const descriptionPlans = report.fieldPlans.filter((plan) => plan.field === "Objektbeschreibung");
   const descriptionFindings = report.findings.filter((finding) => (
@@ -293,7 +260,7 @@ function exactEntries(analysis) {
   ));
   const qngReplacements = analysis.entries.filter((entry) => (
     entry.cluster === CLUSTER.QNG
-    && entry.action === DESCRIPTION_ACTION.SAFE_FACT_REPLACEMENT
+    && entry.action === DESCRIPTION_ACTION.SAFE_REMOVE
   ));
   const energyClassRemovals = analysis.entries.filter((entry) => (
     entry.cluster === CLUSTER.ENERGY
@@ -310,8 +277,8 @@ function assertExecutableAnalysis(analysis, options) {
     || targets.qngReplacements.length !== expected.qngReplacements
     || targets.energyClassRemovals.length !== expected.energyClassRemovals
     || targets.human.length !== expected.protectedHumanSegments
-    || analysis.actionCounts.SAFE_REMOVE !== expected.environmentalHeadlines
-    || analysis.actionCounts.SAFE_FACT_REPLACEMENT !== expected.qngReplacements
+    || analysis.actionCounts.SAFE_REMOVE !== expected.environmentalHeadlines + expected.qngReplacements
+    || analysis.actionCounts.SAFE_FACT_REPLACEMENT !== 0
     || analysis.actionCounts.SAFE_PARTIAL_REMOVE !== expected.energyClassRemovals
     || analysis.actionCounts.REWRITE_SENTENCE !== 0
     || analysis.actionCounts.REWRITE_PARAGRAPH !== 0
@@ -356,12 +323,10 @@ function replacementFor(context, entry) {
     return { action: entry.action, text: undefined, apply: (current) => removeExactHeading(current, entry.sentence) };
   }
   if (entry.cluster === CLUSTER.QNG) {
-    const replacement = qngSeriesReplacement(context);
     return {
       action: entry.action,
-      text: replacement.text,
-      fact: replacement.fact,
-      apply: (current) => replaceExactSentence(current, entry.sentence, replacement.text, "PHASE2B_DESCRIPTION_QNG_SCOPE_CHANGED"),
+      text: undefined,
+      apply: (current) => removeExactSentence(current, entry.sentence, "PHASE2B_DESCRIPTION_QNG_SCOPE_CHANGED"),
     };
   }
   if (entry.cluster === CLUSTER.ENERGY) {

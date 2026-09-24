@@ -2,7 +2,6 @@ import {
   CLAIM_CATEGORY,
   collectListingFacts,
   FACT_SCOPE,
-  FACT_SOURCE,
   FACT_STATUS,
   LIVING_HAUS_SERIES_ID,
 } from "./listing-claim-policy.mjs";
@@ -151,25 +150,6 @@ function factualContext(context) {
   });
 }
 
-function hasVerifiedFact(facts, predicate) {
-  return facts.some((fact) => (
-    predicate(fact)
-    && fact.verified === true
-    && fact.sourceKind !== FACT_SOURCE.LEGACY_DEFAULT
-    && fact.sourceKind !== FACT_SOURCE.UNKNOWN
-  ));
-}
-
-function hasQngSeriesFact(facts) {
-  return hasVerifiedFact(facts, (fact) => (
-    fact.key === "sustainability_label"
-    && fact.value === "QNG-Serienmerkmal"
-    && fact.sourceKind === FACT_SOURCE.VERIFIED_SERIES
-    && fact.scope === FACT_SCOPE.HOUSE_SERIES
-    && fact.status === FACT_STATUS.VERIFIED
-  ));
-}
-
 function projectedDemandFact(facts, text) {
   const demand = facts.find((fact) => (
     fact.key === "energy_demand"
@@ -193,14 +173,13 @@ function classify(segment, facts) {
   const text = segment.sentence ?? segment.text;
   const lower = normalizedText(text);
   const categories = new Set(segment.categories);
-  const qngFact = hasQngSeriesFact(facts);
   const demandFact = projectedDemandFact(facts, text);
 
-  if (/effizienzhaus/u.test(lower) && /qng/u.test(lower) && qngFact) {
+  if (/effizienzhaus/u.test(lower) && /qng/u.test(lower)) {
     return {
-      action: DESCRIPTION_ACTION.SAFE_FACT_REPLACEMENT,
-      reason: "Der gesamte Werbesatz kann durch das dokumentierte QNG-Serienmerkmal ersetzt werden; Projektierungswerte dürfen nur ergänzend verwendet werden, wenn sie strukturiert hinterlegt sind.",
-      safeFacts: ["QNG-Serienmerkmal", ...(demandFact ? [`Projektierter Endenergiebedarf ${demandFact.value} kWh/(m²·a)`] : [])],
+      action: DESCRIPTION_ACTION.SAFE_REMOVE,
+      reason: "Die bisherige QNG-Formulierung enthält keinen hinreichend präzisen, freigegebenen Serien-, Projektierungs- oder Objektnachweis und wird nicht ersetzt.",
+      safeFacts: [],
     };
   }
   if (/energieeffizientes? i kon konzept/u.test(lower)

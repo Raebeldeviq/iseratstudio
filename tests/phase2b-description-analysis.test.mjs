@@ -63,11 +63,11 @@ test("analyses paragraphs read-only, clusters repeated text and classifies only 
   assert.deepEqual(before, state());
   assert.equal(analysis.entries.length, 3);
   assert.equal(analysis.entries.find((entry) => entry.kind === "heading").action, DESCRIPTION_ACTION.SAFE_REMOVE);
-  assert.equal(analysis.entries.find((entry) => /Effizienzhaus/u.test(entry.sentence)).action, DESCRIPTION_ACTION.SAFE_FACT_REPLACEMENT);
+  assert.equal(analysis.entries.find((entry) => /Effizienzhaus/u.test(entry.sentence)).action, DESCRIPTION_ACTION.SAFE_REMOVE);
   const technicalEntry = analysis.entries.find((entry) => /Photovoltaikanlage/u.test(entry.sentence));
   assert.equal(technicalEntry.action, DESCRIPTION_ACTION.HUMAN_DECISION);
   assert.equal(technicalEntry.cluster, "I_KON_TECHNIK_BAUSTEIN");
-  assert.match(formatPhase2BDescriptionAnalysisMarkdown(analysis), /Read-only-Analyse Objektbeschreibungen|SAFE_FACT_REPLACEMENT/u);
+  assert.match(formatPhase2BDescriptionAnalysisMarkdown(analysis), /Read-only-Analyse Objektbeschreibungen|SAFE_REMOVE/u);
 });
 
 test("stops on an unexpected audit scope", () => {

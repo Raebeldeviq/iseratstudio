@@ -29,6 +29,7 @@ export const FACT_SCOPE = Object.freeze({
   HOUSE: "house",
   HOUSE_SERIES: "house_series",
   PROJECT: "project",
+  MANUFACTURER: "manufacturer",
   COMPANY: "company",
 });
 
@@ -50,6 +51,7 @@ export const FACT_SOURCE = Object.freeze({
   PROJECT: "project",
   HOUSE_TEMPLATE: "house_template",
   VERIFIED_SERIES: "verified_series",
+  VERIFIED_MANUFACTURER: "verified_manufacturer",
   OPTIONAL_PACKAGE: "optional_package",
   LEGACY_DEFAULT: "legacy_default",
   UNKNOWN: "unknown",
@@ -78,16 +80,6 @@ export const VERIFIED_LIVING_HAUS_SERIES_FACTS = Object.freeze([
     verified: true,
     seriesId: LIVING_HAUS_SERIES_ID,
     evidenceReference: "Verifizierte Living-Haus-Serienfreigabe: DGNB",
-  }),
-  Object.freeze({
-    key: "sustainability_label",
-    value: "QNG-Serienmerkmal",
-    source: FACT_SOURCE.VERIFIED_SERIES,
-    scope: FACT_SCOPE.HOUSE_SERIES,
-    status: FACT_STATUS.VERIFIED,
-    verified: true,
-    seriesId: LIVING_HAUS_SERIES_ID,
-    evidenceReference: "Verifizierte Living-Haus-Serienfreigabe: QNG",
   }),
 ]);
 
@@ -176,6 +168,10 @@ const FACT_KEY_ALIASES = Object.freeze({
   sustainability_label: "sustainability_label",
   nachhaltigkeitssiegel: "sustainability_label",
   qng: "sustainability_label",
+  qng_project_basis: "qng_project_basis",
+  qng_projektierungsgrundlage: "qng_project_basis",
+  manufacturer_quality: "manufacturer_quality",
+  herstellerqualitaet: "manufacturer_quality",
 });
 
 const TECHNICAL_PATTERNS = Object.freeze([
@@ -283,6 +279,10 @@ function configuredTechnicalPackage(input = {}) {
   return token(input.technicalPackage ?? input.house?.technicalPackage ?? input.house?.technicalPackageId);
 }
 
+function configuredManufacturer(input = {}) {
+  return token(input.manufacturer ?? input.manufacturerId ?? input.house?.manufacturer ?? input.house?.manufacturerId);
+}
+
 /** Matches the persisted I-KON package marker without exposing token normalization to callers. */
 export function isLivingHausIKonTechnicalPackage(value) {
   return token(value) === token(LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID);
@@ -301,6 +301,7 @@ function normalizedFact(raw = {}) {
     evidenceKind: energyEvidenceKind(raw),
     seriesId: token(raw.seriesId ?? raw.houseSeries ?? raw.appliesToSeries),
     packageId: token(raw.packageId ?? raw.technicalPackage ?? raw.appliesToPackage),
+    manufacturerId: token(raw.manufacturerId ?? raw.manufacturer ?? raw.appliesToManufacturer),
     validFrom: clean(raw.validFrom),
     validUntil: clean(raw.validUntil),
     approvedForListing: raw.approvedForListing !== false,
@@ -321,6 +322,14 @@ function isApplicableVerifiedTechnicalPackageFact(fact, input = {}) {
     && fact.status === FACT_STATUS.VERIFIED
     && Boolean(fact.packageId)
     && fact.packageId === configuredTechnicalPackage(input);
+}
+
+function isApplicableVerifiedManufacturerFact(fact, input = {}) {
+  return fact.sourceKind === FACT_SOURCE.VERIFIED_MANUFACTURER
+    && fact.scope === FACT_SCOPE.MANUFACTURER
+    && fact.status === FACT_STATUS.VERIFIED
+    && Boolean(fact.manufacturerId)
+    && fact.manufacturerId === configuredManufacturer(input);
 }
 
 function projectedTemplateEnergyFacts(input = {}) {
@@ -378,6 +387,7 @@ function uniqueFacts(facts) {
       fact.evidenceKind,
       fact.seriesId,
       fact.packageId,
+      fact.manufacturerId,
     ].join("|");
     if (seen.has(fingerprint)) return false;
     seen.add(fingerprint);
@@ -446,6 +456,9 @@ export function collectListingFacts(input = {}) {
       if (fact.sourceKind === FACT_SOURCE.OPTIONAL_PACKAGE && fact.scope === FACT_SCOPE.TECHNICAL_PACKAGE) {
         return isApplicableVerifiedTechnicalPackageFact(fact, input);
       }
+      if (fact.sourceKind === FACT_SOURCE.VERIFIED_MANUFACTURER) {
+        return isApplicableVerifiedManufacturerFact(fact, input);
+      }
       return true;
     });
   const inheritedSeriesFacts = configuredHouseSeries(input) === LIVING_HAUS_SERIES_ID
@@ -488,7 +501,7 @@ function factEvidence(fact) {
 }
 
 function statusDisclosed(text, status) {
-  if (status === FACT_STATUS.PLANNED) return /\b(?:geplant|vorgesehen|planung|planungsstand|soll)\b/iu.test(text);
+  if (status === FACT_STATUS.PLANNED) return /\b(?:geplant(?:e[rmns]?)?|vorgesehen|planung|planungsstand|projektiert(?:e[rmns]?)?|soll)\b/iu.test(text);
   if (status === FACT_STATUS.OPTIONAL) return /\b(?:optional|wahlweise|gegen\s+mehrpreis)\b/iu.test(text);
   return status === FACT_STATUS.VERIFIED || status === FACT_STATUS.CONTRACT_INCLUDED;
 }
@@ -527,19 +540,48 @@ function usableTechnicalFact(facts, key, statement) {
   ));
 }
 
-function relevantCertificationFact(facts, key, marker) {
-  return facts.find((fact) => (
-    fact.key === key
-    && factHasRequiredEvidence(fact)
-    && (["zertifikat", "zertifizierung", "zertifiziert", "qualitätssiegel"].includes(marker)
-      || clean(fact.value).toLocaleLowerCase("de-DE").includes(marker))
-  ));
+function qdfManufacturerFact(fact) {
+  return fact.key === "manufacturer_quality"
+    && fact.sourceKind === FACT_SOURCE.VERIFIED_MANUFACTURER
+    && fact.scope === FACT_SCOPE.MANUFACTURER
+    && /\bqdf\b/iu.test(clean(fact.value));
 }
 
-function certificationIsAccurate(statement, fact) {
+function relevantCertificationFact(facts, key, marker) {
+  return facts.find((fact) => {
+    if (!factHasRequiredEvidence(fact)) return false;
+    if (marker === "qdf") return qdfManufacturerFact(fact);
+    if (key === "sustainability_label" && marker === "qng") {
+      return fact.key === "qng_project_basis" && /\bqng\b/iu.test(clean(fact.value));
+    }
+    return fact.key === key
+      && (["zertifikat", "zertifizierung", "zertifiziert", "qualitätssiegel"].includes(marker)
+        || clean(fact.value).toLocaleLowerCase("de-DE").includes(marker));
+  });
+}
+
+function certificationDesignationMatchesStatement(statement, fact, marker) {
+  const value = clean(fact?.value).toLocaleLowerCase("de-DE");
+  const text = clean(statement).toLocaleLowerCase("de-DE");
+  if (marker === "dgnb") {
+    const claimedLevel = text.match(/\bdgnb\b[^.!?]{0,80}\b(gold|silber|platin)\b/iu)?.[1]?.toLocaleLowerCase("de-DE");
+    return /\bdgnb\b/iu.test(value) && (!claimedLevel || new RegExp(`\\b${claimedLevel}\\b`, "iu").test(value));
+  }
+  if (marker === "qdf") return /\bqdf\b/iu.test(value);
+  if (marker === "qng") return /\bqng\b/iu.test(value);
+  return true;
+}
+
+function certificationIsAccurate(statement, fact, marker) {
   if (!fact || !statusDisclosed(statement, fact.status)) return false;
+  if (!certificationDesignationMatchesStatement(statement, fact, marker)) return false;
   const seriesStatement = /\b(?:hausserie|serien(?:merkmal|zertifizierung|zertifiziert)?)\b/iu.test(statement);
   if (fact.scope === FACT_SCOPE.HOUSE_SERIES) return seriesStatement;
+  if (fact.scope === FACT_SCOPE.MANUFACTURER) {
+    return fact.sourceKind === FACT_SOURCE.VERIFIED_MANUFACTURER
+      && /\bhersteller\b/iu.test(statement)
+      && marker === "qdf";
+  }
   if (fact.scope === FACT_SCOPE.HOUSE || fact.scope === FACT_SCOPE.PROJECT) return true;
   return false;
 }
@@ -654,7 +696,7 @@ export function validateListingClaims(input = {}) {
     for (const match of matchAll(CERTIFICATION_PATTERN, value)) {
       const marker = match[0].toLocaleLowerCase("de-DE").replace(/zertifizier.*$/u, "").trim() || "dgnb";
       const fact = relevantCertificationFact(facts, "certification", marker);
-      if (!certificationIsAccurate(sentenceAt(value, match.index), fact)) {
+      if (!certificationIsAccurate(sentenceAt(value, match.index), fact, marker)) {
         issues.push(makeIssue({
           field,
           value,
@@ -668,7 +710,7 @@ export function validateListingClaims(input = {}) {
     for (const match of matchAll(SUSTAINABILITY_LABEL_PATTERN, value)) {
       const marker = match[0].toLocaleLowerCase("de-DE");
       const fact = relevantCertificationFact(facts, "sustainability_label", marker);
-      if (!certificationIsAccurate(sentenceAt(value, match.index), fact)) {
+      if (!certificationIsAccurate(sentenceAt(value, match.index), fact, marker)) {
         issues.push(makeIssue({
           field,
           value,
@@ -740,7 +782,8 @@ export function releasedListingFacts(input = {}) {
     && (
       TECHNICAL_PATTERNS.some(({ key }) => factMatchesTechnicalKey(fact, key))
       || fact.key === "certification"
-      || fact.key === "sustainability_label"
+      || fact.key === "qng_project_basis"
+      || fact.key === "manufacturer_quality"
     )
   ));
 }
@@ -756,8 +799,8 @@ export function seriesFactSentences(input = {}) {
     if (fact.key === "certification" && /dgnb/iu.test(clean(fact.value))) {
       return ["Das projektierte Haus gehört zu einer Hausserie mit verifizierter DGNB-Serienzertifizierung."];
     }
-    if (fact.key === "sustainability_label" && /qng/iu.test(clean(fact.value))) {
-      return ["Für die zugehörige Hausserie ist ein verifiziertes QNG-Serienmerkmal hinterlegt."];
+    if (fact.key === "qng_project_basis" && /qng/iu.test(clean(fact.value))) {
+      return ["Für die Hausserie ist eine verifizierte QNG-Projektierungsgrundlage dokumentiert."];
     }
     return [];
   });

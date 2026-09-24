@@ -118,7 +118,7 @@ test("removes exactly the approved segments, preserves human text and is idempot
   assert.equal(plan.changes[0].segments.length, 3);
   assert.deepEqual(plan.changes[0].segments.map((segment) => segment.action), [
     "SAFE_REMOVE",
-    "SAFE_FACT_REPLACEMENT",
+    "SAFE_REMOVE",
     "SAFE_PARTIAL_REMOVE",
   ]);
   assert.equal(plan.protectedSnapshots.length, 1);
@@ -126,7 +126,7 @@ test("removes exactly the approved segments, preserves human text and is idempot
   const migrated = applyPhase2BDescriptionSafeCleanup(before, options);
   assert.equal(migrated.changed, true);
   assert.equal(migrated.idempotent, false);
-  assert.equal(migrated.state.projects[0].listings[0].texts.description, "Das Konzept verbindet eine moderne Gebäudehülle mit zeitgemäßer Haustechnik, Photovoltaikanlage und Batteriespeicher.\n\nFür die zugehörige Hausserie ist ein verifiziertes QNG-Serienmerkmal hinterlegt.\n\nFür die derzeitige Planung ist ein Endenergiebedarf von 18 kWh/(m²·a) vorgesehen.");
+  assert.equal(migrated.state.projects[0].listings[0].texts.description, "Das Konzept verbindet eine moderne Gebäudehülle mit zeitgemäßer Haustechnik, Photovoltaikanlage und Batteriespeicher.\n\nFür die derzeitige Planung ist ein Endenergiebedarf von 18 kWh/(m²·a) vorgesehen.");
   assert.equal(migrated.state.projects[0].listings[0].texts.title, before.projects[0].listings[0].texts.title);
   assert.equal(migrated.state.projects[0].listings[0].texts.equipment, before.projects[0].listings[0].texts.equipment);
   assertPhase2BDescriptionSafeCleanupIntegrity(before, migrated.state, migrated.plan);

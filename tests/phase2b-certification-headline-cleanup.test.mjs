@@ -7,7 +7,6 @@ import test from "node:test";
 import { CLAIM_CATEGORY } from "../listing-claim-policy.mjs";
 import {
   applyPhase2BCertificationHeadlineCleanup,
-  assertPhase2BCertificationHeadlineIntegrity,
   createPhase2BCertificationCatalogBackup,
   planPhase2BCertificationHeadlineCleanup,
   verifyPhase2BCertificationCatalogBackup,
@@ -42,32 +41,20 @@ function scan(input) {
 
 const expected = { scan, expectedDgnbCount: 1, expectedQngCount: 1, expectedTechnicalCount: 1, expectedManualFieldCount: 3 };
 
-test("replaces only the two approved series facts and preserves the technical headline", () => {
+test("replaces DGNB but rejects the historical QNG phrase without a precise QNG fact", () => {
   const before = state();
   const plan = planPhase2BCertificationHeadlineCleanup(before, expected);
   assert.equal(plan.dgnbCount, 1);
   assert.equal(plan.qngCount, 1);
   assert.equal(plan.technicalCount, 1);
-  assert.equal(plan.changes.length, 2);
+  assert.equal(plan.changes.length, 1);
+  assert.equal(plan.rejected.length, 1);
   assert.equal(plan.changes[0].replacementText, "Haus: DGNB-Serienzertifizierung und 30 Jahre Garantie!");
-  assert.equal(plan.changes[1].replacementText, "Haus: QNG-Serienmerkmal und Festpreis!");
-
-  const migrated = applyPhase2BCertificationHeadlineCleanup(before, expected);
-  assert.equal(migrated.changed, true);
-  assert.equal(migrated.state.projects[0].listings[0].texts.title, "Haus: DGNB-Serienzertifizierung und 30 Jahre Garantie!");
-  assert.equal(migrated.state.projects[0].listings[1].texts.title, "Haus: QNG-Serienmerkmal und Festpreis!");
-  assert.equal(migrated.state.projects[0].listings[2].texts.title, before.projects[0].listings[2].texts.title);
-  assertPhase2BCertificationHeadlineIntegrity(before, migrated.state, migrated.plan);
-
-  const modifiedTechnical = structuredClone(migrated.state);
-  modifiedTechnical.projects[0].listings[2].texts.title = "Unzulässig verändert";
+  assert.match(plan.rejected[0].rejectedReason, /QNG-Serienmerkmal/u);
   assert.throws(
-    () => assertPhase2BCertificationHeadlineIntegrity(before, modifiedTechnical, migrated.plan),
-    /PHASE2B_CERTIFICATION_TECHNICAL_CHANGED/u,
+    () => applyPhase2BCertificationHeadlineCleanup(before, expected),
+    /PHASE2B_CERTIFICATION_VALIDATION_FAILED/u,
   );
-  const repeated = applyPhase2BCertificationHeadlineCleanup(migrated.state, expected);
-  assert.equal(repeated.changed, false);
-  assert.equal(repeated.idempotent, true);
 });
 
 test("fails closed when the exact approved phrase is absent", () => {
