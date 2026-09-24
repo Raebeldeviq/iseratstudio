@@ -4,6 +4,7 @@ import test from "node:test";
 import { runPhase2BClaimScanCli } from "../phase2b-claim-scan-cli.mjs";
 import {
   LEGACY_FIXED_DESCRIPTION_CTA,
+  PHASE2B_TEXT_ORIGIN,
   PHASE2B_SCAN_READ_ONLY_GUARANTEE,
   PHASE2B_TREATMENT,
   formatPhase2BScanMarkdown,
@@ -71,6 +72,12 @@ test("classifies active listings without mutating the catalog state", () => {
   assert.equal(report.findings.some((finding) => finding.listingId === "legacy" && finding.proposedTreatment === PHASE2B_TREATMENT.SAFE_DETERMINISTIC_REPLACEMENT), true);
   assert.equal(report.findings.some((finding) => finding.listingId === "mixed" && finding.proposedTreatment === PHASE2B_TREATMENT.MANUAL_REVIEW), true);
   assert.equal(report.fieldPlans.some((plan) => plan.listingId === "mixed" && plan.proposedTreatment === PHASE2B_TREATMENT.MANUAL_REVIEW), true);
+  const legacyFinding = report.findings.find((finding) => finding.listingId === "legacy");
+  assert.equal(legacyFinding.textOrigin.code, PHASE2B_TEXT_ORIGIN.KNOWN_LEGACY_FIXED_CTA);
+  assert.equal(legacyFinding.position >= 0, true);
+  assert.match(legacyFinding.reason, /Umwelt|Nachhaltigkeit|Energie/u);
+  assert.match(legacyFinding.availableEvidence, /Keine passende Evidenz/u);
+  assert.match(legacyFinding.missingEvidence, /Substantiierung|Fakt/u);
   assert.equal(report.findings.some((finding) => finding.listingId === "clean"), false);
   assert.deepEqual(PHASE2B_SCAN_READ_ONLY_GUARANTEE, {
     writesCatalog: false,
@@ -78,7 +85,7 @@ test("classifies active listings without mutating the catalog state", () => {
     triggersUploads: false,
     regeneratesTexts: false,
   });
-  assert.match(formatPhase2BScanMarkdown(report), /Konkrete Feldmaßnahmen|SAFE_DETERMINISTIC_REPLACEMENT/u);
+  assert.match(formatPhase2BScanMarkdown(report), /Detailtabelle – Claim-Treffer|Textursprung|SAFE_DETERMINISTIC_REPLACEMENT/u);
 });
 
 test("CLI reads a provided catalog snapshot once and only returns a report", async () => {
