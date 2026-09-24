@@ -61,7 +61,7 @@ test("supplies only released series facts and projected energy values to the AI"
     house: { name: "Concept 150", energyDemand: 18, energyClass: "A++" },
   });
   assert.ok(source.house.releasedListingFacts.some((fact) => fact.key === "certification" && fact.sourceKind === "verified_series"));
-  assert.ok(source.house.releasedListingFacts.some((fact) => fact.key === "sustainability_label" && fact.sourceKind === "verified_series"));
+  assert.equal(source.house.releasedListingFacts.some((fact) => /qng/iu.test(String(fact.value))), false);
   assert.ok(source.house.releasedListingFacts.some((fact) => (
     fact.key === "energy_demand"
     && fact.status === "planned"

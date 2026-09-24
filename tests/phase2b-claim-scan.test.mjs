@@ -50,7 +50,7 @@ function state() {
           description: `Nachhaltiges Haus mit niedrigeren Energiekosten.\n\n${LEGACY_FIXED_DESCRIPTION_CTA}`,
         }),
         baseListing("clean", {
-          equipment: "Das projektierte Haus gehört zu einer Hausserie mit verifizierter DGNB-Serienzertifizierung. Für die zugehörige Hausserie ist ein verifiziertes QNG-Serienmerkmal hinterlegt.",
+          equipment: "Das projektierte Haus gehört zu einer Hausserie mit verifizierter DGNB-Serienzertifizierung.",
         }),
         { ...baseListing("archived", { description: "Nachhaltiges Haus." }), status: "archived" },
       ],
