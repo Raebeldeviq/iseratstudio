@@ -23,6 +23,7 @@ import {
   planListingFixedCopyPreview,
 } from "./listing-fixed-copy-preview.mjs";
 import { APPLICATION_DATA_DIRECTORY } from "./platform-paths.mjs";
+import { scanPhase2BClaims } from "./phase2b-claim-scan.mjs";
 
 export const FIXED_LISTING_COPY_MIGRATION_BACKUP_DIRECTORY = join(
   APPLICATION_DATA_DIRECTORY,
@@ -158,6 +159,18 @@ function assertFinalPreview(preview, options = {}) {
   if (preview.classification[STATIC_COPY_FIELD.TERMS][LISTING_FIXED_COPY_TREATMENT.ALREADY_CORRECT] !== expected.alreadyCorrectTerms) {
     throw new Error("FIXED_COPY_MIGRATION_FINAL_TERMS_CHANGED: Das unveränderte AGB-Feld entspricht nicht mehr dem freigegebenen Standard.");
   }
+}
+
+function assertFinalPhase2BClaimScan(state, options = {}) {
+  const expected = expectedCounts(options);
+  const report = (options.scan || scanPhase2BClaims)(state, options.scanOptions);
+  if (report.scannedListingCount !== expected.activeListings) {
+    throw new Error(`FIXED_COPY_MIGRATION_FINAL_CLAIM_SCOPE_MISMATCH: Erwartet ${expected.activeListings} geprüfte Inserate, gefunden ${report.scannedListingCount}.`);
+  }
+  if (report.severityCounts.BLOCK !== 0 || report.severityCounts.REVIEW !== 0) {
+    throw new Error(`FIXED_COPY_MIGRATION_FINAL_CLAIM_SCAN_FAILED: Der finale Claim-Scan enthält ${report.severityCounts.BLOCK} BLOCK und ${report.severityCounts.REVIEW} REVIEW.`);
+  }
+  return report;
 }
 
 function changeForListing(context, standards) {
@@ -321,13 +334,21 @@ export function assertFixedListingCopyMigrationIntegrity(before, after, plan) {
 export function applyFixedListingCopyMigration(state = {}, options = {}) {
   const plan = planFixedListingCopyMigration(state, options);
   if (plan.idempotent) {
-    return { state, plan, changed: false, idempotent: true, afterPreview: plan.preview };
+    return {
+      state,
+      plan,
+      changed: false,
+      idempotent: true,
+      afterPreview: plan.preview,
+      afterClaimScan: assertFinalPhase2BClaimScan(state, options),
+    };
   }
   const nextState = structuredClone(state);
   for (const change of plan.changes) setPlannedStaticCopy(nextState, change);
   assertFixedListingCopyMigrationIntegrity(state, nextState, plan);
   const afterPreview = planListingFixedCopyPreview(nextState);
   assertFinalPreview(afterPreview, options);
+  const afterClaimScan = assertFinalPhase2BClaimScan(nextState, options);
   const finalPlan = planFixedListingCopyMigration(nextState, options);
   if (finalPlan.changed || !finalPlan.idempotent) {
     throw new Error("FIXED_COPY_MIGRATION_IDEMPOTENCE_FAILED: Ein zweiter Lauf würde noch Änderungen planen.");
@@ -336,6 +357,7 @@ export function applyFixedListingCopyMigration(state = {}, options = {}) {
     state: nextState,
     plan,
     afterPreview,
+    afterClaimScan,
     finalPlan,
     changed: true,
     idempotent: false,
@@ -453,6 +475,7 @@ export async function runFixedListingCopyMigration(options = {}) {
     recovery,
     plan: preview.plan,
     afterPreview: idempotence.afterPreview,
+    afterClaimScan: idempotence.afterClaimScan,
     persistedSavedAt: persisted.savedAt,
   };
 }

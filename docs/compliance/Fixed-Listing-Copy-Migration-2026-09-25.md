@@ -4,7 +4,7 @@
 
 Die Migrationslogik überführt ausschließlich die fünf zentralen statischen Inseratfelder `Ausstattung`, `Sonstiges`, `Provision`, `Anmerkung` und `Empfehlung` in den versionierten Standard. Für den freigegebenen Produktionsumfang sind exakt 44 aktive Inserate und damit exakt 220 Feldänderungen erforderlich. Die Allgemeinen Geschäftsbedingungen bleiben unverändert.
 
-Vor einer Persistenz prüft die Migration die vollständige Read-only-Klassifikation, den Faktennachweis des Ausstattungstextes, die exakte 44×5-Änderungsmenge und das Fehlen manueller Abweichungen. Sie erzeugt einen byte-identischen lokalen Manifest-Backup, prüft dessen Wiederherstellbarkeit, schreibt über einen CAS-geschützten atomaren Snapshot und verifiziert danach Feldintegrität sowie Idempotenz.
+Vor einer Persistenz prüft die Migration die vollständige Read-only-Klassifikation, den Faktennachweis des Ausstattungstextes, die exakte 44×5-Änderungsmenge und das Fehlen manueller Abweichungen. Sie erzeugt einen byte-identischen lokalen Manifest-Backup, prüft dessen Wiederherstellbarkeit, schreibt über einen CAS-geschützten atomaren Snapshot und verifiziert danach Feldintegrität, den vollständigen Phase-2B-Claim-Scan (BLOCK 0 / REVIEW 0) sowie Idempotenz.
 
 ## Begründung
 
