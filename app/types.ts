@@ -48,15 +48,20 @@ export type HouseImage = {
 export type ListingFactScope =
   | "component"
   | "technical_system"
+  | "technical_package"
   | "house"
   | "house_series"
   | "project"
+  | "manufacturer"
   | "company";
 
 export type ListingFactStatus =
   | "verified"
   | "contract_included"
   | "planned"
+  | "guaranteed"
+  | "planning_certificate"
+  | "certified"
   | "optional"
   | "unknown";
 
@@ -64,13 +69,17 @@ export type ListingFactSource =
   | "project"
   | "house_template"
   | "verified_series"
+  | "verified_manufacturer"
   | "optional_package"
   | "legacy_default"
   | "unknown";
 
 export type ListingFactEvidenceKind =
   | "projected_house_value"
-  | "energy_certificate";
+  | "energy_certificate"
+  | "qng_series_guarantee"
+  | "qng_planning_certificate"
+  | "qng_individual_certificate";
 
 export type ListingComplianceFact = {
   key: string;
@@ -84,6 +93,8 @@ export type ListingComplianceFact = {
   evidenceReference?: string;
   evidenceKind?: ListingFactEvidenceKind;
   seriesId?: string;
+  sourceScope?: ListingFactScope;
+  projectScope?: "project";
   validFrom?: string;
   validUntil?: string;
 };

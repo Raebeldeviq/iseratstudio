@@ -72,7 +72,14 @@ export function completeListingTexts(
   const completed = fillMissingListingCopy(
     texts,
     fallbackTexts,
-    { house, project, generated: true, allowGeneratedEquipment: true },
+    {
+      house,
+      project,
+      generated: true,
+      allowGeneratedEquipment: true,
+      houseSeries: LIVING_HAUS_SERIES_ID,
+      listingFacts: house.listingFacts,
+    },
   ) as ListingTexts;
   const completedWithReleasedFacts = {
     ...completed,
@@ -93,6 +100,8 @@ export function completeListingTexts(
     project,
     generated: true,
     allowGeneratedEquipment: true,
+    houseSeries: LIVING_HAUS_SERIES_ID,
+    listingFacts: house.listingFacts,
   }) as ListingTexts;
 }
 
@@ -236,5 +245,12 @@ export function generateListingTexts(
       "Hausabbildungen, Grundrisse und Innenansichten können beispielhafte Ausstattungen oder Möblierungen zeigen. Diese sind nicht automatisch Bestandteil des Angebots.",
       "Grundstücks- und projektbezogene Nebenkosten können hinzukommen und werden im Rahmen der individuellen Kalkulation erläutert.",
     ]),
-  }, { house, project, generated: true, allowGeneratedEquipment: true }) as ListingTexts;
+  }, {
+    house,
+    project,
+    generated: true,
+    allowGeneratedEquipment: true,
+    houseSeries: LIVING_HAUS_SERIES_ID,
+    listingFacts: house.listingFacts,
+  }) as ListingTexts;
 }

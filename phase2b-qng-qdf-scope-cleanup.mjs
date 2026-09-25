@@ -290,9 +290,6 @@ export function planPhase2BQngQdfScopeCleanup(state, options = {}) {
     if (!replacementText || /\n{3,}/u.test(replacementText)) {
       throw new Error(`PHASE2B7_DESCRIPTION_FORMAT_FAILED: ${context.listing.id} hätte eine unzulässige Beschreibung.`);
     }
-    if (descriptionBlocks(context, replacementText).length) {
-      throw new Error(`PHASE2B7_DESCRIPTION_POLICY_FAILED: ${context.listing.id} enthält nach der Minimaländerung noch einen BLOCK.`);
-    }
     return {
       field: "description",
       listingId: context.listing.id,
@@ -334,6 +331,12 @@ export function planPhase2BQngQdfScopeCleanup(state, options = {}) {
     || countOperations(changes, "ikon_duplicate_removal") !== expected.ikonDuplicateRemovals
     || countOperations(changes, "certification_sentence_replacement") !== expected.certificationSentenceReplacements) {
     throw new Error("PHASE2B7_CHANGESET_MISMATCH: Der deterministische QNG-/QDF-/Energie-/I-KON-Scope weicht von der Freigabe ab.");
+  }
+  for (const change of descriptionChanges) {
+    const context = findContext(state, change.listingId);
+    if (descriptionBlocks(context, change.replacementText).length) {
+      throw new Error(`PHASE2B7_DESCRIPTION_POLICY_FAILED: ${change.listingId} enthält nach der Minimaländerung noch einen BLOCK.`);
+    }
   }
   return { changed: true, idempotent: false, beforeReport: existingReport, changes };
 }

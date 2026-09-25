@@ -50,6 +50,7 @@ Verbindliche Qualitätsregeln:
 15. Zertifizierungen, Förderstandards und Nachhaltigkeitssiegel dürfen nur exakt in der Reichweite wiedergegeben werden, die der strukturierte Fakt belegt. Ein freigegebener house_series-Fakt darf nur als Serienmerkmal der zugehörigen Hausserie formuliert werden; er ist kein individueller Zertifikatsnachweis für das konkrete Objekt.
 16. Formuliere keine Umweltwirkung aufgrund einer CO₂-Kompensation und keine zukünftige Umweltleistung aufgrund einer bloßen Planung.
 17. Die Anwendung erstellt die endgültige Überschrift aus Ort beziehungsweise Ortsteil, gerundeter Wohnfläche und Zimmerzahl. Erfinde dafür keine eigenen Förderzusagen oder technischen Vorteile.
+18. Ein freigegebener Fakt mit dem Schlüssel qng_guarantee wird ausschließlich durch die Anwendung mit einer zentralen, statusgenauen Formulierung ergänzt. Schreibe dazu selbst keine abweichende QNG-Aussage und behaupte niemals eine bereits erteilte individuelle QNG-Zertifizierung.
 Gib ausschließlich das verlangte JSON aus.`;
 
 function cleanString(value, maxLength = 12000) {
@@ -122,6 +123,8 @@ function publicHouse(house = {}, listingFacts = []) {
       verified: fact.verified,
       evidenceReference: fact.evidenceReference || undefined,
       evidenceKind: fact.evidenceKind || undefined,
+      sourceScope: fact.sourceScope || undefined,
+      projectScope: fact.projectScope || undefined,
     })),
   };
 }
@@ -292,7 +295,7 @@ function normalizedParagraph(value) {
   return value.toLocaleLowerCase("de-DE").replace(/[^a-zäöüß0-9]+/g, " ").trim();
 }
 
-export function validateListingTexts(texts, house = {}, project = {}) {
+export function validateListingTexts(texts, house = {}, project = {}, factContext = {}) {
   const errors = [];
   if (!texts || typeof texts !== "object") return ["Die Textausgabe ist unvollständig."];
 
@@ -313,7 +316,7 @@ export function validateListingTexts(texts, house = {}, project = {}) {
   }
 
   const title = typeof texts.title === "string" ? texts.title.trim() : "";
-  const requiredTitle = buildListingHeadline(house, project);
+  const requiredTitle = buildListingHeadline(house, project, factContext);
   if (title && finiteNumber(house.livingArea) > 0 && finiteNumber(house.rooms) > 0 && (project.city || project.district) && title !== requiredTitle) {
     errors.push("Die Überschrift enthält nicht vollständig Ort, gerundete Wohnfläche und Zimmer.");
   }
@@ -470,7 +473,16 @@ export async function generateAiListing(input = {}) {
   let feedback = [];
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const rawTexts = await requestOnce(apiKey, input, feedback);
-    const texts = enforceListingCopy(rawTexts, { house: input.house, project: input.project, generated: true });
+    const factContext = {
+      houseSeries: LIVING_HAUS_SERIES_ID,
+      listingFacts: input.listingFacts,
+    };
+    const texts = enforceListingCopy(rawTexts, {
+      house: input.house,
+      project: input.project,
+      generated: true,
+      ...factContext,
+    });
     const claimValidation = validateListingClaims({
       texts,
       house: input.house,
@@ -479,7 +491,7 @@ export async function generateAiListing(input = {}) {
       houseSeries: LIVING_HAUS_SERIES_ID,
     });
     feedback = [
-      ...validateListingTexts(texts, input.house, input.project),
+      ...validateListingTexts(texts, input.house, input.project, factContext),
       ...validateNovelty(texts, input.previousTexts),
       ...validateLocationPrivacy(texts, input.project),
       ...claimValidation.blockingIssues.map(formatClaimIssue),

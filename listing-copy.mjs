@@ -1,3 +1,8 @@
+import {
+  qngGuaranteeSentence,
+  qngGuaranteeTitle,
+} from "./listing-claim-policy.mjs";
+
 const DESCRIPTION_CTA_START =
   "Ruf direkt an und vereinbare deine persönliche Beratung zu Hausplanung und Grundstück:";
 
@@ -170,12 +175,24 @@ export function listingPlace(project = {}) {
   return clean(project.district) || clean(project.city) || "deinem Wunschort";
 }
 
-export function buildListingHeadline(house = {}, project = {}) {
+function listingFactContext(house = {}, project = {}, context = {}) {
+  return {
+    house,
+    project,
+    houseSeries: context.houseSeries,
+    listingFacts: context.listingFacts,
+    facts: context.facts,
+  };
+}
+
+export function buildListingHeadline(house = {}, project = {}, context = {}) {
   const seed = `${clean(house.id)}:${clean(house.name)}:${listingPlace(project)}:${finiteNumber(house.livingArea)}:${finiteNumber(house.rooms)}`;
   const opening = HEADLINE_OPENINGS[hash(`${seed}:opening`) % HEADLINE_OPENINGS.length];
   const area = germanNumber(Math.round(finiteNumber(house.livingArea)));
   const rooms = germanNumber(house.rooms, 1);
-  return `${opening} in ${listingPlace(project)}: ca. ${area} m² Wohnfläche und ${rooms} Zimmer`;
+  const qngTitle = qngGuaranteeTitle(listingFactContext(house, project, context));
+  const title = `${opening} in ${listingPlace(project)}: ca. ${area} m² Wohnfläche und ${rooms} Zimmer`;
+  return qngTitle ? `${title} – ${qngTitle}` : title;
 }
 
 function descriptionBody(value) {
@@ -190,18 +207,32 @@ function descriptionBody(value) {
     .trim();
 }
 
+function appendQngGuarantee(description, house, project, context) {
+  const sentence = qngGuaranteeSentence(listingFactContext(house, project, context));
+  if (!sentence || description.includes(sentence)) return description;
+  return description ? `${description}\n\n${sentence}` : sentence;
+}
+
 export function enforceListingCopy(texts = {}, {
   house = {},
   project = {},
   generated = false,
   allowGeneratedEquipment = false,
+  houseSeries = "",
+  listingFacts = [],
+  facts = [],
 } = {}) {
   const suppliedDescription = clean(texts.description);
   const body = descriptionBody(suppliedDescription);
+  const context = { houseSeries, listingFacts, facts };
+  const descriptionWithQngGuarantee = appendQngGuarantee(body, house, project, context);
+  const generatedDescription = descriptionWithQngGuarantee
+    ? `${descriptionWithQngGuarantee}\n\n${FIXED_DESCRIPTION_CTA}`
+    : FIXED_DESCRIPTION_CTA;
   return {
-    title: generated ? buildListingHeadline(house, project) : clean(texts.title) || buildListingHeadline(house, project),
+    title: generated ? buildListingHeadline(house, project, context) : clean(texts.title) || buildListingHeadline(house, project, context),
     description: generated
-      ? (body ? `${body}\n\n${FIXED_DESCRIPTION_CTA}` : FIXED_DESCRIPTION_CTA)
+      ? generatedDescription
       : suppliedDescription || FIXED_DESCRIPTION_CTA,
     equipment: generated && allowGeneratedEquipment && clean(texts.equipment)
       ? clean(texts.equipment)

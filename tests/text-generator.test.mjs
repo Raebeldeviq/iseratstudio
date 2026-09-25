@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { buildListingHeadline } from "../listing-copy.mjs";
+import { LIVING_HAUS_SERIES_ID, QNG_GUARANTEE_SENTENCE } from "../listing-claim-policy.mjs";
 import { completeListingTexts } from "../app/lib/text-generator.ts";
 
 const house = {
@@ -62,8 +63,9 @@ test("keeps the step-two headline when a stale helper returns another title", ()
     location: "Mahlsdorf bietet einen passenden Rahmen für das neue Zuhause.",
   }, 2);
 
-  assert.equal(result.title, buildListingHeadline(house, project));
+  assert.equal(result.title, buildListingHeadline(house, project, { houseSeries: LIVING_HAUS_SERIES_ID }));
   assert.notEqual(result.title, "Klare Räume für morgen");
   assert.match(result.description, /^Ein individuell erzeugter Hausbeschreibungstext\./);
+  assert.equal(result.description.split(QNG_GUARANTEE_SENTENCE).length - 1, 1);
   assert.equal(result.location, "Mahlsdorf bietet einen passenden Rahmen für das neue Zuhause.");
 });

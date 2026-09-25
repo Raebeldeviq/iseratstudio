@@ -61,7 +61,19 @@ test("supplies only released series facts and projected energy values to the AI"
     house: { name: "Concept 150", energyDemand: 18, energyClass: "A++" },
   });
   assert.ok(source.house.releasedListingFacts.some((fact) => fact.key === "certification" && fact.sourceKind === "verified_series"));
-  assert.equal(source.house.releasedListingFacts.some((fact) => /qng/iu.test(String(fact.value))), false);
+  assert.deepEqual(source.house.releasedListingFacts.find((fact) => fact.key === "qng_guarantee"), {
+    key: "qng_guarantee",
+    value: "QNG-Siegel garantiert",
+    source: "verified_series",
+    sourceKind: "verified_series",
+    scope: "project",
+    status: "guaranteed",
+    verified: true,
+    evidenceReference: "Verifizierte Living-Haus-Serienfreigabe: QNG-Garantie für projektierte Häuser",
+    evidenceKind: "qng_series_guarantee",
+    sourceScope: "house_series",
+    projectScope: "project",
+  });
   assert.ok(source.house.releasedListingFacts.some((fact) => (
     fact.key === "energy_demand"
     && fact.status === "planned"
@@ -81,6 +93,7 @@ test("uses the Responses API quality settings and a strict text schema", () => {
   assert.deepEqual(Object.keys(request.text.format.schema.properties), ["description", "location"]);
   assert.match(request.input[0].content[0].text, /gerundeter Wohnfläche und Zimmerzahl/);
   assert.match(request.input[0].content[0].text, /keine allgemeinen Umwelt-, Klima-, Nachhaltigkeits- oder Energieversprechen/);
+  assert.match(request.input[0].content[0].text, /qng_guarantee/u);
 });
 
 test("uses GPT-5.6 Luna as the economical default", () => {

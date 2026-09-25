@@ -18,6 +18,11 @@ import {
   FACTUAL_BUILDABILITY_NOTE,
   IMMOPROFESSIONAL_DEFAULTS,
 } from "../listing-copy.mjs";
+import {
+  LIVING_HAUS_SERIES_ID,
+  QNG_GUARANTEE_SENTENCE,
+  QNG_GUARANTEE_TITLE,
+} from "../listing-claim-policy.mjs";
 
 const house = { id: "sun-113-v6", name: "SUN 113 V6", livingArea: 113.49, rooms: 5 };
 const project = { city: "Potsdam", district: "Roskow" };
@@ -50,6 +55,31 @@ test("preserves manual free text and enforces safe blocks only for generated cop
   assert.equal(generated.other, FIXED_OTHER_TEXT);
   assert.ok(generated.description.endsWith(FIXED_DESCRIPTION_CTA));
   assert.equal(generated.description.split(FIXED_DESCRIPTION_CTA).length - 1, 1);
+});
+
+test("adds the central QNG guarantee only for generated Living-Haus copy", () => {
+  const generated = enforceListingCopy({
+    description: "Sachliche Beschreibung des projektierten Hauses.",
+  }, {
+    house,
+    project,
+    generated: true,
+    houseSeries: LIVING_HAUS_SERIES_ID,
+  });
+  assert.match(generated.title, new RegExp(`${QNG_GUARANTEE_TITLE}$`, "u"));
+  assert.equal(generated.description.split(QNG_GUARANTEE_SENTENCE).length - 1, 1);
+  assert.ok(generated.description.endsWith(FIXED_DESCRIPTION_CTA));
+
+  const foreignSeries = enforceListingCopy({
+    description: "Sachliche Beschreibung des projektierten Hauses.",
+  }, {
+    house,
+    project,
+    generated: true,
+    houseSeries: "fremdhersteller",
+  });
+  assert.doesNotMatch(foreignSeries.title, /QNG/u);
+  assert.doesNotMatch(foreignSeries.description, /QNG/u);
 });
 
 test("fills empty existing text fields without overwriting usable dynamic copy", () => {

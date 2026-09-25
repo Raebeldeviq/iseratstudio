@@ -10,6 +10,7 @@ import {
   FIXED_RECOMMENDATION_TEXT,
   FIXED_TERMS_TEXT,
 } from "../listing-copy.mjs";
+import { QNG_GUARANTEE_SENTENCE } from "../listing-claim-policy.mjs";
 
 function energyScenarioInput({ energyDemand = 18, listingFacts = [] } = {}) {
   return {
@@ -49,6 +50,15 @@ test("exports planned energy values as planning data and prioritizes a later ene
 
   const unknownXml = buildOpenImmoXml(energyScenarioInput({ energyDemand: 0 }));
   assert.doesNotMatch(unknownXml, /<energiepass>|Projektierter Endenergiebedarf|Projektierte Energieeffizienzklasse/);
+});
+
+test("exports a QNG guarantee only as status-accurate free text, never as an individual certificate field", () => {
+  const input = energyScenarioInput();
+  input.listings[0].texts.description = QNG_GUARANTEE_SENTENCE;
+  const xml = buildOpenImmoXml(input);
+  assert.match(xml, new RegExp(`<objektbeschreibung><!\\[CDATA\\[${QNG_GUARANTEE_SENTENCE}\\]\\]><\\/objektbeschreibung>`, "u"));
+  assert.doesNotMatch(xml, /feldname="[^"]*QNG[^"]*"/u);
+  assert.doesNotMatch(xml, /QNG[-\s]?zertifiziert|QNG[-\s]?Zertifikat/iu);
 });
 
 test("exports listings with the OpenImmo CHANGE upsert action", async () => {
