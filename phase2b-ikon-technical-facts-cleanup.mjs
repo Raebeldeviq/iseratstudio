@@ -21,7 +21,6 @@ import {
   isLivingHausIKonTechnicalPackage,
   LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID,
   LIVING_HAUS_SERIES_ID,
-  technicalPackageFactSentence,
   validateListingClaims,
 } from "./listing-claim-policy.mjs";
 import { APPLICATION_DATA_DIRECTORY } from "./platform-paths.mjs";
@@ -72,6 +71,16 @@ const CLUSTER = Object.freeze({
 
 const TITLE_PREVIOUS = "Wärmepumpe und Komfortlüftung";
 const TITLE_REPLACEMENT = "Wärmepumpe und Lüftungsanlage";
+
+// Phase 2B.6 was executed with these exact, approved technical sentences.
+// They remain frozen here so the completed historical cleanup cannot change
+// merely because the current, richer I-KON fact model evolves.
+const LEGACY_IKON_COMPONENT_LABEL = Object.freeze({
+  photovoltaic: "Photovoltaikanlage",
+  battery_storage: "Batteriespeicher",
+  heat_pump: "Wärmepumpe",
+  ventilation: "Lüftungsanlage",
+});
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -198,11 +207,16 @@ function requiredPackageFacts(context) {
 
 function packageSentence(context, keys) {
   requiredPackageFacts(context);
-  const sentence = technicalPackageFactSentence({
-    listingFacts: context.listing.listingFacts,
-    house: context.house,
-    project: context.project,
-  }, keys);
+  const values = keys.map((key) => LEGACY_IKON_COMPONENT_LABEL[key]);
+  if (values.some((value) => !value)) {
+    throw new Error(`PHASE2B_IKON_SENTENCE_MISSING: ${context.listing.id} verlangt einen nicht freigegebenen Paketbestandteil.`);
+  }
+  const list = values.length === 1
+    ? values[0]
+    : values.length === 2
+      ? `${values[0]} und ${values[1]}`
+      : `${values.slice(0, -1).join(", ")} und ${values.at(-1)}`;
+  const sentence = `Das I-KON-Technikpaket umfasst ${list}.`;
   if (!sentence) throw new Error(`PHASE2B_IKON_SENTENCE_MISSING: ${context.listing.id} liefert keine vollständige Paket-Sachinformation.`);
   if (descriptionBlocks(context, sentence).length) {
     throw new Error(`PHASE2B_IKON_POLICY_FAILED: Die I-KON-Paketsachinformation ist nicht policy-konform.`);

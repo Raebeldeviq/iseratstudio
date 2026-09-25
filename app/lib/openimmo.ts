@@ -2,14 +2,11 @@ import JSZip from "jszip";
 import { APP_VERSION } from "./app-version.mjs";
 import { imageSequenceIssues, orderHouseImages, parseHouseVariant } from "../../image-sequence.mjs";
 import {
-  enforceListingCopy,
   fillMissingProjectingDefaults,
   projectingEnvironmentLabels,
   FACTUAL_BUILDABILITY_NOTE,
-  FIXED_ANNOTATION_TEXT,
-  FIXED_PROVISION_TEXT,
-  FIXED_RECOMMENDATION_TEXT,
-  FIXED_TERMS_TEXT,
+  isCurrentStaticCopyText,
+  resolveListingStaticCopy,
 } from "../../listing-copy.mjs";
 import {
   assertListingClaimsCompliant,
@@ -111,6 +108,10 @@ export function validateImportPackage(input: PackageInput): string[] {
     if (!Number.isFinite(listing.price) || listing.price <= 0) errors.push(`${label}: Kaufpreis muss größer als 0 sein.`);
     for (const [field, value] of Object.entries(listing.texts)) {
       if (!String(value).trim()) errors.push(`${label}: Textfeld ${field} ist leer.`);
+    }
+    const staticCopy = resolveListingStaticCopy(listing);
+    for (const [field, value] of Object.entries(staticCopy.values)) {
+      if (!String(value).trim()) errors.push(`${label}: Statisches Textfeld ${field} ist leer.`);
     }
 
     const house = input.houses.find((item) => item.id === listing.templateId);
@@ -269,7 +270,12 @@ function listingXml(
     useGrouping: false,
     maximumFractionDigits: 2,
   });
-  const texts = enforceListingCopy(listing.texts, { house, project });
+  const staticCopy = resolveListingStaticCopy(listing);
+  const texts = {
+    ...listing.texts,
+    equipment: staticCopy.values.equipment,
+    other: staticCopy.values.other,
+  };
   const projecting = fillMissingProjectingDefaults(listing.projectingSettings);
   const technicalFacts = releasedTechnicalFacts({
     house,
@@ -284,8 +290,15 @@ function listingXml(
   };
   // OpenImmo booleans and numeric metadata cannot express a planning status.
   // Planned facts remain available as explicitly planned free-text statements.
-  const heatPumpFact = exportableFact("heat_pump");
-  const underfloorHeatingFact = exportableFact("underfloor_heating");
+  const plannedPortalFact = (key: string) => {
+    const fact = technicalFact(key);
+    return fact?.status === "planned"
+      && [FACT_EVIDENCE_KIND.PROJECTED_PORTAL_FIELD, FACT_EVIDENCE_KIND.PROJECTED_HOUSE_ENERGY_CLASS]
+        .includes(fact.evidenceKind)
+      ? fact
+      : undefined;
+  };
+  const heatPumpFact = plannedPortalFact("heat_pump") || exportableFact("heat_pump");
   const energyCertificateFact = (key: string) => {
     const fact = technicalFact(key);
     return fact?.evidenceKind === FACT_EVIDENCE_KIND.ENERGY_CERTIFICATE
@@ -295,7 +308,8 @@ function listingXml(
   };
   const plannedEnergyFact = (key: string) => {
     const fact = technicalFact(key);
-    return fact?.evidenceKind === FACT_EVIDENCE_KIND.PROJECTED_HOUSE_VALUE
+    return [FACT_EVIDENCE_KIND.PROJECTED_HOUSE_VALUE, FACT_EVIDENCE_KIND.PROJECTED_HOUSE_ENERGY_CLASS]
+      .includes(fact?.evidenceKind)
       && fact.status === "planned"
       ? fact
       : undefined;
@@ -304,7 +318,7 @@ function listingXml(
   const energyClassFact = energyCertificateFact("energy_class");
   const plannedEnergyDemandFact = plannedEnergyFact("energy_demand");
   const plannedEnergyClassFact = plannedEnergyFact("energy_class");
-  const efficiencyStandardFact = exportableFact("efficiency_house_standard");
+  const efficiencyStandardFact = plannedPortalFact("efficiency_house_standard") || exportableFact("efficiency_house_standard");
   const energyDemand = energyDemandFact ? decimalFactValue(energyDemandFact.value) : null;
   const energyCertificatePass = energyDemand !== null
     ? `<energiepass>
@@ -349,8 +363,8 @@ function listingXml(
         </kontaktperson>
         <preise>
           <kaufpreis>${currency.format(listing.price)}</kaufpreis>
-          <provisionspflichtig>${projecting.commissionRequired}</provisionspflichtig>
-          <courtage_hinweis>${cdata(FIXED_PROVISION_TEXT)}</courtage_hinweis>
+          <provisionspflichtig>false</provisionspflichtig>
+          <courtage_hinweis>${cdata(staticCopy.values.provision)}</courtage_hinweis>
           <waehrung iso_waehrung="EUR" />
         </preise>
         <flaechen>
@@ -366,7 +380,6 @@ function listingXml(
           <ausstatt_kategorie WERTIGKEIT="${xml(projecting.equipmentQuality)}" />
           <bad dusche="${projecting.shower}" wanne="${projecting.bathtub}" fenster="${projecting.bathroomWindow}" />
           <kueche ebk="${projecting.fittedKitchen}" offen="${projecting.openKitchen}" />
-          <heizungsart fussboden="${underfloorHeatingFact ? "true" : "false"}" />
           <befeuerung elektro="false" luftwp="${heatPumpFact ? "true" : "false"}" />
           <gartennutzung>${projecting.gardenUse}</gartennutzung>
           <energietyp kfw40="${Boolean(efficiencyStandardFact && /(?:effizienzhaus|kfw)\s*[- ]?40\b/iu.test(String(efficiencyStandardFact.value)))}" kfw55="${Boolean(efficiencyStandardFact && /(?:effizienzhaus|kfw)\s*[- ]?55\b/iu.test(String(efficiencyStandardFact.value)))}" />
@@ -391,9 +404,9 @@ function listingXml(
           ${plannedEnergyClassFact ? `<user_defined_simplefield feldname="Projektierte Energieeffizienzklasse">${cdata(`${plannedEnergyClassFact.value} – Planungswert, kein individueller Energieausweis`)}</user_defined_simplefield>` : ""}
           <user_defined_simplefield feldname="Living Haus Modell-ID">${cdata(house.id)}</user_defined_simplefield>
           <user_defined_simplefield feldname="Living Haus Modell">${cdata(house.name)}</user_defined_simplefield>
-          <user_defined_simplefield feldname="Anmerkung">${cdata(FIXED_ANNOTATION_TEXT)}</user_defined_simplefield>
-          <user_defined_simplefield feldname="Allgemeine Geschäftsbedingungen">${cdata(FIXED_TERMS_TEXT)}</user_defined_simplefield>
-          <user_defined_simplefield feldname="Freier Textblock für Empfehlungen">${cdata(FIXED_RECOMMENDATION_TEXT)}</user_defined_simplefield>
+          <user_defined_simplefield feldname="Anmerkung">${cdata(staticCopy.values.annotation)}</user_defined_simplefield>
+          <user_defined_simplefield feldname="Allgemeine Geschäftsbedingungen">${cdata(staticCopy.values.terms)}</user_defined_simplefield>
+          <user_defined_simplefield feldname="Freier Textblock für Empfehlungen">${cdata(staticCopy.values.recommendation)}</user_defined_simplefield>
         </freitexte>
         <anhaenge>${imageXml(listing, images)}</anhaenge>
         <verwaltung_objekt>
@@ -419,20 +432,29 @@ export function buildOpenImmoXml(input: PackageInput): string {
   for (const listing of listings) {
     const house = houses.find((item) => item.id === listing.templateId);
     if (!house) continue;
+    const staticCopy = resolveListingStaticCopy(listing);
+    const exportedTexts = {
+      ...listing.texts,
+      equipment: staticCopy.values.equipment,
+      other: staticCopy.values.other,
+    };
     assertListingClaimsCompliant({
-      texts: listing.texts,
+      texts: exportedTexts,
+      staticTexts: {
+        provision: staticCopy.values.provision,
+        annotation: staticCopy.values.annotation,
+        terms: staticCopy.values.terms,
+        recommendation: staticCopy.values.recommendation,
+      },
+      approvedMasterTextFields: isCurrentStaticCopyText("equipment", staticCopy.values.equipment)
+        ? ["equipment"]
+        : [],
       house,
       project,
       listingFacts: listing.listingFacts,
       houseSeries: LIVING_HAUS_SERIES_ID,
       images: listingImages(input, house, listing),
-      advertisingTexts: [
-        FIXED_PROVISION_TEXT,
-        FIXED_ANNOTATION_TEXT,
-        FIXED_TERMS_TEXT,
-        FIXED_RECOMMENDATION_TEXT,
-        FACTUAL_BUILDABILITY_NOTE,
-      ],
+      advertisingTexts: [FACTUAL_BUILDABILITY_NOTE],
     });
   }
   const timestamp = new Date().toISOString();

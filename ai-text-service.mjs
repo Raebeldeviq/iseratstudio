@@ -3,8 +3,6 @@ import {
   buildListingHeadline,
   enforceListingCopy,
   FIXED_DESCRIPTION_CTA,
-  FIXED_EQUIPMENT_TEXT,
-  FIXED_OTHER_TEXT,
 } from "./listing-copy.mjs";
 import {
   formatClaimIssue,
@@ -299,7 +297,8 @@ export function validateListingTexts(texts, house = {}, project = {}, factContex
   const errors = [];
   if (!texts || typeof texts !== "object") return ["Die Textausgabe ist unvollständig."];
 
-  for (const field of TEXT_FIELDS) {
+  const fieldsToValidate = factContext.dynamicOnly === true ? AI_TEXT_FIELDS : TEXT_FIELDS;
+  for (const field of fieldsToValidate) {
     const value = typeof texts[field] === "string" ? texts[field].trim() : "";
     const rule = FIELD_RULES[field];
     if (!value) {
@@ -317,21 +316,14 @@ export function validateListingTexts(texts, house = {}, project = {}, factContex
 
   const title = typeof texts.title === "string" ? texts.title.trim() : "";
   const requiredTitle = buildListingHeadline(house, project, factContext);
-  if (title && finiteNumber(house.livingArea) > 0 && finiteNumber(house.rooms) > 0 && (project.city || project.district) && title !== requiredTitle) {
+  if (!factContext.dynamicOnly && title && finiteNumber(house.livingArea) > 0 && finiteNumber(house.rooms) > 0 && (project.city || project.district) && title !== requiredTitle) {
     errors.push("Die Überschrift enthält nicht vollständig Ort, gerundete Wohnfläche und Zimmer.");
   }
   if (texts.description && !String(texts.description).trim().endsWith(FIXED_DESCRIPTION_CTA)) {
     errors.push("Der feste Call-to-Action der Objektbeschreibung fehlt oder wurde verändert.");
   }
-  if (texts.equipment !== FIXED_EQUIPMENT_TEXT) {
-    errors.push("Der vorgeschriebene Ausstattungstext wurde verändert.");
-  }
-  if (texts.other !== FIXED_OTHER_TEXT) {
-    errors.push("Der vorgeschriebene Sonstiges-Text wurde verändert.");
-  }
-
   const seenParagraphs = new Map();
-  for (const field of TEXT_FIELDS.slice(1)) {
+  for (const field of fieldsToValidate.filter((field) => field !== "title")) {
     const paragraphs = String(texts[field] ?? "").split(/\n\s*\n/).map((value) => value.trim()).filter(Boolean);
     for (const paragraph of paragraphs) {
       if (paragraph.length < 100) continue;
@@ -483,15 +475,16 @@ export async function generateAiListing(input = {}) {
       generated: true,
       ...factContext,
     });
+    const dynamicTexts = Object.fromEntries(AI_TEXT_FIELDS.map((field) => [field, texts[field]]));
     const claimValidation = validateListingClaims({
-      texts,
+      texts: dynamicTexts,
       house: input.house,
       project: input.project,
       listingFacts: input.listingFacts,
       houseSeries: LIVING_HAUS_SERIES_ID,
     });
     feedback = [
-      ...validateListingTexts(texts, input.house, input.project, factContext),
+      ...validateListingTexts(texts, input.house, input.project, { ...factContext, dynamicOnly: true }),
       ...validateNovelty(texts, input.previousTexts),
       ...validateLocationPrivacy(texts, input.project),
       ...claimValidation.blockingIssues.map(formatClaimIssue),

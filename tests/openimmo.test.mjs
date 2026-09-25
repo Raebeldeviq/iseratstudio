@@ -37,7 +37,7 @@ test("exports planned energy values as planning data and prioritizes a later ene
   const projectedXml = buildOpenImmoXml(energyScenarioInput());
   assert.doesNotMatch(projectedXml, /<energiepass>/);
   assert.match(projectedXml, /feldname="Projektierter Endenergiebedarf"><!\[CDATA\[18 kWh\/\(m²·a\) – Planungswert, kein individueller Energieausweis\]\]><\/user_defined_simplefield>/u);
-  assert.doesNotMatch(projectedXml, /Projektierte Energieeffizienzklasse/);
+  assert.match(projectedXml, /feldname="Projektierte Energieeffizienzklasse"><!\[CDATA\[A\+\+ – Planungswert, kein individueller Energieausweis\]\]><\/user_defined_simplefield>/u);
 
   const certificateFacts = [
     { key: "energy_demand", value: "42", source: "project", scope: "house", status: "verified", verified: true, evidenceKind: "energy_certificate", evidenceReference: "Energieausweis EA-2026-17" },
@@ -49,7 +49,8 @@ test("exports planned energy values as planning data and prioritizes a later ene
   assert.doesNotMatch(certificateXml, /Projektierter Endenergiebedarf/);
 
   const unknownXml = buildOpenImmoXml(energyScenarioInput({ energyDemand: 0 }));
-  assert.doesNotMatch(unknownXml, /<energiepass>|Projektierter Endenergiebedarf|Projektierte Energieeffizienzklasse/);
+  assert.doesNotMatch(unknownXml, /<energiepass>|Projektierter Endenergiebedarf/);
+  assert.match(unknownXml, /Projektierte Energieeffizienzklasse/);
 });
 
 test("exports a QNG guarantee only as status-accurate free text, never as an individual certificate field", () => {
@@ -151,16 +152,16 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
   assert.match(xml, /<kueche ebk="true" offen="true" \/>/);
   assert.match(xml, /<user_defined_simplefield feldname="Umgebung"><!\[CDATA\[Bus, Einkaufsmöglichkeit\]\]><\/user_defined_simplefield>/);
   assert.match(xml, /<ausstatt_kategorie WERTIGKEIT="GEHOBEN" \/>/);
-  assert.match(xml, /<heizungsart fussboden="false" \/>/);
-  assert.match(xml, /<befeuerung elektro="false" luftwp="false" \/>/);
+  assert.doesNotMatch(xml, /<heizungsart\b/u);
+  assert.match(xml, /<befeuerung elektro="false" luftwp="true" \/>/);
   assert.match(xml, /<gartennutzung>true<\/gartennutzung>/);
-  assert.match(xml, /<energietyp kfw40="false" kfw55="false" \/>/);
+  assert.match(xml, /<energietyp kfw40="true" kfw55="true" \/>/);
   assert.match(xml, /<dachboden>true<\/dachboden>/);
   assert.match(xml, /<gaestewc>true<\/gaestewc>/);
   assert.match(xml, /<zustand zustand_art="PROJEKTIERT" \/>/);
   assert.doesNotMatch(xml, /<energiepass>|<wertklasse>/);
   assert.match(xml, /<provisionspflichtig>false<\/provisionspflichtig>/);
-  assert.doesNotMatch(xml, /feldname="Energieklasse"/);
+  assert.match(xml, /feldname="Projektierte Energieeffizienzklasse"/);
   assert.ok(xml.includes(FIXED_PROVISION_TEXT));
   assert.ok(xml.includes("Ausstattung"));
   assert.ok(xml.includes("Sonstiges"));
@@ -309,19 +310,19 @@ test("does not overwrite explicit projecting values during export", () => {
 
   const xml = buildOpenImmoXml(input);
   assert.match(xml, /<ausstatt_kategorie WERTIGKEIT="LUXUS" \/>/);
-  assert.match(xml, /<heizungsart fussboden="false" \/>/);
-  assert.match(xml, /<befeuerung elektro="false" luftwp="false" \/>/);
+  assert.doesNotMatch(xml, /<heizungsart\b/u);
+  assert.match(xml, /<befeuerung elektro="false" luftwp="true" \/>/);
   assert.match(xml, /<gartennutzung>false<\/gartennutzung>/);
-  assert.match(xml, /<energietyp kfw40="false" kfw55="false" \/>/);
+  assert.match(xml, /<energietyp kfw40="true" kfw55="true" \/>/);
   assert.match(xml, /<zustand zustand_art="ERSTBEZUG" \/>/);
   assert.doesNotMatch(xml, /<wertklasse>/);
-  assert.match(xml, /<provisionspflichtig>true<\/provisionspflichtig>/);
+  assert.match(xml, /<provisionspflichtig>false<\/provisionspflichtig>/);
   assert.match(xml, /<bad dusche="false" wanne="false" fenster="false" \/>/);
   assert.match(xml, /<kueche ebk="false" offen="false" \/>/);
   assert.match(xml, /<dachboden>false<\/dachboden>/);
   assert.match(xml, /<gaestewc>false<\/gaestewc>/);
   assert.match(xml, /<user_defined_simplefield feldname="Umgebung"><!\[CDATA\[Einkaufsmöglichkeit\]\]><\/user_defined_simplefield>/);
-  assert.doesNotMatch(xml, /feldname="Energieklasse"/);
+  assert.match(xml, /feldname="Projektierte Energieeffizienzklasse"/);
 });
 
 test("rejects malformed project and unsupported image data before packaging", () => {

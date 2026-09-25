@@ -162,7 +162,9 @@ test("models the I-KON package fact and its four components only for the explici
     { key: "photovoltaic", value: "Photovoltaikanlage", sourceKind: FACT_SOURCE.OPTIONAL_PACKAGE, status: FACT_STATUS.VERIFIED, verified: true },
     { key: "battery_storage", value: "Batteriespeicher", sourceKind: FACT_SOURCE.OPTIONAL_PACKAGE, status: FACT_STATUS.VERIFIED, verified: true },
     { key: "heat_pump", value: "Wärmepumpe", sourceKind: FACT_SOURCE.OPTIONAL_PACKAGE, status: FACT_STATUS.VERIFIED, verified: true },
-    { key: "ventilation", value: "Lüftungsanlage", sourceKind: FACT_SOURCE.OPTIONAL_PACKAGE, status: FACT_STATUS.VERIFIED, verified: true },
+    { key: "ventilation", value: "Komfortlüftung mit Wärmerückgewinnung", sourceKind: FACT_SOURCE.OPTIONAL_PACKAGE, status: FACT_STATUS.VERIFIED, verified: true },
+    { key: "heat_recovery", value: "Wärmerückgewinnung", sourceKind: FACT_SOURCE.OPTIONAL_PACKAGE, status: FACT_STATUS.VERIFIED, verified: true },
+    { key: "building_envelope", value: "Entsprechend ausgelegte Gebäudehülle", sourceKind: FACT_SOURCE.OPTIONAL_PACKAGE, status: FACT_STATUS.VERIFIED, verified: true },
   ]);
   assert.ok(facts.filter((fact) => fact.scope === FACT_SCOPE.TECHNICAL_PACKAGE)
     .every((fact) => isLivingHausIKonTechnicalPackage(fact.packageId)));
@@ -171,8 +173,8 @@ test("models the I-KON package fact and its four components only for the explici
   assert.equal(unverifiedNewHouse.technicalPackage, undefined);
   assert.equal(collectListingFacts({ house: unverifiedNewHouse })
     .some((fact) => fact.scope === FACT_SCOPE.TECHNICAL_PACKAGE), false);
-  assert.equal(technicalPackageFactSentence({ house: { technicalPackage: LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID } }), "Das I-KON-Technikpaket umfasst Photovoltaikanlage, Batteriespeicher, Wärmepumpe und Lüftungsanlage.");
-  assert.equal(technicalPackageFactSentence({ house: { technicalPackage: LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID } }, ["heat_pump", "ventilation"]), "Das I-KON-Technikpaket umfasst Wärmepumpe und Lüftungsanlage.");
+  assert.equal(technicalPackageFactSentence({ house: { technicalPackage: LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID } }), "Das I-KON-Technikpaket umfasst Photovoltaikanlage, Batteriespeicher, Wärmepumpe und Komfortlüftung mit Wärmerückgewinnung.");
+  assert.equal(technicalPackageFactSentence({ house: { technicalPackage: LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID } }, ["heat_pump", "ventilation"]), "Das I-KON-Technikpaket umfasst Wärmepumpe und Komfortlüftung mit Wärmerückgewinnung.");
 });
 
 test("allows only package-covered factual names and never derives environmental effects", () => {
@@ -181,10 +183,10 @@ test("allows only package-covered factual names and never derives environmental 
     ...context,
     texts: { description: "Das I-KON-Technikpaket umfasst Photovoltaikanlage, Batteriespeicher, Wärmepumpe und Lüftungsanlage." },
   }).ok, true);
-  assert.ok(validateListingClaims({
+  assert.equal(validateListingClaims({
     ...context,
     texts: { description: "Eine Komfortlüftung ist Bestandteil der Ausstattung." },
-  }).blockingIssues.some((entry) => entry.category === CLAIM_CATEGORY.UNVERIFIED_TECHNICAL_CLAIM));
+  }).ok, true);
   assert.ok(validateListingClaims({
     ...context,
     texts: { description: "Eine Luft-Wasser-Wärmepumpe ist Bestandteil der Ausstattung." },

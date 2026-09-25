@@ -33,11 +33,11 @@ const testHouse = {
 };
 const testProject = { city: "Schulzendorf", district: "" };
 const validTexts = enforceListingCopy({
-  title: "Entwurf",
+  title: buildListingHeadline(testHouse, testProject),
   description: longText("Der projektierte Entwurf verbindet klare Architektur mit flexibel nutzbaren Räumen und einer sorgfältig abgestimmten Planung für den Familienalltag.", 1250),
-  equipment: "Wird ersetzt.",
+  equipment: "",
   location: longText("Das Grundstück liegt in Schulzendorf und bietet einen stimmigen Rahmen für das geplante Zuhause; alle weiteren Details werden anhand bestätigter Standortdaten beurteilt.", 550),
-  other: "Wird ersetzt.",
+  other: "",
 }, { house: testHouse, project: testProject, generated: true });
 
 test("removes the exact house number before building the AI source data", () => {
@@ -79,7 +79,19 @@ test("supplies only released series facts and projected energy values to the AI"
     && fact.status === "planned"
     && fact.evidenceKind === "projected_house_value"
   )));
-  assert.equal(source.house.releasedListingFacts.some((fact) => fact.key === "energy_class"), false);
+  assert.deepEqual(source.house.releasedListingFacts.find((fact) => fact.key === "energy_class"), {
+    key: "energy_class",
+    value: "A++",
+    source: "verified_series",
+    sourceKind: "verified_series",
+    scope: "project",
+    status: "planned",
+    verified: true,
+    evidenceReference: "Verifizierter Living-Haus-Projektierungswert: Energieeffizienzklasse A++",
+    evidenceKind: "projected_house_energy_class",
+    sourceScope: undefined,
+    projectScope: undefined,
+  });
 });
 
 test("uses the Responses API quality settings and a strict text schema", () => {

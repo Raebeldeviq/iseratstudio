@@ -63,6 +63,11 @@ import {
   FIXED_PROVISION_TEXT,
   FIXED_RECOMMENDATION_TEXT,
   FIXED_TERMS_TEXT,
+  createStandardStaticCopy,
+  initializeListingStaticCopy,
+  resolveListingStaticCopy,
+  STATIC_COPY_FIELD,
+  STATIC_COPY_SOURCE,
 } from "../listing-copy.mjs";
 import PlotManagement from "./components/PlotManagement";
 import { APP_VERSION } from "./lib/app-version.mjs";
@@ -281,7 +286,7 @@ function createVariantListing(
   // auf ausdrückliche Nutzeraktion und nie während der Normalisierung.
   if (previous) return { ...previous };
   const version = Math.max(1, previous?.version || 1);
-  return {
+  return initializeListingStaticCopy({
     ...previous,
     id: previous?.id || uid(),
     externalId: previous?.externalId
@@ -302,7 +307,7 @@ function createVariantListing(
     projectingSettings: fillMissingProjectingDefaults(previous?.projectingSettings),
     listingGroupVariantId: variantId,
     listingOrigin: previous?.listingOrigin || "group-source",
-  };
+  });
 }
 
 function normalizeMandatoryListingStandards(inputState: StudioState): StudioState {
@@ -2510,14 +2515,19 @@ export default function InseratStudio() {
             house,
             projectSnapshot,
             state.provider,
-            data.texts,
+            {
+              ...previous?.texts,
+              description: data.texts.description,
+              location: data.texts.location,
+            },
             version,
           );
           return { house, index, variant, previous, texts, version };
         }),
       );
 
-      const sourceListings: GeneratedListing[] = generated.map(({ house, index, variant, previous, texts, version }) => ({
+      const sourceListings: GeneratedListing[] = generated.map(({ house, index, variant, previous, texts, version }) => {
+        const nextListing: GeneratedListing = {
         ...previous,
         id: previous?.id ?? uid(),
         externalId:
@@ -2533,7 +2543,9 @@ export default function InseratStudio() {
         listingOrigin: previous?.listingOrigin || "group-source",
         status: normalizeWorkflowStatus(previous?.status, WORKFLOW_STATUS.DRAFT),
         statusMessage: previous?.statusMessage || "Entwurf",
-      }));
+        };
+        return previous ? nextListing : initializeListingStaticCopy(nextListing) as GeneratedListing;
+      });
       let listingGroup = activeListingGroup as ListingGroup;
       for (const listing of sourceListings) {
         if (!listing.listingGroupVariantId) continue;
@@ -2595,6 +2607,62 @@ export default function InseratStudio() {
     updateListing(listingId, {
       texts: { ...listing.texts, [field]: value },
     });
+  };
+
+  const updateListingStaticText = (
+    listingId: string,
+    field: keyof ReturnType<typeof createStandardStaticCopy>,
+    value: string,
+  ) => {
+    const listing = activeProject?.listings.find((item) => item.id === listingId);
+    if (!listing) return;
+    const sources = { ...listing.staticCopySources, [field]: STATIC_COPY_SOURCE.MANUAL };
+    if (field === STATIC_COPY_FIELD.EQUIPMENT || field === STATIC_COPY_FIELD.OTHER) {
+      updateListing(listingId, {
+        texts: { ...listing.texts, [field]: value },
+        staticCopySources: sources,
+      });
+      return;
+    }
+    updateListing(listingId, {
+      staticTexts: { ...listing.staticTexts, [field]: value },
+      staticCopySources: sources,
+    });
+  };
+
+  const resetListingStaticText = (
+    listingId: string,
+    field: keyof ReturnType<typeof createStandardStaticCopy>,
+  ) => {
+    if (!window.confirm("Diesen Text wirklich auf den aktuellen zentralen Standard zurücksetzen?")) return;
+    const listing = activeProject?.listings.find((item) => item.id === listingId);
+    if (!listing) return;
+    const standard = createStandardStaticCopy();
+    const sources = { ...listing.staticCopySources, [field]: STATIC_COPY_SOURCE.STANDARD };
+    if (field === STATIC_COPY_FIELD.EQUIPMENT || field === STATIC_COPY_FIELD.OTHER) {
+      updateListing(listingId, {
+        texts: { ...listing.texts, [field]: standard[field] },
+        staticCopySources: sources,
+      });
+      return;
+    }
+    updateListing(listingId, {
+      staticTexts: { ...listing.staticTexts, [field]: standard[field] },
+      staticCopySources: sources,
+    });
+  };
+
+  const staticCopyEditor = (
+    listing: GeneratedListing,
+    field: keyof ReturnType<typeof createStandardStaticCopy>,
+    label: string,
+    rows: number,
+  ) => {
+    const copy = resolveListingStaticCopy(listing);
+    return <div className="static-copy-editor">
+      <TextField label={label} rows={rows} value={copy.values[field]} onChange={(value) => updateListingStaticText(listing.id, field, value)} />
+      <div className="button-row compact"><small>Status: {copy.sources[field] === STATIC_COPY_SOURCE.MANUAL ? "manuell angepasst" : "zentraler Standard"}</small><button className="secondary" type="button" onClick={() => resetListingStaticText(listing.id, field)}>Auf Standard zurücksetzen</button></div>
+    </div>;
   };
 
   const packageInput = (
@@ -3733,15 +3801,15 @@ export default function InseratStudio() {
                           <TextField label="Überschrift" rows={2} value={listing.texts.title} onChange={(value) => updateListingText(listing.id, "title", value)} />
                           <TextField label="Kurztext · automatisch aus Überschrift und Beschreibung" rows={3} value={shortPreview} readOnly />
                           <TextField label="Objektbeschreibung · Langtext" rows={8} value={listing.texts.description} onChange={(value) => updateListingText(listing.id, "description", value)} />
-                          <TextField label="Ausstattung · fest" rows={8} value={listing.texts.equipment} readOnly />
+                          {staticCopyEditor(listing, STATIC_COPY_FIELD.EQUIPMENT, "Ausstattung", 12)}
                           <TextField label="Lage · Langtext" rows={7} value={listing.texts.location} onChange={(value) => updateListingText(listing.id, "location", value)} />
                           <TextField label="Technische und Energiefakten" rows={3} value="Werbliche technische Angaben werden nur aus hinterlegten, verifizierten Fakten mit Quelle, Scope und Status übernommen." readOnly />
                           <TextField label="Sachlicher Hinweis zur Bebaubarkeit" rows={3} value={FACTUAL_BUILDABILITY_NOTE} readOnly />
-                          <TextField label="Sonstiges · fest" rows={7} value={listing.texts.other} readOnly />
-                          <TextField label="Provision · fest" rows={2} value={FIXED_PROVISION_TEXT} readOnly />
-                          <TextField label="Anmerkung · fest" rows={4} value={FIXED_ANNOTATION_TEXT} readOnly />
-                          <TextField label="Allgemeine Geschäftsbedingungen · fest" rows={3} value={FIXED_TERMS_TEXT} readOnly />
-                          <TextField label="Freier Textblock für Empfehlungen · fest" rows={7} value={FIXED_RECOMMENDATION_TEXT} readOnly />
+                          {staticCopyEditor(listing, STATIC_COPY_FIELD.OTHER, "Sonstiges", 9)}
+                          {staticCopyEditor(listing, STATIC_COPY_FIELD.PROVISION, "Provision", 3)}
+                          {staticCopyEditor(listing, STATIC_COPY_FIELD.ANNOTATION, "Anmerkung", 4)}
+                          {staticCopyEditor(listing, STATIC_COPY_FIELD.TERMS, "Allgemeine Geschäftsbedingungen", 3)}
+                          {staticCopyEditor(listing, STATIC_COPY_FIELD.RECOMMENDATION, "Freier Textblock für Empfehlungen", 8)}
                         </div>
                         <footer><span>{displayImages.length} Bilder automatisch zugeordnet{promotionImage ? " · Aktionsbild an Position 1" : " · normale Bildfolge"}</span><span>Weitergabe an Portale: <b>deaktiviert</b></span></footer>
                       </article>;

@@ -307,6 +307,25 @@ test("prepared copy persists one coherent house, text, price, image and OpenImmo
   const state = fullState();
   const project = state.projects[0];
   const source = project.listings[0];
+  source.texts = {
+    ...source.texts,
+    equipment: "Manuell gepflegte Ausstattung",
+    other: "Manuell gepflegtes Sonstiges",
+  };
+  source.staticTexts = {
+    provision: "Manuelle Provision",
+    annotation: "Manuelle Anmerkung",
+    terms: "Manuelle AGB",
+    recommendation: "Manuelle Empfehlung",
+  };
+  source.staticCopySources = {
+    equipment: "manual",
+    other: "manual",
+    provision: "manual",
+    annotation: "manual",
+    terms: "manual",
+    recommendation: "manual",
+  };
   const result = prepareListingRotationInState(state, project.id, source.id, {
     now: NOW,
     copyId: "copy-persisted",
@@ -328,9 +347,10 @@ test("prepared copy persists one coherent house, text, price, image and OpenImmo
     { ...source.texts, title: variedTexts.title, description: variedTexts.description },
     copy.version,
   ));
-  assert.match(copy.texts.equipment, /Endenergiebedarf von 18 kWh\/\(m²·a\) vorgesehen/u);
-  assert.match(copy.texts.equipment, /DGNB-Serienzertifizierung/u);
-  assert.doesNotMatch(copy.texts.equipment, /QNG/u);
+  assert.equal(copy.texts.equipment, "Manuell gepflegte Ausstattung");
+  assert.equal(copy.texts.other, "Manuell gepflegtes Sonstiges");
+  assert.deepEqual(copy.staticTexts, source.staticTexts);
+  assert.deepEqual(copy.staticCopySources, source.staticCopySources);
   assert.match(copy.texts.title, new RegExp(`${QNG_GUARANTEE_TITLE}`, "u"));
   assert.match(copy.texts.title, /DGNB-Serienzertifizierung/u);
   assert.equal(copy.texts.description.split(QNG_GUARANTEE_SENTENCE).length - 1, 1);

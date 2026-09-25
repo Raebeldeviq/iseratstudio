@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import JSZip from "jszip";
 
 import { parseHouseVariant } from "./image-sequence.mjs";
-import { enforceListingCopy } from "./listing-copy.mjs";
+import { isCurrentStaticCopyText, resolveListingStaticCopy } from "./listing-copy.mjs";
 import { assertListingClaimsCompliant, LIVING_HAUS_SERIES_ID } from "./listing-claim-policy.mjs";
 
 export const CREATIVE_PAYLOAD_MISMATCH = "CREATIVE_PAYLOAD_MISMATCH";
@@ -122,9 +122,23 @@ export async function verifyCreativePayload(input) {
     }
     if (!zippedXml.includes(`<baujahr>${xmlValue(house?.constructionYear)}</baujahr>`)) errors.push("Payload-Baujahr stimmt nicht mit dem ausgewählten Haus überein.");
     if (project) {
-      const expectedTexts = enforceListingCopy(listing?.texts, { house, project });
+      const staticCopy = resolveListingStaticCopy(listing);
+      const expectedTexts = {
+        ...listing?.texts,
+        equipment: staticCopy.values.equipment,
+        other: staticCopy.values.other,
+      };
       assertListingClaimsCompliant({
-        texts: listing?.texts,
+        texts: expectedTexts,
+        staticTexts: {
+          provision: staticCopy.values.provision,
+          annotation: staticCopy.values.annotation,
+          terms: staticCopy.values.terms,
+          recommendation: staticCopy.values.recommendation,
+        },
+        approvedMasterTextFields: isCurrentStaticCopyText("equipment", staticCopy.values.equipment)
+          ? ["equipment"]
+          : [],
         house,
         project,
         listingFacts: listing?.listingFacts,
@@ -134,6 +148,17 @@ export async function verifyCreativePayload(input) {
       for (const [tag, field] of [["objekttitel", "title"], ["lage", "location"], ["ausstatt_beschr", "equipment"], ["objektbeschreibung", "description"], ["sonstige_angaben", "other"]]) {
         if (!zippedXml.includes(`<${tag}>${cdataValue(expectedTexts[field])}</${tag}>`)) {
           errors.push(`Payload-Textfeld ${field} stimmt nicht mit der ausgewählten Rotationskopie überein.`);
+        }
+      }
+      const staticFieldChecks = [
+        ["courtage_hinweis", staticCopy.values.provision],
+        ["user_defined_simplefield feldname=\"Anmerkung\"", staticCopy.values.annotation],
+        ["user_defined_simplefield feldname=\"Allgemeine Geschäftsbedingungen\"", staticCopy.values.terms],
+        ["user_defined_simplefield feldname=\"Freier Textblock für Empfehlungen\"", staticCopy.values.recommendation],
+      ];
+      for (const [tag, value] of staticFieldChecks) {
+        if (!zippedXml.includes(`<${tag}>${cdataValue(value)}`)) {
+          errors.push(`Payload-statisches Textfeld ${tag} stimmt nicht mit der ausgewählten Rotationskopie überein.`);
         }
       }
     }

@@ -18,6 +18,11 @@ import {
   FIXED_TERMS_TEXT,
   FACTUAL_BUILDABILITY_NOTE,
   IMMOPROFESSIONAL_DEFAULTS,
+  createStandardStaticCopy,
+  createStandardStaticCopySources,
+  initializeListingStaticCopy,
+  resolveListingStaticCopy,
+  STATIC_COPY_SOURCE,
 } from "../listing-copy.mjs";
 import {
   LIVING_HAUS_SERIES_ID,
@@ -82,7 +87,7 @@ test("shortens the opening before dropping the lower-priority USP and never trun
   assert.ok(plan.title.endsWith(plan.usps[0].label));
 });
 
-test("preserves manual free text and enforces safe blocks only for generated copy", () => {
+test("preserves all existing static copy even when dynamic copy is regenerated", () => {
   const manual = enforceListingCopy({
     title: "Alter Titel",
     description: `Ein emotionaler und individueller Hausabsatz.\n\n${FIXED_DESCRIPTION_CTA}`,
@@ -97,11 +102,27 @@ test("preserves manual free text and enforces safe blocks only for generated cop
   assert.equal(manual.location, "Roskow bietet ein ruhiges Wohnumfeld.");
 
   const generated = enforceListingCopy(manual, { house, project, generated: true });
-  assert.equal(generated.title, buildListingHeadline(house, project));
-  assert.equal(generated.equipment, FIXED_EQUIPMENT_TEXT);
-  assert.equal(generated.other, FIXED_OTHER_TEXT);
+  assert.equal(generated.title, "Alter Titel");
+  assert.equal(generated.equipment, "Alter Ausstattungstext");
+  assert.equal(generated.other, "Alter Sonstiges-Text");
   assert.ok(generated.description.endsWith(FIXED_DESCRIPTION_CTA));
   assert.equal(generated.description.split(FIXED_DESCRIPTION_CTA).length - 1, 1);
+});
+
+test("initializes only new static fields and keeps an explicit manual source across read resolution", () => {
+  const created = initializeListingStaticCopy({
+    texts: { title: "Titel", description: "Beschreibung", equipment: "", location: "Lage", other: "" },
+  });
+  assert.deepEqual(created.staticCopySources, createStandardStaticCopySources());
+  assert.deepEqual(resolveListingStaticCopy(created).values, createStandardStaticCopy());
+
+  const manual = {
+    ...created,
+    texts: { ...created.texts, equipment: "Individuelle Ausstattung" },
+    staticCopySources: { ...created.staticCopySources, equipment: STATIC_COPY_SOURCE.MANUAL },
+  };
+  assert.equal(resolveListingStaticCopy(manual).values.equipment, "Individuelle Ausstattung");
+  assert.equal(resolveListingStaticCopy(manual).sources.equipment, STATIC_COPY_SOURCE.MANUAL);
 });
 
 test("adds the central QNG guarantee only for generated Living-Haus copy", () => {
@@ -166,9 +187,9 @@ test("keeps the immoprofessional defaults and legal copy explicit", () => {
     underfloorHeating: false,
     electricFuel: false,
     airSourceHeatPump: false,
-    kfw40: false,
-    kfw55: false,
-    energyClass: "",
+    kfw40: true,
+    kfw55: true,
+    energyClass: "A++",
     commissionRequired: false,
     energyCertificateClass: "",
     fittedKitchen: true,
@@ -179,8 +200,8 @@ test("keeps the immoprofessional defaults and legal copy explicit", () => {
     environmentBus: true,
     environmentShopping: true,
   });
-  assert.equal(FIXED_PROVISION_TEXT, "Das Grundstück wird über einen Drittanbieter provisionspflichtig verkauft.");
-  assert.match(FIXED_ANNOTATION_TEXT, /Informationenbezüglich des Grundstückes/);
+  assert.equal(FIXED_PROVISION_TEXT, "Für den reinen Grundstückskauf fällt eine Provision an. Die Hausplanung/Bauträgerleistung (LivingHaus) ist davon nicht betroffen.");
+  assert.match(FIXED_ANNOTATION_TEXT, /Daten des Verkäufers/);
   assert.match(FIXED_TERMS_TEXT, /Kenntnis und Ihr Einverständnis/);
   assert.match(FIXED_RECOMMENDATION_TEXT, /HEUN-Finanz/);
 });
@@ -231,9 +252,9 @@ test("fills only missing projecting defaults and preserves explicit user values"
     underfloorHeating: false,
     electricFuel: false,
     airSourceHeatPump: false,
-    kfw40: false,
-    kfw55: false,
-    energyClass: "",
+    kfw40: true,
+    kfw55: true,
+    energyClass: "A++",
     commissionRequired: false,
     energyCertificateClass: "",
     fittedKitchen: true,

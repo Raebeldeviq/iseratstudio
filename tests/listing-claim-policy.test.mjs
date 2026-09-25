@@ -19,7 +19,7 @@ import {
   technicalFactSentences,
   validateListingClaims,
 } from "../listing-claim-policy.mjs";
-import { FIXED_DESCRIPTION_CTA, FIXED_OTHER_TEXT } from "../listing-copy.mjs";
+import { FIXED_DESCRIPTION_CTA, FIXED_EQUIPMENT_TEXT, FIXED_OTHER_TEXT } from "../listing-copy.mjs";
 import { completeListingTexts, generateListingTexts } from "../app/lib/text-generator.ts";
 
 const technicalFact = (key, value, overrides = {}) => ({
@@ -367,7 +367,7 @@ test("scans captions and CTA texts without silently changing manual input", () =
   assert.ok(result.blockingIssues.some((issue) => issue.field.startsWith("Bildunterschrift")));
 });
 
-test("deterministic generation uses only structured technical facts and otherwise stays claim-safe", () => {
+test("deterministic generation uses the fact-covered standard copy and preserves explicit static overrides", () => {
   const house = {
     id: "fact-house",
     name: "Fact House",
@@ -386,6 +386,8 @@ test("deterministic generation uses only structured technical facts and otherwis
     architecture: "Nachhaltige Architektur",
     equipmentHighlights: "Energieeffiziente Technik",
     useStandardPackage: true,
+    seriesId: LIVING_HAUS_SERIES_ID,
+    technicalPackage: "livinghaus-ikon-standard",
     images: [],
     listingFacts: [technicalFact("heat_pump", "Luft-Wasser-Wärmepumpe", { status: FACT_STATUS.PLANNED })],
   };
@@ -400,13 +402,14 @@ test("deterministic generation uses only structured technical facts and otherwis
     house,
     project,
     houseSeries: LIVING_HAUS_SERIES_ID,
+    approvedMasterTextFields: ["equipment"],
   }).ok, true);
-  assert.match(generated.equipment, /derzeitigen Planung ist eine Luft-Wasser-Wärmepumpe vorgesehen/u);
-  assert.match(generated.equipment, /Endenergiebedarf von 18 kWh\/\(m²·a\) vorgesehen/u);
-  assert.match(generated.equipment, /DGNB-Serienzertifizierung/u);
+  assert.equal(generated.equipment, FIXED_EQUIPMENT_TEXT);
+  assert.equal(generated.other, FIXED_OTHER_TEXT);
+  assert.match(generated.equipment, /DGNB-Zertifizierung/u);
   assert.doesNotMatch(generated.equipment, /QNG/u);
-  assert.match(generated.title, /QNG-Siegel garantiert/u);
-  assert.match(generated.title, /DGNB-Serienzertifizierung/u);
+  assert.match(generated.title, /m², 5 Zimmer/u);
+  assert.match(generated.title, /QNG-Siegel garantiert|DGNB-Serienzertifizierung|I-KON-Technikpaket/u);
   assert.equal(generated.description.split(QNG_GUARANTEE_SENTENCE).length - 1, 1);
   assert.doesNotMatch(generated.description, /nachhaltig|energieeffizient|dgnb/iu);
 
@@ -417,18 +420,17 @@ test("deterministic generation uses only structured technical facts and otherwis
     location: "Sachliche Lage.",
     other: "Dauerhaft niedrige Energiekosten.",
   });
+  assert.equal(completed.title, "Nachhaltiges Familienhaus");
+  assert.equal(completed.equipment, "Ideal gedämmte Gebäudehülle.");
+  assert.equal(completed.other, "Dauerhaft niedrige Energiekosten.");
+  assert.ok(completed.description.endsWith(FIXED_DESCRIPTION_CTA));
   assert.equal(validateListingClaims({
     texts: completed,
     house,
     project,
     houseSeries: LIVING_HAUS_SERIES_ID,
-  }).ok, true);
-  assert.ok(completed.description.endsWith(FIXED_DESCRIPTION_CTA));
-  assert.match(completed.equipment, /derzeitigen Planung ist eine Luft-Wasser-Wärmepumpe vorgesehen/u);
-  assert.match(completed.equipment, /DGNB-Serienzertifizierung/u);
-  assert.doesNotMatch(completed.equipment, /QNG/u);
+  }).ok, false);
   assert.equal(completed.description.split(QNG_GUARANTEE_SENTENCE).length - 1, 1);
-  assert.equal(completed.other, FIXED_OTHER_TEXT);
 });
 
 test("documents technical facts in neutral sentences without an environmental inference", () => {

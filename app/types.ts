@@ -76,6 +76,8 @@ export type ListingFactSource =
 
 export type ListingFactEvidenceKind =
   | "projected_house_value"
+  | "projected_house_energy_class"
+  | "projected_portal_field"
   | "energy_certificate"
   | "technical_package"
   | "qng_series_guarantee"
@@ -279,6 +281,23 @@ export type ListingTexts = {
   other: string;
 };
 
+export type StaticListingCopyField =
+  | "equipment"
+  | "other"
+  | "provision"
+  | "annotation"
+  | "terms"
+  | "recommendation";
+
+export type StaticListingCopySource = "standard" | "manual";
+
+export type ListingStaticTexts = {
+  provision?: string;
+  annotation?: string;
+  terms?: string;
+  recommendation?: string;
+};
+
 export type ProjectingSettings = {
   equipmentQuality?: string;
   constructionPhase?: string;
@@ -309,6 +328,11 @@ export type GeneratedListing = {
   templateName: string;
   price: number;
   texts: ListingTexts;
+  /** Separate Immoprofessional free-text fields; never folded into `other`. */
+  staticTexts?: ListingStaticTexts;
+  /** Explicit per-field source prevents string-comparison based overrides. */
+  staticCopySources?: Partial<Record<StaticListingCopyField, StaticListingCopySource>>;
+  staticCopyVersion?: number;
   listingFacts?: ListingComplianceFact[];
   version: number;
   projectingSettings?: ProjectingSettings;
