@@ -67,8 +67,10 @@ export function completeListingTexts(
   provider: ProviderSettings,
   texts?: Partial<ListingTexts>,
   version = 1,
+  titleSeed = "",
 ): ListingTexts {
-  const fallbackTexts = generateListingTexts(house, project, provider, version);
+  const resolvedTitleSeed = titleSeed || `${house.id}:${project.id}:${version}`;
+  const fallbackTexts = generateListingTexts(house, project, provider, version, resolvedTitleSeed);
   const completed = fillMissingListingCopy(
     texts,
     fallbackTexts,
@@ -79,6 +81,7 @@ export function completeListingTexts(
       allowGeneratedEquipment: true,
       houseSeries: LIVING_HAUS_SERIES_ID,
       listingFacts: house.listingFacts,
+      titleSeed: resolvedTitleSeed,
     },
   ) as ListingTexts;
   const completedWithReleasedFacts = {
@@ -102,6 +105,7 @@ export function completeListingTexts(
     allowGeneratedEquipment: true,
     houseSeries: LIVING_HAUS_SERIES_ID,
     listingFacts: house.listingFacts,
+    titleSeed: resolvedTitleSeed,
   }) as ListingTexts;
 }
 
@@ -110,6 +114,7 @@ export function generateListingTexts(
   project: ProjectInput,
   provider: ProviderSettings,
   version = 1,
+  titleSeed = "",
 ): ListingTexts {
   const seed = `${house.id}:${project.street}:${project.houseNumber}:${project.zip}:${version}`;
   const place = project.district.trim()
@@ -252,5 +257,6 @@ export function generateListingTexts(
     allowGeneratedEquipment: true,
     houseSeries: LIVING_HAUS_SERIES_ID,
     listingFacts: house.listingFacts,
+    titleSeed: titleSeed || seed,
   }) as ListingTexts;
 }

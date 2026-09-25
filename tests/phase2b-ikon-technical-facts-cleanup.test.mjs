@@ -149,7 +149,7 @@ function scan(input) {
 
 const options = { scan, expectedCounts, expectedInitialScope, expectedFinalScope };
 
-test("models the four I-KON facts only for the explicit technical package context", () => {
+test("models the I-KON package fact and its four components only for the explicit package context", () => {
   const facts = collectListingFacts({ house: { technicalPackage: LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID } });
   assert.deepEqual(facts.filter((fact) => fact.scope === FACT_SCOPE.TECHNICAL_PACKAGE).map((fact) => ({
     key: fact.key,
@@ -158,6 +158,7 @@ test("models the four I-KON facts only for the explicit technical package contex
     status: fact.status,
     verified: fact.verified,
   })), [
+    { key: "ikon_technical_package", value: "I-KON-Technikpaket", sourceKind: FACT_SOURCE.OPTIONAL_PACKAGE, status: FACT_STATUS.VERIFIED, verified: true },
     { key: "photovoltaic", value: "Photovoltaikanlage", sourceKind: FACT_SOURCE.OPTIONAL_PACKAGE, status: FACT_STATUS.VERIFIED, verified: true },
     { key: "battery_storage", value: "Batteriespeicher", sourceKind: FACT_SOURCE.OPTIONAL_PACKAGE, status: FACT_STATUS.VERIFIED, verified: true },
     { key: "heat_pump", value: "Wärmepumpe", sourceKind: FACT_SOURCE.OPTIONAL_PACKAGE, status: FACT_STATUS.VERIFIED, verified: true },

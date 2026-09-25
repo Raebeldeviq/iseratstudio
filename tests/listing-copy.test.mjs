@@ -7,6 +7,7 @@ import {
   enforceListingCopy,
   fillMissingListingCopy,
   fillMissingProjectingDefaults,
+  planListingHeadline,
   projectingEnvironmentLabels,
   FIXED_ANNOTATION_TEXT,
   FIXED_DESCRIPTION_CTA,
@@ -20,8 +21,10 @@ import {
 } from "../listing-copy.mjs";
 import {
   LIVING_HAUS_SERIES_ID,
+  LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID,
   QNG_GUARANTEE_SENTENCE,
   QNG_GUARANTEE_TITLE,
+  validateListingClaims,
 } from "../listing-claim-policy.mjs";
 
 const house = { id: "sun-113-v6", name: "SUN 113 V6", livingArea: 113.49, rooms: 5 };
@@ -30,9 +33,53 @@ const project = { city: "Potsdam", district: "Roskow" };
 test("builds a factual headline with district, rounded area and room count", () => {
   const title = buildListingHeadline(house, project);
   assert.match(title, /in Roskow:/);
-  assert.match(title, /113 m² Wohnfläche und 5 Zimmer$/);
+  assert.match(title, /113 m², 5 Zimmer$/);
   assert.doesNotMatch(title, /113[,.]\d/u);
   assert.doesNotMatch(title, /QNG|DGNB|energieeffizient|nachhaltig/iu);
+});
+
+test("selects two distinct, evidence-backed USPs deterministically without redundant package components", () => {
+  const packageHouse = { ...house, technicalPackage: LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID };
+  const first = planListingHeadline(packageHouse, project, {
+    houseSeries: LIVING_HAUS_SERIES_ID,
+    titleSeed: "stable-listing-1",
+  });
+  const repeated = planListingHeadline(packageHouse, project, {
+    houseSeries: LIVING_HAUS_SERIES_ID,
+    titleSeed: "stable-listing-1",
+  });
+  assert.deepEqual(repeated, first);
+  assert.equal(first.usps.length, 2);
+  assert.notEqual(first.usps[0].id, first.usps[1].id);
+  assert.ok(first.usps.every((usp) => usp.fact?.verified));
+  assert.doesNotMatch(first.title, /wärmepumpe/u);
+  assert.equal(validateListingClaims({
+    texts: { title: first.title },
+    house: packageHouse,
+    project,
+    houseSeries: LIVING_HAUS_SERIES_ID,
+  }).ok, true);
+
+  const combinations = new Set(Array.from({ length: 24 }, (_, index) =>
+    planListingHeadline(packageHouse, project, {
+      houseSeries: LIVING_HAUS_SERIES_ID,
+      titleSeed: `stable-listing-${index}`,
+    }).usps.map((usp) => usp.id).join("+")));
+  assert.ok(combinations.size > 1);
+});
+
+test("shortens the opening before dropping the lower-priority USP and never truncates a claim", () => {
+  const packageHouse = { ...house, technicalPackage: LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID };
+  const longProject = { city: "SehrlangerWohnort".repeat(8), district: "" };
+  const plan = planListingHeadline(packageHouse, longProject, {
+    houseSeries: LIVING_HAUS_SERIES_ID,
+    titleSeed: "long-title",
+  });
+  assert.equal(plan.withinLengthLimit, true);
+  assert.ok(plan.length <= plan.maxLength);
+  assert.equal(plan.usps.length, 1);
+  assert.equal(plan.title.endsWith("…"), false);
+  assert.ok(plan.title.endsWith(plan.usps[0].label));
 });
 
 test("preserves manual free text and enforces safe blocks only for generated copy", () => {
@@ -66,7 +113,8 @@ test("adds the central QNG guarantee only for generated Living-Haus copy", () =>
     generated: true,
     houseSeries: LIVING_HAUS_SERIES_ID,
   });
-  assert.match(generated.title, new RegExp(`${QNG_GUARANTEE_TITLE}$`, "u"));
+  assert.match(generated.title, new RegExp(`${QNG_GUARANTEE_TITLE}`, "u"));
+  assert.match(generated.title, /DGNB-Serienzertifizierung/u);
   assert.equal(generated.description.split(QNG_GUARANTEE_SENTENCE).length - 1, 1);
   assert.ok(generated.description.endsWith(FIXED_DESCRIPTION_CTA));
 

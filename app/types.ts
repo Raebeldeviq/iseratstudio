@@ -77,6 +77,7 @@ export type ListingFactSource =
 export type ListingFactEvidenceKind =
   | "projected_house_value"
   | "energy_certificate"
+  | "technical_package"
   | "qng_series_guarantee"
   | "qng_planning_certificate"
   | "qng_individual_certificate";
@@ -210,6 +211,7 @@ export type HouseTemplate = {
   architecture: string;
   equipmentHighlights: string;
   useStandardPackage: boolean;
+  technicalPackage?: string;
   listingFacts?: ListingComplianceFact[];
   images: HouseImage[];
 };

@@ -63,6 +63,7 @@ export const FACT_SOURCE = Object.freeze({
 export const FACT_EVIDENCE_KIND = Object.freeze({
   PROJECTED_HOUSE_VALUE: "projected_house_value",
   ENERGY_CERTIFICATE: "energy_certificate",
+  TECHNICAL_PACKAGE: "technical_package",
   QNG_SERIES_GUARANTEE: "qng_series_guarantee",
   QNG_PLANNING_CERTIFICATE: "qng_planning_certificate",
   QNG_INDIVIDUAL_CERTIFICATE: "qng_individual_certificate",
@@ -73,6 +74,12 @@ export const LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID = "livinghaus-ikon-standard";
 
 export const QNG_GUARANTEE_TITLE = "QNG-Siegel garantiert";
 export const QNG_GUARANTEE_SENTENCE = "Für dieses projektierte Haus ist das QNG-Siegel serienmäßig garantiert.";
+
+export const TITLE_USP_ID = Object.freeze({
+  QNG_GUARANTEE: "qng_guarantee",
+  DGNB_SERIES_CERTIFICATION: "dgnb_series_certification",
+  IKON_TECHNICAL_PACKAGE: "ikon_technical_package",
+});
 
 /**
  * Die folgenden Fakten sind ausdrücklich freigegebene Living-Haus-
@@ -112,6 +119,17 @@ export const VERIFIED_LIVING_HAUS_SERIES_FACTS = Object.freeze([
  * der konkreten Hausvorlage verwendet.
  */
 export const VERIFIED_LIVING_HAUS_IKON_TECHNICAL_PACKAGE_FACTS = Object.freeze([
+  Object.freeze({
+    key: "ikon_technical_package",
+    value: "I-KON-Technikpaket",
+    source: FACT_SOURCE.OPTIONAL_PACKAGE,
+    scope: FACT_SCOPE.TECHNICAL_PACKAGE,
+    status: FACT_STATUS.VERIFIED,
+    verified: true,
+    packageId: LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID,
+    evidenceKind: FACT_EVIDENCE_KIND.TECHNICAL_PACKAGE,
+    evidenceReference: "Verifizierte Living-Haus-/I-KON-Technikpaketfreigabe",
+  }),
   Object.freeze({
     key: "photovoltaic",
     value: "Photovoltaikanlage",
@@ -204,6 +222,7 @@ const FACT_KEY_ALIASES = Object.freeze({
 });
 
 const TECHNICAL_PATTERNS = Object.freeze([
+  { key: "ikon_technical_package", pattern: /\bi[-\s]?kon[-\s]?technikpaket\b/giu },
   { key: "heat_pump", pattern: /\b(?:luft[-\s]?wasser[-\s]?)?wärmepumpe\b/giu },
   { key: "underfloor_heating", pattern: /\bfußbodenheizung\b/giu },
   { key: "photovoltaic", pattern: /\b(?:photovoltaik(?:anlage)?|pv[-\s]?anlage)\b/giu },
@@ -559,6 +578,12 @@ function statusDisclosed(text, status) {
 function factMatchesTechnicalKey(fact, key) {
   const value = clean(fact.value).toLocaleLowerCase("de-DE");
   if (!value) return false;
+  if (key === "ikon_technical_package") {
+    return fact.key === "ikon_technical_package"
+      && fact.sourceKind === FACT_SOURCE.OPTIONAL_PACKAGE
+      && fact.scope === FACT_SCOPE.TECHNICAL_PACKAGE
+      && isLivingHausIKonTechnicalPackage(fact.packageId);
+  }
   if (key === "heat_pump") return /wärmepumpe/iu.test(value);
   if (key === "underfloor_heating") return /fußbodenheizung/iu.test(value) || /^(?:true|ja)$/iu.test(value);
   if (key === "photovoltaic") return /photovoltaik|pv/iu.test(value);
@@ -608,6 +633,21 @@ function qngGuaranteeFact(fact) {
     && factHasRequiredEvidence(fact);
 }
 
+function dgnbSeriesCertificationFact(fact) {
+  return fact.key === "certification"
+    && fact.sourceKind === FACT_SOURCE.VERIFIED_SERIES
+    && fact.scope === FACT_SCOPE.HOUSE_SERIES
+    && fact.status === FACT_STATUS.VERIFIED
+    && /\bdgnb\b/iu.test(clean(fact.value))
+    && factHasRequiredEvidence(fact);
+}
+
+function ikonTechnicalPackageFact(fact) {
+  return factMatchesTechnicalKey(fact, "ikon_technical_package")
+    && fact.status === FACT_STATUS.VERIFIED
+    && factHasRequiredEvidence(fact);
+}
+
 function qngPlanningCertificateFact(fact) {
   return fact.key === "qng_planning_certificate"
     && fact.scope === FACT_SCOPE.PROJECT
@@ -626,10 +666,14 @@ function qngCertifiedFact(fact) {
 
 function exactQngGuaranteeStatement(statement) {
   const value = clean(statement).replace(/\s+/gu, " ");
+  const titleSegments = value
+    .split(" – ")
+    .flatMap((segment) => segment.split(/\s*&\s*/u))
+    .map(clean);
   return value === QNG_GUARANTEE_SENTENCE
     || value === QNG_GUARANTEE_TITLE
     || value === "QNG-Siegel serienmäßig garantiert"
-    || value.endsWith(` – ${QNG_GUARANTEE_TITLE}`);
+    || titleSegments.includes(QNG_GUARANTEE_TITLE);
 }
 
 function relevantCertificationFact(facts, key, marker) {
@@ -919,6 +963,35 @@ export function qngGuaranteeTitle(input = {}) {
   return releasedListingFacts(input).some(qngGuaranteeFact)
     ? QNG_GUARANTEE_TITLE
     : "";
+}
+
+/**
+ * Returns only compact title USPs with an individually verifiable fact.
+ * The labels are deliberately fixed, so title selection cannot turn a fact
+ * into a broader environmental, cost or certification claim.
+ */
+export function releasedTitleUsps(input = {}) {
+  const facts = releasedListingFacts(input);
+  return [
+    {
+      id: TITLE_USP_ID.QNG_GUARANTEE,
+      label: QNG_GUARANTEE_TITLE,
+      priority: 1,
+      fact: facts.find(qngGuaranteeFact),
+    },
+    {
+      id: TITLE_USP_ID.DGNB_SERIES_CERTIFICATION,
+      label: "DGNB-Serienzertifizierung",
+      priority: 2,
+      fact: facts.find(dgnbSeriesCertificationFact),
+    },
+    {
+      id: TITLE_USP_ID.IKON_TECHNICAL_PACKAGE,
+      label: "I-KON-Technikpaket",
+      priority: 3,
+      fact: facts.find(ikonTechnicalPackageFact),
+    },
+  ].filter((usp) => usp.fact);
 }
 
 export function technicalFactSentences(input = {}) {

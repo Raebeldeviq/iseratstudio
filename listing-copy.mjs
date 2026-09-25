@@ -1,6 +1,7 @@
 import {
   qngGuaranteeSentence,
-  qngGuaranteeTitle,
+  releasedTitleUsps,
+  TITLE_USP_ID,
 } from "./listing-claim-policy.mjs";
 
 const DESCRIPTION_CTA_START =
@@ -128,11 +129,26 @@ export function projectingEnvironmentLabels(values = {}) {
     .map(({ label }) => label);
 }
 
+export const LISTING_TITLE_MAX_LENGTH = 220;
+export const LISTING_TITLE_MIN_LENGTH = 55;
+
 const HEADLINE_OPENINGS = Object.freeze([
-  "Dein neues Familienzuhause",
-  "Raum für deinen Alltag",
-  "Dein projektierter Wohntraum",
-  "Platz für Familie und Leben",
+  "Sicher wohnen",
+  "Entspannt wohnen",
+  "Endlich ankommen",
+  "Hier zuhause sein",
+  "Mehr Raum fürs Leben",
+  "Platz fürs Familienleben",
+  "Zuhause beginnt hier",
+  "Euer neues Zuhause",
+  "Zeit für die eigenen vier Wände",
+  "Wohnen, wie es zu euch passt",
+]);
+
+const TITLE_USP_PAIR_PREFERENCES = Object.freeze([
+  Object.freeze({ ids: [TITLE_USP_ID.QNG_GUARANTEE, TITLE_USP_ID.DGNB_SERIES_CERTIFICATION], weight: 5 }),
+  Object.freeze({ ids: [TITLE_USP_ID.QNG_GUARANTEE, TITLE_USP_ID.IKON_TECHNICAL_PACKAGE], weight: 3 }),
+  Object.freeze({ ids: [TITLE_USP_ID.DGNB_SERIES_CERTIFICATION, TITLE_USP_ID.IKON_TECHNICAL_PACKAGE], weight: 2 }),
 ]);
 
 function hash(value) {
@@ -185,14 +201,94 @@ function listingFactContext(house = {}, project = {}, context = {}) {
   };
 }
 
-export function buildListingHeadline(house = {}, project = {}, context = {}) {
-  const seed = `${clean(house.id)}:${clean(house.name)}:${listingPlace(project)}:${finiteNumber(house.livingArea)}:${finiteNumber(house.rooms)}`;
-  const opening = HEADLINE_OPENINGS[hash(`${seed}:opening`) % HEADLINE_OPENINGS.length];
+function headlineSeed(house, project, context) {
+  return [
+    clean(house.id),
+    clean(house.name),
+    listingPlace(project),
+    finiteNumber(house.livingArea),
+    finiteNumber(house.rooms),
+    clean(context.titleSeed ?? context.listingId ?? context.externalId),
+  ].join(":");
+}
+
+function pickWeightedPair(pairs, seed) {
+  const weight = pairs.reduce((sum, pair) => sum + pair.weight, 0);
+  if (!weight) return undefined;
+  let position = hash(`${seed}:usp-pair`) % weight;
+  for (const pair of pairs) {
+    if (position < pair.weight) return pair;
+    position -= pair.weight;
+  }
+  return pairs.at(-1);
+}
+
+function selectTitleUsps(context, seed) {
+  const available = releasedTitleUsps(context);
+  const byId = new Map(available.map((usp) => [usp.id, usp]));
+  const selectablePairs = TITLE_USP_PAIR_PREFERENCES
+    .filter((pair) => pair.ids.every((id) => byId.has(id)));
+  const selectedPair = pickWeightedPair(selectablePairs, seed);
+  if (selectedPair) return selectedPair.ids.map((id) => byId.get(id));
+  return available.slice().sort((left, right) => left.priority - right.priority).slice(0, 2);
+}
+
+function titleFrom(opening, house, project, usps) {
   const area = germanNumber(Math.round(finiteNumber(house.livingArea)));
   const rooms = germanNumber(house.rooms, 1);
-  const qngTitle = qngGuaranteeTitle(listingFactContext(house, project, context));
-  const title = `${opening} in ${listingPlace(project)}: ca. ${area} m² Wohnfläche und ${rooms} Zimmer`;
-  return qngTitle ? `${title} – ${qngTitle}` : title;
+  const base = `${opening} in ${listingPlace(project)}: ${area} m², ${rooms} Zimmer`;
+  return usps.length ? `${base} – ${usps.map((usp) => usp.label).join(" & ")}` : base;
+}
+
+/**
+ * Selects a stable, evidence-backed two-USP title. `titleSeed` is optional
+ * but lets rotations keep their variation stable per generated version.
+ */
+export function planListingHeadline(house = {}, project = {}, context = {}) {
+  const factContext = listingFactContext(house, project, context);
+  const seed = headlineSeed(house, project, context);
+  const usps = selectTitleUsps(factContext, seed);
+  const opening = HEADLINE_OPENINGS[hash(`${seed}:opening`) % HEADLINE_OPENINGS.length];
+  let selectedOpening = opening;
+  let selectedUsps = usps;
+  let title = titleFrom(selectedOpening, house, project, selectedUsps);
+
+  if (title.length < LISTING_TITLE_MIN_LENGTH) {
+    const longerOpenings = HEADLINE_OPENINGS
+      .filter((candidate) => titleFrom(candidate, house, project, selectedUsps).length >= LISTING_TITLE_MIN_LENGTH)
+      .sort((left, right) => left.length - right.length || left.localeCompare(right, "de-DE"));
+    if (longerOpenings.length) {
+      selectedOpening = longerOpenings[hash(`${seed}:long-opening`) % longerOpenings.length];
+      title = titleFrom(selectedOpening, house, project, selectedUsps);
+    }
+  }
+  if (title.length > LISTING_TITLE_MAX_LENGTH) {
+    const shorterOpenings = HEADLINE_OPENINGS
+      .filter((candidate) => candidate.length < selectedOpening.length)
+      .sort((left, right) => left.length - right.length || left.localeCompare(right, "de-DE"));
+    if (shorterOpenings.length) {
+      selectedOpening = shorterOpenings[hash(`${seed}:short-opening`) % shorterOpenings.length];
+      title = titleFrom(selectedOpening, house, project, selectedUsps);
+    }
+  }
+  if (title.length > LISTING_TITLE_MAX_LENGTH && selectedUsps.length === 2) {
+    selectedUsps = selectedUsps.slice(0, 1);
+    title = titleFrom(selectedOpening, house, project, selectedUsps);
+  }
+
+  return {
+    title,
+    opening: selectedOpening,
+    usps: selectedUsps,
+    availableUsps: releasedTitleUsps(factContext),
+    length: title.length,
+    maxLength: LISTING_TITLE_MAX_LENGTH,
+    withinLengthLimit: title.length <= LISTING_TITLE_MAX_LENGTH,
+  };
+}
+
+export function buildListingHeadline(house = {}, project = {}, context = {}) {
+  return planListingHeadline(house, project, context).title;
 }
 
 function descriptionBody(value) {
@@ -221,10 +317,11 @@ export function enforceListingCopy(texts = {}, {
   houseSeries = "",
   listingFacts = [],
   facts = [],
+  titleSeed = "",
 } = {}) {
   const suppliedDescription = clean(texts.description);
   const body = descriptionBody(suppliedDescription);
-  const context = { houseSeries, listingFacts, facts };
+  const context = { houseSeries, listingFacts, facts, titleSeed };
   const descriptionWithQngGuarantee = appendQngGuarantee(body, house, project, context);
   const generatedDescription = descriptionWithQngGuarantee
     ? `${descriptionWithQngGuarantee}\n\n${FIXED_DESCRIPTION_CTA}`

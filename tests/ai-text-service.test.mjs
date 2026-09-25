@@ -134,7 +134,7 @@ test("accepts complete texts and rejects short or Markdown-formatted output", ()
 test("requires the factual headline with place, rounded area and rooms", () => {
   const title = buildListingHeadline(testHouse, testProject);
   assert.match(title, /in Schulzendorf:/);
-  assert.match(title, /113 m² Wohnfläche und 5 Zimmer$/);
+  assert.match(title, /113 m², 5 Zimmer$/);
   assert.deepEqual(validateListingTexts(validTexts, testHouse, testProject), []);
   const errors = validateListingTexts({ ...validTexts, title: "Dein Zuhause in Schulzendorf" }, testHouse, testProject);
   assert.ok(errors.some((value) => value.includes("Wohnfläche")));

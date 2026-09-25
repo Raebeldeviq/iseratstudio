@@ -13,6 +13,7 @@ import {
   qngGuaranteeSentence,
   qngGuaranteeTitle,
   releasedListingFacts,
+  releasedTitleUsps,
   releasedTechnicalFacts,
   seriesFactSentences,
   technicalFactSentences,
@@ -178,6 +179,26 @@ test("inherits verified DGNB and project-scoped QNG guarantee facts only for the
   }).blockingIssues.some((issue) => issue.category === CLAIM_CATEGORY.UNVERIFIED_CERTIFICATION));
   assert.equal(qngGuaranteeSentence({ houseSeries: "fremdhersteller" }), "");
   assert.equal(qngGuaranteeTitle({ houseSeries: "fremdhersteller" }), "");
+});
+
+test("releases compact title USPs only from the matching structured series and package facts", () => {
+  const context = {
+    houseSeries: LIVING_HAUS_SERIES_ID,
+    house: { technicalPackage: "livinghaus-ikon-standard" },
+  };
+  assert.deepEqual(releasedTitleUsps(context).map((usp) => usp.id), [
+    "qng_guarantee",
+    "dgnb_series_certification",
+    "ikon_technical_package",
+  ]);
+  assert.equal(validateListingClaims({
+    texts: { title: "Endlich ankommen in Potsdam: 153 m², 5 Zimmer – QNG-Siegel garantiert & I-KON-Technikpaket" },
+    ...context,
+  }).ok, true);
+  assert.ok(validateListingClaims({
+    texts: { title: "Endlich ankommen in Potsdam: 153 m², 5 Zimmer – I-KON-Technikpaket" },
+    houseSeries: LIVING_HAUS_SERIES_ID,
+  }).blockingIssues.some((issue) => issue.category === CLAIM_CATEGORY.UNVERIFIED_TECHNICAL_CLAIM));
 });
 
 test("allows only the centrally phrased QNG guarantee and never converts it into a sustainability or individual certificate claim", () => {
@@ -384,7 +405,8 @@ test("deterministic generation uses only structured technical facts and otherwis
   assert.match(generated.equipment, /Endenergiebedarf von 18 kWh\/\(m²·a\) vorgesehen/u);
   assert.match(generated.equipment, /DGNB-Serienzertifizierung/u);
   assert.doesNotMatch(generated.equipment, /QNG/u);
-  assert.match(generated.title, /QNG-Siegel garantiert$/u);
+  assert.match(generated.title, /QNG-Siegel garantiert/u);
+  assert.match(generated.title, /DGNB-Serienzertifizierung/u);
   assert.equal(generated.description.split(QNG_GUARANTEE_SENTENCE).length - 1, 1);
   assert.doesNotMatch(generated.description, /nachhaltig|energieeffizient|dgnb/iu);
 

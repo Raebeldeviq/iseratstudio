@@ -331,7 +331,8 @@ test("prepared copy persists one coherent house, text, price, image and OpenImmo
   assert.match(copy.texts.equipment, /Endenergiebedarf von 18 kWh\/\(m²·a\) vorgesehen/u);
   assert.match(copy.texts.equipment, /DGNB-Serienzertifizierung/u);
   assert.doesNotMatch(copy.texts.equipment, /QNG/u);
-  assert.match(copy.texts.title, new RegExp(`${QNG_GUARANTEE_TITLE}$`, "u"));
+  assert.match(copy.texts.title, new RegExp(`${QNG_GUARANTEE_TITLE}`, "u"));
+  assert.match(copy.texts.title, /DGNB-Serienzertifizierung/u);
   assert.equal(copy.texts.description.split(QNG_GUARANTEE_SENTENCE).length - 1, 1);
   assert.equal(copy.creativeSelection.houseId, copy.templateId);
   assert.equal(copy.creativeSelection.houseName, copy.templateName);
