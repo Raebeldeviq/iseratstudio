@@ -7,9 +7,6 @@ import type {
 import { enforceListingCopy, fillMissingListingCopy } from "../../listing-copy.mjs";
 import {
   LIVING_HAUS_SERIES_ID,
-  seriesFactSentences,
-  technicalFactSentences,
-  validateListingClaims,
 } from "../../listing-claim-policy.mjs";
 
 function hash(value: string): number {
@@ -41,22 +38,6 @@ function providerName(provider: ProviderSettings): string {
   return `${provider.firstName} ${provider.lastName}`.trim();
 }
 
-function releasedEquipmentStatements(house: HouseTemplate, project: ProjectInput): string[] {
-  const context = { house, project, houseSeries: LIVING_HAUS_SERIES_ID };
-  return [
-    ...technicalFactSentences(context),
-    ...seriesFactSentences(context),
-  ];
-}
-
-function appendReleasedEquipmentStatements(equipment: string, house: HouseTemplate, project: ProjectInput): string {
-  const missingStatements = releasedEquipmentStatements(house, project)
-    .filter((statement) => !equipment.includes(statement));
-  return missingStatements.length
-    ? joinParagraphs([equipment, ...missingStatements])
-    : equipment;
-}
-
 export function totalPrice(house: HouseTemplate, project: ProjectInput): number {
   return Math.max(0, house.housePrice + project.plotPrice + project.additionalCosts);
 }
@@ -67,33 +48,38 @@ export function completeListingTexts(
   provider: ProviderSettings,
   texts?: Partial<ListingTexts>,
   version = 1,
+  titleSeed = "",
 ): ListingTexts {
-  const fallbackTexts = generateListingTexts(house, project, provider, version);
+  const resolvedTitleSeed = titleSeed || `${house.id}:${project.id}:${version}`;
+  const fallbackTexts = generateListingTexts(house, project, provider, version, resolvedTitleSeed);
   const completed = fillMissingListingCopy(
     texts,
     fallbackTexts,
-    { house, project, generated: true, allowGeneratedEquipment: true },
+    {
+      house,
+      project,
+      generated: true,
+      houseSeries: LIVING_HAUS_SERIES_ID,
+      listingFacts: house.listingFacts,
+      titleSeed: resolvedTitleSeed,
+    },
   ) as ListingTexts;
-  const completedWithReleasedFacts = {
+  // Claim validation is intentionally enforced at the final export boundary.
+  // A text regeneration must never use a fallback that silently replaces an
+  // existing title or one of the static fields. `hasOwnProperty` matters here:
+  // an explicitly emptied manual field must remain empty and cause the normal
+  // export validation to block, rather than being silently refilled.
+  const preserveExplicit = (field: "title" | "equipment" | "other") => (
+    texts && Object.prototype.hasOwnProperty.call(texts, field)
+      ? String(texts[field] ?? "")
+      : completed[field]
+  );
+  return {
     ...completed,
-    equipment: appendReleasedEquipmentStatements(completed.equipment, house, project),
+    title: preserveExplicit("title"),
+    equipment: preserveExplicit("equipment"),
+    other: preserveExplicit("other"),
   };
-  const claimValidation = validateListingClaims({
-    texts: completedWithReleasedFacts,
-    house,
-    project,
-    houseSeries: LIVING_HAUS_SERIES_ID,
-  });
-  if (!claimValidation.blockingIssues.length) return completedWithReleasedFacts;
-
-  // Nur automatische Erzeugung erreicht diesen Pfad. Der sichere
-  // deterministische Fallback wird vor einer Speicherung erneut geprüft.
-  return enforceListingCopy(fallbackTexts, {
-    house,
-    project,
-    generated: true,
-    allowGeneratedEquipment: true,
-  }) as ListingTexts;
 }
 
 export function generateListingTexts(
@@ -101,6 +87,7 @@ export function generateListingTexts(
   project: ProjectInput,
   provider: ProviderSettings,
   version = 1,
+  titleSeed = "",
 ): ListingTexts {
   const seed = `${house.id}:${project.street}:${project.houseNumber}:${project.zip}:${version}`;
   const place = project.district.trim()
@@ -111,23 +98,6 @@ export function generateListingTexts(
   const plotArea = project.plotArea
     ? `${formatNumber(project.plotArea)} m² großen Grundstück`
     : "ausgewählten Grundstück";
-
-  const title = pick(
-    [
-      "Mehr Raum für euer Familienleben",
-      `Dein neues Zuhause in ${place}`,
-      "Großzügig wohnen und entspannt ankommen",
-      "Zukunft beginnt im eigenen Zuhause",
-      "Platz für Familie, Arbeit und Leben",
-      "Wohnen mit Weitblick und Freiraum",
-      house.floors <= 1
-        ? "Ebenerdig ins neue Zuhause"
-        : "Zwei Ebenen für neue Lebenspläne",
-      `${formatNumber(house.livingArea)} m² für neue Lebenspläne`,
-    ],
-    seed,
-    1,
-  );
 
   const descriptionOpening = pick(
     [
@@ -184,8 +154,6 @@ export function generateListingTexts(
       )
     : "Gerne besprechen wir Grundstück, Hausplanung, Ausstattung und Finanzierung in einem persönlichen Beratungstermin.";
 
-  const releasedTechnicalStatements = releasedEquipmentStatements(house, project);
-
   const locationOpening = pick(
     [
       `Das geplante Zuhause befindet sich in ${place}. Der Standort bildet den passenden Rahmen für einen neuen Lebensmittelpunkt und verbindet das Grundstück mit den Wegen des täglichen Lebens.`,
@@ -213,7 +181,9 @@ export function generateListingTexts(
   ].flat());
 
   return enforceListingCopy({
-    title,
+    // The dedicated headline planner owns title rotation and its evidence
+    // checks. An empty value asks enforceListingCopy to initialize that plan.
+    title: "",
     description: joinParagraphs([
       descriptionOpening,
       architecture,
@@ -224,17 +194,17 @@ export function generateListingTexts(
       descriptionContact,
       "Das Haus ist projektiert. Individuelle Anpassungen sind von den technischen, planerischen und baurechtlichen Voraussetzungen abhängig.",
     ]),
-    equipment: joinParagraphs([
-      section("Ausstattung und Planung", `Die Ausstattung des ${house.name} wird im weiteren Planungsprozess für das konkrete Angebot festgelegt.`),
-      ...releasedTechnicalStatements,
-      "Materialien, Oberflächen, Sanitärdetails und weitere Ausstattungsoptionen werden im Bemusterungsprozess abgestimmt. Visualisierungen und Grundrisse können beispielhafte Darstellungen enthalten. Verbindlich sind die für das konkrete Projekt vereinbarten Unterlagen.",
-      "Welche Leistungen im konkreten Angebot enthalten sind, wird transparent in der individuellen Bau- und Leistungsbeschreibung festgehalten.",
-    ]),
+    // Statische Felder bleiben bewusst leer: enforceListingCopy initialisiert
+    // sie ausschließlich für neue Inserate mit dem zentralen Mastertext.
+    equipment: "",
     location,
-    other: joinParagraphs([
-      "Das Angebot beschreibt ein projektiertes Haus. Maßgeblich für Preis, Umfang und Ausführung sind die individuellen Vereinbarungen und die Bau- und Leistungsbeschreibung.",
-      "Hausabbildungen, Grundrisse und Innenansichten können beispielhafte Ausstattungen oder Möblierungen zeigen. Diese sind nicht automatisch Bestandteil des Angebots.",
-      "Grundstücks- und projektbezogene Nebenkosten können hinzukommen und werden im Rahmen der individuellen Kalkulation erläutert.",
-    ]),
-  }, { house, project, generated: true, allowGeneratedEquipment: true }) as ListingTexts;
+    other: "",
+  }, {
+    house,
+    project,
+    generated: true,
+    houseSeries: LIVING_HAUS_SERIES_ID,
+    listingFacts: house.listingFacts,
+    titleSeed: titleSeed || seed,
+  }) as ListingTexts;
 }

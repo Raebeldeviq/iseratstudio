@@ -4,6 +4,10 @@ import {
   LIVING_HAUS_SERIES_ID,
   validateListingClaims,
 } from "./listing-claim-policy.mjs";
+import {
+  isCurrentStaticCopyText,
+  resolveListingStaticCopy,
+} from "./listing-copy.mjs";
 
 export const PHASE2B_TREATMENT = Object.freeze({
   SAFE_DETERMINISTIC_REPLACEMENT: "SAFE_DETERMINISTIC_REPLACEMENT",
@@ -213,8 +217,22 @@ export function scanPhase2BClaims(state = {}, options = {}) {
     for (const listing of Array.isArray(project?.listings) ? project.listings : []) {
       if (!activeListing(listing)) continue;
       const house = houses.get(listing.templateId);
+      const staticCopy = resolveListingStaticCopy(listing);
       const validation = validateListingClaims({
-        texts: listing.texts,
+        texts: {
+          ...listing.texts,
+          equipment: staticCopy.values.equipment,
+          other: staticCopy.values.other,
+        },
+        staticTexts: {
+          provision: staticCopy.values.provision,
+          annotation: staticCopy.values.annotation,
+          terms: staticCopy.values.terms,
+          recommendation: staticCopy.values.recommendation,
+        },
+        approvedMasterTextFields: isCurrentStaticCopyText("equipment", staticCopy.values.equipment)
+          ? ["equipment"]
+          : [],
         images: house?.images,
         house,
         project,

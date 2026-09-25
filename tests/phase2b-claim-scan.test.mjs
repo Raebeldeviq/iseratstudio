@@ -10,6 +10,11 @@ import {
   formatPhase2BScanMarkdown,
   scanPhase2BClaims,
 } from "../phase2b-claim-scan.mjs";
+import {
+  LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID,
+  LIVING_HAUS_SERIES_ID,
+} from "../listing-claim-policy.mjs";
+import { initializeListingStaticCopy } from "../listing-copy.mjs";
 
 function state() {
   const house = {
@@ -101,4 +106,33 @@ test("CLI reads a provided catalog snapshot once and only returns a report", asy
   assert.equal(loads, 1);
   assert.equal(result.readOnly, true);
   assert.match(result.output, /Read-only Claim-Scan/u);
+});
+
+test("recognizes the fact-validated current equipment master without exempting a manual claim", () => {
+  const listing = initializeListingStaticCopy({
+    id: "standard-master",
+    externalId: "30460-standard",
+    templateId: "house-standard",
+    status: "published",
+    texts: {
+      title: "Sachlicher Titel",
+      description: "Sachliche Objektbeschreibung.",
+      equipment: "",
+      location: "Sachliche Lage.",
+      other: "",
+    },
+  });
+  const report = scanPhase2BClaims({
+    houses: [{
+      id: "house-standard",
+      name: "Testhaus",
+      seriesId: LIVING_HAUS_SERIES_ID,
+      technicalPackage: LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID,
+      images: [],
+    }],
+    projects: [{ id: "project-standard", city: "Berlin", listings: [listing] }],
+  });
+  assert.equal(report.severityCounts.BLOCK, 0);
+  assert.equal(report.severityCounts.REVIEW, 0);
+  assert.equal(report.affectedListingCount, 0);
 });

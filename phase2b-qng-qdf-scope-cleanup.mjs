@@ -17,7 +17,6 @@ import {
   FACT_SCOPE,
   LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID,
   LIVING_HAUS_SERIES_ID,
-  technicalPackageFactSentence,
   validateListingClaims,
 } from "./listing-claim-policy.mjs";
 import { APPLICATION_DATA_DIRECTORY } from "./platform-paths.mjs";
@@ -50,6 +49,8 @@ const CERTIFICATION_LISTING_EXTERNAL_ID = "30460-4";
 const CERTIFICATION_SENTENCE = "Hinzu kommen – gemäß Leistungsbeschreibung – unter anderem Bauantragsplanung, Bodengutachten, zwei Tage persönliche Ausstattungsberatung, Bauversicherungen, digitale Hausbauakte sowie DGNB-Serienzertifizierung in Gold und QDF-Zertifizierung.";
 const CERTIFICATION_REPLACEMENT = "Hinzu kommen – gemäß Leistungsbeschreibung – unter anderem Bauantragsplanung, Bodengutachten, zwei Tage persönliche Ausstattungsberatung, Bauversicherungen und digitale Hausbauakte. Das projektierte Haus gehört zu einer Hausserie mit verifizierter DGNB-Serienzertifizierung.";
 const ENERGY_CLASS_CLAUSE = /([,;])\s*die geplante Energieeffizienzklasse ist A\+\+?\./giu;
+const LEGACY_IKON_COMPLETE = "Das I-KON-Technikpaket umfasst Photovoltaikanlage, Batteriespeicher, Wärmepumpe und Lüftungsanlage.";
+const LEGACY_IKON_SHORT = "Das I-KON-Technikpaket umfasst Wärmepumpe und Lüftungsanlage.";
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -158,9 +159,10 @@ function energyClassRemoval(context) {
 
 function ikonDuplicateRemoval(context) {
   if (clean(context.house.technicalPackage) !== LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID) return undefined;
-  const input = { house: context.house, technicalPackage: context.house.technicalPackage };
-  const complete = technicalPackageFactSentence(input);
-  const short = technicalPackageFactSentence(input, ["heat_pump", "ventilation"]);
+  // The Phase 2B.7 migration matches only the two exact sentences persisted
+  // by Phase 2B.6. It must not inherit later master-copy wording.
+  const complete = LEGACY_IKON_COMPLETE;
+  const short = LEGACY_IKON_SHORT;
   // Phase 2B.6 hat diese beiden vollständigen Aussagen unmittelbar durch ein
   // Leerzeichen getrennt persistiert. Nur exakt diese direkte Wiederholung ist
   // als redundante Dublette freigegeben.
@@ -290,9 +292,6 @@ export function planPhase2BQngQdfScopeCleanup(state, options = {}) {
     if (!replacementText || /\n{3,}/u.test(replacementText)) {
       throw new Error(`PHASE2B7_DESCRIPTION_FORMAT_FAILED: ${context.listing.id} hätte eine unzulässige Beschreibung.`);
     }
-    if (descriptionBlocks(context, replacementText).length) {
-      throw new Error(`PHASE2B7_DESCRIPTION_POLICY_FAILED: ${context.listing.id} enthält nach der Minimaländerung noch einen BLOCK.`);
-    }
     return {
       field: "description",
       listingId: context.listing.id,
@@ -334,6 +333,12 @@ export function planPhase2BQngQdfScopeCleanup(state, options = {}) {
     || countOperations(changes, "ikon_duplicate_removal") !== expected.ikonDuplicateRemovals
     || countOperations(changes, "certification_sentence_replacement") !== expected.certificationSentenceReplacements) {
     throw new Error("PHASE2B7_CHANGESET_MISMATCH: Der deterministische QNG-/QDF-/Energie-/I-KON-Scope weicht von der Freigabe ab.");
+  }
+  for (const change of descriptionChanges) {
+    const context = findContext(state, change.listingId);
+    if (descriptionBlocks(context, change.replacementText).length) {
+      throw new Error(`PHASE2B7_DESCRIPTION_POLICY_FAILED: ${change.listingId} enthält nach der Minimaländerung noch einen BLOCK.`);
+    }
   }
   return { changed: true, idempotent: false, beforeReport: existingReport, changes };
 }

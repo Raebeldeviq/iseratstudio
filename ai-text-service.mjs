@@ -3,8 +3,6 @@ import {
   buildListingHeadline,
   enforceListingCopy,
   FIXED_DESCRIPTION_CTA,
-  FIXED_EQUIPMENT_TEXT,
-  FIXED_OTHER_TEXT,
 } from "./listing-copy.mjs";
 import {
   formatClaimIssue,
@@ -50,6 +48,7 @@ Verbindliche Qualitätsregeln:
 15. Zertifizierungen, Förderstandards und Nachhaltigkeitssiegel dürfen nur exakt in der Reichweite wiedergegeben werden, die der strukturierte Fakt belegt. Ein freigegebener house_series-Fakt darf nur als Serienmerkmal der zugehörigen Hausserie formuliert werden; er ist kein individueller Zertifikatsnachweis für das konkrete Objekt.
 16. Formuliere keine Umweltwirkung aufgrund einer CO₂-Kompensation und keine zukünftige Umweltleistung aufgrund einer bloßen Planung.
 17. Die Anwendung erstellt die endgültige Überschrift aus Ort beziehungsweise Ortsteil, gerundeter Wohnfläche und Zimmerzahl. Erfinde dafür keine eigenen Förderzusagen oder technischen Vorteile.
+18. Ein freigegebener Fakt mit dem Schlüssel qng_guarantee wird ausschließlich durch die Anwendung mit einer zentralen, statusgenauen Formulierung ergänzt. Schreibe dazu selbst keine abweichende QNG-Aussage und behaupte niemals eine bereits erteilte individuelle QNG-Zertifizierung.
 Gib ausschließlich das verlangte JSON aus.`;
 
 function cleanString(value, maxLength = 12000) {
@@ -122,6 +121,8 @@ function publicHouse(house = {}, listingFacts = []) {
       verified: fact.verified,
       evidenceReference: fact.evidenceReference || undefined,
       evidenceKind: fact.evidenceKind || undefined,
+      sourceScope: fact.sourceScope || undefined,
+      projectScope: fact.projectScope || undefined,
     })),
   };
 }
@@ -292,11 +293,12 @@ function normalizedParagraph(value) {
   return value.toLocaleLowerCase("de-DE").replace(/[^a-zäöüß0-9]+/g, " ").trim();
 }
 
-export function validateListingTexts(texts, house = {}, project = {}) {
+export function validateListingTexts(texts, house = {}, project = {}, factContext = {}) {
   const errors = [];
   if (!texts || typeof texts !== "object") return ["Die Textausgabe ist unvollständig."];
 
-  for (const field of TEXT_FIELDS) {
+  const fieldsToValidate = factContext.dynamicOnly === true ? AI_TEXT_FIELDS : TEXT_FIELDS;
+  for (const field of fieldsToValidate) {
     const value = typeof texts[field] === "string" ? texts[field].trim() : "";
     const rule = FIELD_RULES[field];
     if (!value) {
@@ -313,22 +315,15 @@ export function validateListingTexts(texts, house = {}, project = {}) {
   }
 
   const title = typeof texts.title === "string" ? texts.title.trim() : "";
-  const requiredTitle = buildListingHeadline(house, project);
-  if (title && finiteNumber(house.livingArea) > 0 && finiteNumber(house.rooms) > 0 && (project.city || project.district) && title !== requiredTitle) {
+  const requiredTitle = buildListingHeadline(house, project, factContext);
+  if (!factContext.dynamicOnly && title && finiteNumber(house.livingArea) > 0 && finiteNumber(house.rooms) > 0 && (project.city || project.district) && title !== requiredTitle) {
     errors.push("Die Überschrift enthält nicht vollständig Ort, gerundete Wohnfläche und Zimmer.");
   }
   if (texts.description && !String(texts.description).trim().endsWith(FIXED_DESCRIPTION_CTA)) {
     errors.push("Der feste Call-to-Action der Objektbeschreibung fehlt oder wurde verändert.");
   }
-  if (texts.equipment !== FIXED_EQUIPMENT_TEXT) {
-    errors.push("Der vorgeschriebene Ausstattungstext wurde verändert.");
-  }
-  if (texts.other !== FIXED_OTHER_TEXT) {
-    errors.push("Der vorgeschriebene Sonstiges-Text wurde verändert.");
-  }
-
   const seenParagraphs = new Map();
-  for (const field of TEXT_FIELDS.slice(1)) {
+  for (const field of fieldsToValidate.filter((field) => field !== "title")) {
     const paragraphs = String(texts[field] ?? "").split(/\n\s*\n/).map((value) => value.trim()).filter(Boolean);
     for (const paragraph of paragraphs) {
       if (paragraph.length < 100) continue;
@@ -470,16 +465,26 @@ export async function generateAiListing(input = {}) {
   let feedback = [];
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const rawTexts = await requestOnce(apiKey, input, feedback);
-    const texts = enforceListingCopy(rawTexts, { house: input.house, project: input.project, generated: true });
+    const factContext = {
+      houseSeries: LIVING_HAUS_SERIES_ID,
+      listingFacts: input.listingFacts,
+    };
+    const texts = enforceListingCopy(rawTexts, {
+      house: input.house,
+      project: input.project,
+      generated: true,
+      ...factContext,
+    });
+    const dynamicTexts = Object.fromEntries(AI_TEXT_FIELDS.map((field) => [field, texts[field]]));
     const claimValidation = validateListingClaims({
-      texts,
+      texts: dynamicTexts,
       house: input.house,
       project: input.project,
       listingFacts: input.listingFacts,
       houseSeries: LIVING_HAUS_SERIES_ID,
     });
     feedback = [
-      ...validateListingTexts(texts, input.house, input.project),
+      ...validateListingTexts(texts, input.house, input.project, { ...factContext, dynamicOnly: true }),
       ...validateNovelty(texts, input.previousTexts),
       ...validateLocationPrivacy(texts, input.project),
       ...claimValidation.blockingIssues.map(formatClaimIssue),

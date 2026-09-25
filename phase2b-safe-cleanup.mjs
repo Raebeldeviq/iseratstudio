@@ -14,8 +14,8 @@ import {
 import { cleanupStudioState } from "./data-integrity.mjs";
 import {
   FIXED_DESCRIPTION_CTA,
-  FIXED_EQUIPMENT_TEXT,
-  FIXED_OTHER_TEXT,
+  PHASE2B_LEGACY_EQUIPMENT_TEXT,
+  PHASE2B_LEGACY_OTHER_TEXT,
 } from "./listing-copy.mjs";
 import { LIVING_HAUS_SERIES_ID, validateListingClaims } from "./listing-claim-policy.mjs";
 import { APPLICATION_DATA_DIRECTORY } from "./platform-paths.mjs";
@@ -32,8 +32,11 @@ export const PHASE2B_SAFE_CLEANUP_BACKUP_DIRECTORY = join(
 );
 
 const FIELD_DETAILS = Object.freeze({
-  Ausstattung: Object.freeze({ key: "equipment", replacement: () => FIXED_EQUIPMENT_TEXT }),
-  Sonstiges: Object.freeze({ key: "other", replacement: () => FIXED_OTHER_TEXT }),
+  // This historic cleanup is deliberately frozen to the text that was
+  // approved in Phase 2B. Later versioned master copy must not retroactively
+  // widen or alter its deterministic migration scope.
+  Ausstattung: Object.freeze({ key: "equipment", replacement: () => PHASE2B_LEGACY_EQUIPMENT_TEXT }),
+  Sonstiges: Object.freeze({ key: "other", replacement: () => PHASE2B_LEGACY_OTHER_TEXT }),
   Objektbeschreibung: Object.freeze({
     key: "description",
     replacement: (current) => {

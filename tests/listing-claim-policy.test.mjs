@@ -8,13 +8,18 @@ import {
   FACT_SOURCE,
   FACT_STATUS,
   LIVING_HAUS_SERIES_ID,
+  QNG_GUARANTEE_SENTENCE,
+  QNG_GUARANTEE_TITLE,
+  qngGuaranteeSentence,
+  qngGuaranteeTitle,
   releasedListingFacts,
+  releasedTitleUsps,
   releasedTechnicalFacts,
   seriesFactSentences,
   technicalFactSentences,
   validateListingClaims,
 } from "../listing-claim-policy.mjs";
-import { FIXED_DESCRIPTION_CTA, FIXED_OTHER_TEXT } from "../listing-copy.mjs";
+import { FIXED_DESCRIPTION_CTA, FIXED_EQUIPMENT_TEXT, FIXED_OTHER_TEXT } from "../listing-copy.mjs";
 import { completeListingTexts, generateListingTexts } from "../app/lib/text-generator.ts";
 
 const technicalFact = (key, value, overrides = {}) => ({
@@ -25,6 +30,22 @@ const technicalFact = (key, value, overrides = {}) => ({
   status: FACT_STATUS.VERIFIED,
   verified: true,
   evidenceReference: "BLS-2026-001",
+  ...overrides,
+});
+
+const qngGuaranteeFact = (overrides = {}) => ({
+  key: "qng_guarantee",
+  value: "QNG-Siegel garantiert",
+  source: FACT_SOURCE.VERIFIED_SERIES,
+  sourceKind: FACT_SOURCE.VERIFIED_SERIES,
+  scope: FACT_SCOPE.PROJECT,
+  sourceScope: FACT_SCOPE.HOUSE_SERIES,
+  projectScope: FACT_SCOPE.PROJECT,
+  status: FACT_STATUS.GUARANTEED,
+  verified: true,
+  seriesId: LIVING_HAUS_SERIES_ID,
+  evidenceKind: FACT_EVIDENCE_KIND.QNG_SERIES_GUARANTEE,
+  evidenceReference: "Verifizierte Living-Haus-Serienfreigabe: QNG-Garantie für projektierte Häuser",
   ...overrides,
 });
 
@@ -121,11 +142,28 @@ test("releases only the fixed projected energy demand, never legacy defaults", (
     .includes(CLAIM_CATEGORY.UNVERIFIED_TECHNICAL_CLAIM));
 });
 
-test("inherits only the verified DGNB series fact for the matching house series", () => {
+test("inherits verified DGNB and project-scoped QNG guarantee facts only for the matching Living-Haus series", () => {
   const context = { houseSeries: LIVING_HAUS_SERIES_ID };
   const released = releasedListingFacts(context);
   assert.ok(released.some((fact) => fact.key === "certification" && fact.sourceKind === FACT_SOURCE.VERIFIED_SERIES));
-  assert.equal(released.some((fact) => /qng/iu.test(String(fact.value))), false);
+  const guarantee = released.find((fact) => fact.key === "qng_guarantee");
+  assert.deepEqual({
+    sourceKind: guarantee?.sourceKind,
+    scope: guarantee?.scope,
+    sourceScope: guarantee?.sourceScope,
+    projectScope: guarantee?.projectScope,
+    status: guarantee?.status,
+    evidenceKind: guarantee?.evidenceKind,
+  }, {
+    sourceKind: FACT_SOURCE.VERIFIED_SERIES,
+    scope: FACT_SCOPE.PROJECT,
+    sourceScope: FACT_SCOPE.HOUSE_SERIES,
+    projectScope: FACT_SCOPE.PROJECT,
+    status: FACT_STATUS.GUARANTEED,
+    evidenceKind: FACT_EVIDENCE_KIND.QNG_SERIES_GUARANTEE,
+  });
+  assert.equal(qngGuaranteeSentence(context), QNG_GUARANTEE_SENTENCE);
+  assert.equal(qngGuaranteeTitle(context), QNG_GUARANTEE_TITLE);
   assert.deepEqual(seriesFactSentences(context), [
     "Das projektierte Haus gehört zu einer Hausserie mit verifizierter DGNB-Serienzertifizierung.",
   ]);
@@ -139,6 +177,82 @@ test("inherits only the verified DGNB series fact for the matching house series"
     texts: { equipment: "Das projektierte Haus gehört zu einer Hausserie mit verifizierter DGNB-Serienzertifizierung." },
     houseSeries: "fremdhersteller",
   }).blockingIssues.some((issue) => issue.category === CLAIM_CATEGORY.UNVERIFIED_CERTIFICATION));
+  assert.equal(qngGuaranteeSentence({ houseSeries: "fremdhersteller" }), "");
+  assert.equal(qngGuaranteeTitle({ houseSeries: "fremdhersteller" }), "");
+});
+
+test("releases compact title USPs only from the matching structured series and package facts", () => {
+  const context = {
+    houseSeries: LIVING_HAUS_SERIES_ID,
+    house: { technicalPackage: "livinghaus-ikon-standard" },
+  };
+  assert.deepEqual(releasedTitleUsps(context).map((usp) => usp.id), [
+    "qng_guarantee",
+    "dgnb_series_certification",
+    "ikon_technical_package",
+  ]);
+  assert.equal(validateListingClaims({
+    texts: { title: "Endlich ankommen in Potsdam: 153 m², 5 Zimmer – QNG-Siegel garantiert & I-KON-Technikpaket" },
+    ...context,
+  }).ok, true);
+  assert.ok(validateListingClaims({
+    texts: { title: "Endlich ankommen in Potsdam: 153 m², 5 Zimmer – I-KON-Technikpaket" },
+    houseSeries: LIVING_HAUS_SERIES_ID,
+  }).blockingIssues.some((issue) => issue.category === CLAIM_CATEGORY.UNVERIFIED_TECHNICAL_CLAIM));
+});
+
+test("allows only the centrally phrased QNG guarantee and never converts it into a sustainability or individual certificate claim", () => {
+  const context = { listingFacts: [qngGuaranteeFact()], houseSeries: LIVING_HAUS_SERIES_ID };
+  for (const text of [QNG_GUARANTEE_SENTENCE, "QNG-Siegel serienmäßig garantiert", QNG_GUARANTEE_TITLE]) {
+    assert.equal(validateListingClaims({ texts: { description: text }, ...context }).ok, true, text);
+  }
+  for (const text of [
+    "Dieses Haus ist QNG-zertifiziert.",
+    "Das nachhaltige QNG-Haus.",
+    "QNG garantiert besonders nachhaltiges Wohnen.",
+  ]) {
+    assert.equal(validateListingClaims({ texts: { description: text }, ...context }).ok, false, text);
+  }
+  assert.equal(validateListingClaims({
+    texts: { description: QNG_GUARANTEE_SENTENCE },
+    houseSeries: "fremdhersteller",
+  }).ok, false);
+});
+
+test("keeps QNG guarantee, planning certificate and individual certification as separate fact states", () => {
+  const planningCertificate = {
+    key: "qng_planning_certificate",
+    value: "QNG-Planungszertifikat",
+    source: FACT_SOURCE.PROJECT,
+    scope: FACT_SCOPE.PROJECT,
+    status: FACT_STATUS.PLANNING_CERTIFICATE,
+    verified: true,
+    evidenceKind: FACT_EVIDENCE_KIND.QNG_PLANNING_CERTIFICATE,
+    evidenceReference: "Planungszertifikat QNG-2026-001",
+  };
+  const certified = {
+    key: "qng_certified",
+    value: "QNG-Zertifikat",
+    source: FACT_SOURCE.PROJECT,
+    scope: FACT_SCOPE.HOUSE,
+    status: FACT_STATUS.CERTIFIED,
+    verified: true,
+    evidenceKind: FACT_EVIDENCE_KIND.QNG_INDIVIDUAL_CERTIFICATE,
+    evidenceReference: "Individuelles QNG-Zertifikat QNG-2028-001",
+  };
+  assert.equal(validateListingClaims({
+    texts: { description: "Für dieses Projekt liegt ein QNG-Planungszertifikat vor." },
+    listingFacts: [planningCertificate],
+  }).ok, true);
+  assert.equal(validateListingClaims({
+    texts: { description: "Dieses Haus ist QNG-zertifiziert." },
+    listingFacts: [certified],
+  }).ok, true);
+  assert.equal(validateListingClaims({
+    texts: { description: "Dieses Haus ist QNG-zertifiziert." },
+    listingFacts: [qngGuaranteeFact()],
+    houseSeries: LIVING_HAUS_SERIES_ID,
+  }).ok, false);
 });
 
 test("keeps QNG planning, object certification and manufacturer QDF strictly separated", () => {
@@ -253,7 +367,7 @@ test("scans captions and CTA texts without silently changing manual input", () =
   assert.ok(result.blockingIssues.some((issue) => issue.field.startsWith("Bildunterschrift")));
 });
 
-test("deterministic generation uses only structured technical facts and otherwise stays claim-safe", () => {
+test("deterministic generation uses the fact-covered standard copy and preserves explicit static overrides", () => {
   const house = {
     id: "fact-house",
     name: "Fact House",
@@ -272,6 +386,8 @@ test("deterministic generation uses only structured technical facts and otherwis
     architecture: "Nachhaltige Architektur",
     equipmentHighlights: "Energieeffiziente Technik",
     useStandardPackage: true,
+    seriesId: LIVING_HAUS_SERIES_ID,
+    technicalPackage: "livinghaus-ikon-standard",
     images: [],
     listingFacts: [technicalFact("heat_pump", "Luft-Wasser-Wärmepumpe", { status: FACT_STATUS.PLANNED })],
   };
@@ -286,12 +402,16 @@ test("deterministic generation uses only structured technical facts and otherwis
     house,
     project,
     houseSeries: LIVING_HAUS_SERIES_ID,
+    approvedMasterTextFields: ["equipment"],
   }).ok, true);
-  assert.match(generated.equipment, /derzeitigen Planung ist eine Luft-Wasser-Wärmepumpe vorgesehen/u);
-  assert.match(generated.equipment, /Endenergiebedarf von 18 kWh\/\(m²·a\) vorgesehen/u);
-  assert.match(generated.equipment, /DGNB-Serienzertifizierung/u);
+  assert.equal(generated.equipment, FIXED_EQUIPMENT_TEXT);
+  assert.equal(generated.other, FIXED_OTHER_TEXT);
+  assert.match(generated.equipment, /DGNB-Zertifizierung/u);
   assert.doesNotMatch(generated.equipment, /QNG/u);
-  assert.doesNotMatch(generated.description, /nachhaltig|energieeffizient|dgnb|qng/iu);
+  assert.match(generated.title, /m², 5 Zimmer/u);
+  assert.match(generated.title, /QNG-Siegel garantiert|DGNB-Serienzertifizierung|I-KON-Technikpaket/u);
+  assert.equal(generated.description.split(QNG_GUARANTEE_SENTENCE).length - 1, 1);
+  assert.doesNotMatch(generated.description, /nachhaltig|energieeffizient|dgnb/iu);
 
   const completed = completeListingTexts(house, project, provider, {
     title: "Nachhaltiges Familienhaus",
@@ -300,17 +420,17 @@ test("deterministic generation uses only structured technical facts and otherwis
     location: "Sachliche Lage.",
     other: "Dauerhaft niedrige Energiekosten.",
   });
+  assert.equal(completed.title, "Nachhaltiges Familienhaus");
+  assert.equal(completed.equipment, "Ideal gedämmte Gebäudehülle.");
+  assert.equal(completed.other, "Dauerhaft niedrige Energiekosten.");
+  assert.ok(completed.description.endsWith(FIXED_DESCRIPTION_CTA));
   assert.equal(validateListingClaims({
     texts: completed,
     house,
     project,
     houseSeries: LIVING_HAUS_SERIES_ID,
-  }).ok, true);
-  assert.ok(completed.description.endsWith(FIXED_DESCRIPTION_CTA));
-  assert.match(completed.equipment, /derzeitigen Planung ist eine Luft-Wasser-Wärmepumpe vorgesehen/u);
-  assert.match(completed.equipment, /DGNB-Serienzertifizierung/u);
-  assert.doesNotMatch(completed.equipment, /QNG/u);
-  assert.equal(completed.other, FIXED_OTHER_TEXT);
+  }).ok, false);
+  assert.equal(completed.description.split(QNG_GUARANTEE_SENTENCE).length - 1, 1);
 });
 
 test("documents technical facts in neutral sentences without an environmental inference", () => {

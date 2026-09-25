@@ -48,15 +48,20 @@ export type HouseImage = {
 export type ListingFactScope =
   | "component"
   | "technical_system"
+  | "technical_package"
   | "house"
   | "house_series"
   | "project"
+  | "manufacturer"
   | "company";
 
 export type ListingFactStatus =
   | "verified"
   | "contract_included"
   | "planned"
+  | "guaranteed"
+  | "planning_certificate"
+  | "certified"
   | "optional"
   | "unknown";
 
@@ -64,13 +69,20 @@ export type ListingFactSource =
   | "project"
   | "house_template"
   | "verified_series"
+  | "verified_manufacturer"
   | "optional_package"
   | "legacy_default"
   | "unknown";
 
 export type ListingFactEvidenceKind =
   | "projected_house_value"
-  | "energy_certificate";
+  | "projected_house_energy_class"
+  | "projected_portal_field"
+  | "energy_certificate"
+  | "technical_package"
+  | "qng_series_guarantee"
+  | "qng_planning_certificate"
+  | "qng_individual_certificate";
 
 export type ListingComplianceFact = {
   key: string;
@@ -84,6 +96,8 @@ export type ListingComplianceFact = {
   evidenceReference?: string;
   evidenceKind?: ListingFactEvidenceKind;
   seriesId?: string;
+  sourceScope?: ListingFactScope;
+  projectScope?: "project";
   validFrom?: string;
   validUntil?: string;
 };
@@ -199,6 +213,7 @@ export type HouseTemplate = {
   architecture: string;
   equipmentHighlights: string;
   useStandardPackage: boolean;
+  technicalPackage?: string;
   listingFacts?: ListingComplianceFact[];
   images: HouseImage[];
 };
@@ -266,6 +281,23 @@ export type ListingTexts = {
   other: string;
 };
 
+export type StaticListingCopyField =
+  | "equipment"
+  | "other"
+  | "provision"
+  | "annotation"
+  | "terms"
+  | "recommendation";
+
+export type StaticListingCopySource = "standard" | "manual";
+
+export type ListingStaticTexts = {
+  provision?: string;
+  annotation?: string;
+  terms?: string;
+  recommendation?: string;
+};
+
 export type ProjectingSettings = {
   equipmentQuality?: string;
   constructionPhase?: string;
@@ -296,6 +328,11 @@ export type GeneratedListing = {
   templateName: string;
   price: number;
   texts: ListingTexts;
+  /** Separate Immoprofessional free-text fields; never folded into `other`. */
+  staticTexts?: ListingStaticTexts;
+  /** Explicit per-field source prevents string-comparison based overrides. */
+  staticCopySources?: Partial<Record<StaticListingCopyField, StaticListingCopySource>>;
+  staticCopyVersion?: number;
   listingFacts?: ListingComplianceFact[];
   version: number;
   projectingSettings?: ProjectingSettings;

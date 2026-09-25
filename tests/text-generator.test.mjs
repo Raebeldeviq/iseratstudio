@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildListingHeadline } from "../listing-copy.mjs";
+import { QNG_GUARANTEE_SENTENCE } from "../listing-claim-policy.mjs";
 import { completeListingTexts } from "../app/lib/text-generator.ts";
 
 const house = {
@@ -55,15 +55,28 @@ const provider = {
   phone: "",
 };
 
-test("keeps the step-two headline when a stale helper returns another title", () => {
+test("keeps an existing title when an explicit dynamic generation refreshes description and location", () => {
   const result = completeListingTexts(house, project, provider, {
     title: "Klare Räume für morgen",
     description: "Ein individuell erzeugter Hausbeschreibungstext.",
     location: "Mahlsdorf bietet einen passenden Rahmen für das neue Zuhause.",
   }, 2);
 
-  assert.equal(result.title, buildListingHeadline(house, project));
-  assert.notEqual(result.title, "Klare Räume für morgen");
+  assert.equal(result.title, "Klare Räume für morgen");
   assert.match(result.description, /^Ein individuell erzeugter Hausbeschreibungstext\./);
+  assert.equal(result.description.split(QNG_GUARANTEE_SENTENCE).length - 1, 1);
   assert.equal(result.location, "Mahlsdorf bietet einen passenden Rahmen für das neue Zuhause.");
+});
+
+test("does not silently refill an explicitly emptied static field during dynamic regeneration", () => {
+  const result = completeListingTexts(house, project, provider, {
+    title: "Manueller Titel",
+    description: "Sachliche Objektbeschreibung.",
+    equipment: "",
+    location: "Sachliche Lage.",
+    other: "",
+  });
+  assert.equal(result.equipment, "");
+  assert.equal(result.other, "");
+  assert.equal(result.title, "Manueller Titel");
 });

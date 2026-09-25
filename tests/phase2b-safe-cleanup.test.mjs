@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { FIXED_EQUIPMENT_TEXT } from "../listing-copy.mjs";
+import { PHASE2B_LEGACY_EQUIPMENT_TEXT } from "../listing-copy.mjs";
 import {
   applyPhase2BSafeCleanup,
   assertPhase2BSafeCleanupIntegrity,
@@ -66,11 +66,11 @@ test("plans and applies only the approved equipment field, then stays idempotent
   assert.equal(plan.changes.length, 1);
   assert.equal(plan.changes[0].field, "Ausstattung");
   assert.equal(plan.changes[0].previousText, "Historischer erzwungener Ausstattungstext.");
-  assert.equal(plan.changes[0].replacementText, FIXED_EQUIPMENT_TEXT);
+  assert.equal(plan.changes[0].replacementText, PHASE2B_LEGACY_EQUIPMENT_TEXT);
 
   const migrated = applyPhase2BSafeCleanup(before, { scan, expectedSafeFieldCount: 1 });
   assert.equal(migrated.changed, true);
-  assert.equal(migrated.state.projects[0].listings[0].texts.equipment, FIXED_EQUIPMENT_TEXT);
+  assert.equal(migrated.state.projects[0].listings[0].texts.equipment, PHASE2B_LEGACY_EQUIPMENT_TEXT);
   assert.equal(migrated.state.projects[0].listings[0].texts.title, before.projects[0].listings[0].texts.title);
   assert.equal(migrated.state.projects[0].listings[0].texts.description, before.projects[0].listings[0].texts.description);
   assertPhase2BSafeCleanupIntegrity(before, migrated.state, migrated.plan.changes);

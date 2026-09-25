@@ -33,11 +33,11 @@ const testHouse = {
 };
 const testProject = { city: "Schulzendorf", district: "" };
 const validTexts = enforceListingCopy({
-  title: "Entwurf",
+  title: buildListingHeadline(testHouse, testProject),
   description: longText("Der projektierte Entwurf verbindet klare Architektur mit flexibel nutzbaren Räumen und einer sorgfältig abgestimmten Planung für den Familienalltag.", 1250),
-  equipment: "Wird ersetzt.",
+  equipment: "",
   location: longText("Das Grundstück liegt in Schulzendorf und bietet einen stimmigen Rahmen für das geplante Zuhause; alle weiteren Details werden anhand bestätigter Standortdaten beurteilt.", 550),
-  other: "Wird ersetzt.",
+  other: "",
 }, { house: testHouse, project: testProject, generated: true });
 
 test("removes the exact house number before building the AI source data", () => {
@@ -61,13 +61,37 @@ test("supplies only released series facts and projected energy values to the AI"
     house: { name: "Concept 150", energyDemand: 18, energyClass: "A++" },
   });
   assert.ok(source.house.releasedListingFacts.some((fact) => fact.key === "certification" && fact.sourceKind === "verified_series"));
-  assert.equal(source.house.releasedListingFacts.some((fact) => /qng/iu.test(String(fact.value))), false);
+  assert.deepEqual(source.house.releasedListingFacts.find((fact) => fact.key === "qng_guarantee"), {
+    key: "qng_guarantee",
+    value: "QNG-Siegel garantiert",
+    source: "verified_series",
+    sourceKind: "verified_series",
+    scope: "project",
+    status: "guaranteed",
+    verified: true,
+    evidenceReference: "Verifizierte Living-Haus-Serienfreigabe: QNG-Garantie für projektierte Häuser",
+    evidenceKind: "qng_series_guarantee",
+    sourceScope: "house_series",
+    projectScope: "project",
+  });
   assert.ok(source.house.releasedListingFacts.some((fact) => (
     fact.key === "energy_demand"
     && fact.status === "planned"
     && fact.evidenceKind === "projected_house_value"
   )));
-  assert.equal(source.house.releasedListingFacts.some((fact) => fact.key === "energy_class"), false);
+  assert.deepEqual(source.house.releasedListingFacts.find((fact) => fact.key === "energy_class"), {
+    key: "energy_class",
+    value: "A++",
+    source: "verified_series",
+    sourceKind: "verified_series",
+    scope: "project",
+    status: "planned",
+    verified: true,
+    evidenceReference: "Verifizierter Living-Haus-Projektierungswert: Energieeffizienzklasse A++",
+    evidenceKind: "projected_house_energy_class",
+    sourceScope: undefined,
+    projectScope: undefined,
+  });
 });
 
 test("uses the Responses API quality settings and a strict text schema", () => {
@@ -81,6 +105,7 @@ test("uses the Responses API quality settings and a strict text schema", () => {
   assert.deepEqual(Object.keys(request.text.format.schema.properties), ["description", "location"]);
   assert.match(request.input[0].content[0].text, /gerundeter Wohnfläche und Zimmerzahl/);
   assert.match(request.input[0].content[0].text, /keine allgemeinen Umwelt-, Klima-, Nachhaltigkeits- oder Energieversprechen/);
+  assert.match(request.input[0].content[0].text, /qng_guarantee/u);
 });
 
 test("uses GPT-5.6 Luna as the economical default", () => {
@@ -121,7 +146,7 @@ test("accepts complete texts and rejects short or Markdown-formatted output", ()
 test("requires the factual headline with place, rounded area and rooms", () => {
   const title = buildListingHeadline(testHouse, testProject);
   assert.match(title, /in Schulzendorf:/);
-  assert.match(title, /113 m² Wohnfläche und 5 Zimmer$/);
+  assert.match(title, /113 m², 5 Zimmer$/);
   assert.deepEqual(validateListingTexts(validTexts, testHouse, testProject), []);
   const errors = validateListingTexts({ ...validTexts, title: "Dein Zuhause in Schulzendorf" }, testHouse, testProject);
   assert.ok(errors.some((value) => value.includes("Wohnfläche")));
