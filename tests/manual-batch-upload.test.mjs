@@ -4,9 +4,11 @@ import test from "node:test";
 import {
   completedManualBatchListingIds,
   createManualBatchResumptionPlan,
+  reconcileCompletedManualBatchTransferInState,
   requiresPlotDailyUploadClaim,
   UPLOAD_ORIGIN,
 } from "../manual-batch-upload.mjs";
+import { listingControl } from "../listing-groups.mjs";
 import { WORKFLOW_STATUS } from "../workflow-status.mjs";
 
 function stateWithTenPlots() {
@@ -27,6 +29,45 @@ function stateWithTenPlots() {
     })),
     uploadHistory: [],
     promotionLibrary: { promotionImages: [], promotionSettings: {} },
+  };
+}
+
+function preparedRotationState() {
+  const source = {
+    id: "source-listing",
+    externalId: "FPI-SOURCE",
+    version: 1,
+    templateName: "Source House",
+    status: WORKFLOW_STATUS.PREPARED,
+  };
+  const copy = {
+    id: "copy-listing",
+    externalId: "FPI-COPY",
+    version: 2,
+    templateName: "Copy House",
+    status: WORKFLOW_STATUS.PREPARED,
+    listingOrigin: "rotation-copy",
+    rotationSourceListingId: source.id,
+  };
+  return {
+    projects: [{
+      id: "project-1",
+      name: "Testadresse",
+      street: "Teststraße",
+      houseNumber: "1",
+      zip: "10115",
+      city: "Berlin",
+      listings: [source, copy],
+      listingGroup: {
+        projectId: "project-1",
+        listingControls: [{
+          listingId: source.id,
+          externalId: source.externalId,
+          status: WORKFLOW_STATUS.PUBLISHED,
+        }],
+      },
+    }],
+    uploadHistory: [],
   };
 }
 
@@ -72,4 +113,57 @@ test("manual batch dry run selects exactly 30 and protects exactly 10 completed 
   assert.equal(new Set(selectedListingIds).size, 30);
   assert.equal(selectedListingIds.some((listingId) => protectedListingIds.includes(listingId)), false);
   assert.deepEqual(completedManualBatchListingIds(ledger, projectIds), protectedListingIds);
+});
+
+test("completed manual transfer persists only pending import and keeps the published source intact", () => {
+  const state = preparedRotationState();
+  const jobId = "upload:project-1:copy-listing:FPI-COPY:2:promotion-1";
+  const next = reconcileCompletedManualBatchTransferInState(state, {
+    projectId: "project-1",
+    listingId: "copy-listing",
+    jobId,
+    ledgerStatus: WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT,
+    transferredAt: "2026-09-26T16:01:04.099Z",
+  });
+  const project = next.projects[0];
+  const source = project.listings.find((listing) => listing.id === "source-listing");
+  const copy = project.listings.find((listing) => listing.id === "copy-listing");
+  const control = listingControl(project.listingGroup, source);
+  assert.equal(copy.status, WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT);
+  assert.equal(source.status, WORKFLOW_STATUS.PREPARED);
+  assert.equal(source.rotationArchivedAt, undefined);
+  assert.equal(control.status, WORKFLOW_STATUS.PUBLISHED);
+  assert.equal(control.pendingRotationListingId, copy.id);
+  assert.equal(control.pendingRotationJobId, jobId);
+  assert.equal(next.uploadHistory.at(-1).jobId, jobId);
+});
+
+test("completed manual transfer reconciliation is idempotent", () => {
+  const input = {
+    projectId: "project-1",
+    listingId: "copy-listing",
+    jobId: "upload:project-1:copy-listing:FPI-COPY:2:normal",
+    ledgerStatus: WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT,
+    transferredAt: "2026-09-26T16:01:04.099Z",
+  };
+  const once = reconcileCompletedManualBatchTransferInState(preparedRotationState(), input);
+  const twice = reconcileCompletedManualBatchTransferInState(once, input);
+  assert.equal(twice, once);
+  assert.equal(twice.uploadHistory.filter((entry) => entry.jobId === input.jobId).length, 1);
+});
+
+test("manual transfer reconciliation fails closed on mismatched evidence", () => {
+  const state = preparedRotationState();
+  assert.throws(() => reconcileCompletedManualBatchTransferInState(state, {
+    projectId: "project-1",
+    listingId: "copy-listing",
+    jobId: "upload:project-1:other-listing:FPI-COPY:2:normal",
+    ledgerStatus: WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT,
+  }), /passt nicht zur gespeicherten Inseratsversion/u);
+  assert.throws(() => reconcileCompletedManualBatchTransferInState(state, {
+    projectId: "project-1",
+    listingId: "copy-listing",
+    jobId: "upload:project-1:copy-listing:FPI-COPY:2:normal",
+    ledgerStatus: WORKFLOW_STATUS.PROCESSING,
+  }), /abgeschlossenem Uploadnachweis/u);
 });

@@ -29,6 +29,7 @@ import { createStructuredFileLogger } from "./structured-log.mjs";
 import { createUploadJobLedger } from "./upload-job-ledger.mjs";
 import {
   completedManualBatchListingIds,
+  reconcileCompletedManualBatchTransferInState,
   requiresPlotDailyUploadClaim,
   UPLOAD_ORIGIN,
 } from "./manual-batch-upload.mjs";
@@ -134,6 +135,17 @@ const uploadJobLedger = createUploadJobLedger(UPLOAD_JOB_LEDGER_PATH);
 const plotDailyUploadGuard = createPlotDailyUploadGuard(PLOT_DAILY_UPLOAD_GUARD_PATH);
 const plotSyncService = createPlotSyncService();
 const catalogStateStore = createCatalogStateStore();
+
+async function reconcileCompletedManualBatchTransfer(uploadJob, completedJob) {
+  return catalogStateStore.update((state) => reconcileCompletedManualBatchTransferInState(state, {
+    projectId: uploadJob.projectId,
+    listingId: uploadJob.listingId,
+    jobId: uploadJob.jobId,
+    ledgerStatus: completedJob.status,
+    transferredAt: completedJob.transferredAt || completedJob.updatedAt,
+    runId: "manual-batch",
+  }), { now: completedJob.transferredAt || completedJob.updatedAt });
+}
 const listingSchedulerLease = createPersistentLease(LISTING_SCHEDULER_LOCK_PATH, {
   writeEvent: (event, details) => writeListingSchedulerLog(`lease-${event}`, {
     runtimeCommit: RUNTIME_PROVENANCE.runtimeCommit,
@@ -926,8 +938,14 @@ const server = createServer(async (request, response) => {
       };
       const claim = await uploadJobLedger.claim(uploadJob);
       if (claim.alreadyCompleted) {
+        const catalogResult = await reconcileCompletedManualBatchTransfer(uploadJob, claim.job);
         await uploadLog("idempotent-skip", { status: WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT, message: "Der Upload-Job war bereits erfolgreich übertragen." });
-        send(response, 200, { ok: true, idempotent: true, message: "Der Upload war bereits erfolgreich abgeschlossen und wurde nicht erneut übertragen." }, origin);
+        send(response, 200, {
+          ok: true,
+          idempotent: true,
+          catalogSavedAt: catalogResult.savedAt,
+          message: "Der Upload war bereits erfolgreich abgeschlossen und wurde nicht erneut übertragen.",
+        }, origin);
         return;
       }
       uploadJobClaimed = true;
@@ -982,11 +1000,13 @@ const server = createServer(async (request, response) => {
       if (plotDailyUploadClaim) await plotDailyUploadGuard.markTransferStarted(plotDailyUploadClaim);
       await client.uploadFrom(temporaryUploadPath, filename);
       if (plotDailyUploadClaim) await plotDailyUploadGuard.complete(plotDailyUploadClaim);
-      await uploadJobLedger.complete(uploadJob);
+      const completedUploadJob = await uploadJobLedger.complete(uploadJob);
       uploadJobCompleted = true;
+      const catalogResult = await reconcileCompletedManualBatchTransfer(uploadJob, completedUploadJob);
       await uploadLog("transferred", { filename, archiveBytes, host: ftp.ftpHost, remotePath: ftp.ftpPath, transport: ftp.ftpSecure });
       send(response, 200, {
         ok: true,
+        catalogSavedAt: catalogResult.savedAt,
         message: `Importpaket „${filename}“ wurde an Immoprofessional übertragen. Bitte den Importbericht und den Entwurfsstatus prüfen.`,
       }, origin);
       return;

@@ -73,17 +73,13 @@ import PlotManagement from "./components/PlotManagement";
 import { APP_VERSION } from "./lib/app-version.mjs";
 import { buildImportPackage } from "./lib/openimmo";
 import {
-  BATCH_UPLOAD_LOG_LIMIT,
-  createBatchUploadLog,
   createBatchUploadPlan,
   runSequentialBatchUpload,
 } from "../batch-upload.mjs";
 import { createManualBatchResumptionPlan } from "../manual-batch-upload.mjs";
 import {
   choosePromotionImage,
-  enforceSinglePromotionAssignment,
   normalizePromotionLibrary as normalizePromotionLibraryValue,
-  recordPromotionUsage,
 } from "../promotion-images.mjs";
 import {
   commitHouseDistributionPreviews,
@@ -91,7 +87,6 @@ import {
   generateWeightedProjectPreview,
   HOUSES_PER_PROJECT,
   normalizeHouseDistribution,
-  recordHouseRotation,
   setHouseDistributionPool,
   updateProjectHouseRules,
   validateHousePool,
@@ -127,7 +122,6 @@ import { completeListingTexts, generateListingTexts, totalPrice } from "./lib/te
 import { loadStudioSnapshot, saveStudioState, STORAGE_ID } from "./lib/storage";
 import type {
   AddressOwner,
-  BatchUploadLog,
   GeneratedListing,
   HouseDistributionState,
   HouseImage,
@@ -673,6 +667,10 @@ async function saveDeviceCatalogSnapshot(
 
 let deviceCatalogSaveQueue: Promise<void> = Promise.resolve();
 let knownDeviceCatalogSavedAt = "";
+
+function acceptKnownDeviceCatalogSavedAt(savedAt: string): void {
+  knownDeviceCatalogSavedAt = savedAt;
+}
 
 function queueDeviceCatalogSnapshot(state: StudioState, savedAt: string): Promise<void> {
   const nextSave = deviceCatalogSaveQueue
@@ -2920,160 +2918,13 @@ export default function InseratStudio() {
         },
       });
 
-      const timestamp = new Date().toISOString();
-      let nextState = uploadState;
-      const newLogs: BatchUploadLog[] = runPlan.addresses
-        .filter((address: { items: unknown[] }) => !address.items.length)
-        .map((address: { projectId: string; address: string; error: string }) => {
-          const project = uploadState.projects.find((candidate) => candidate.id === address.projectId);
-          return {
-            id: uid(),
-            jobId: `skip:${runPlan.id}:${address.projectId}`,
-            batchId: runPlan.id,
-            projectId: address.projectId,
-            address: address.address,
-            listingId: "",
-            externalId: "",
-            houseVariant: "",
-            promotionImageId: "",
-            createdAt: project?.createdAt || timestamp,
-            updatedAt: timestamp,
-            nextUpdatedAt: "",
-            status: WORKFLOW_STATUS.BLOCKED,
-            statusMessage: "Adresse übersprungen",
-            error: address.error || "Für diese Adresse waren keine vollständigen Inserate vorhanden.",
-          };
-        });
-      for (const itemResult of result.results) {
-        const project = nextState.projects.find((candidate) => candidate.id === itemResult.projectId);
-        const listing = project?.listings.find((candidate) => candidate.id === itemResult.listingId);
-        if (!project || !listing) continue;
-        const log = createBatchUploadLog(project, listing, itemResult, {
-          batchId: runPlan.id,
-          promotionImageId: itemResult.promotionImageId,
-          now: timestamp,
-          updateIntervalDays: scheduler.settings.updateIntervalDays,
-        });
-        newLogs.push(log);
-        let listingGroup = normalizeListingGroup(project.listingGroup, project.id) as ListingGroup;
-        if (listing.listingGroupVariantId) {
-          listingGroup = itemResult.ok
-            ? recordListingGroupCopy(listingGroup, listing.listingGroupVariantId, listing, {
-                mode: "batch-upload",
-                status: WORKFLOW_STATUS.PUBLISHED,
-                variation: itemResult.promotionImageId
-                  ? "Sammel-Upload mit rotiertem Aktionsbild; keine automatische Löschung ausgeführt."
-                  : "Sammel-Upload mit normaler Bildfolge; keine automatische Löschung ausgeführt.",
-              }).group as ListingGroup
-            : recordListingGroupFailure(
-                listingGroup,
-                listing.listingGroupVariantId,
-                "batch-upload",
-                [itemResult.error],
-                { sourceListing: listing },
-              ).group as ListingGroup;
-        }
-        const updatedListing: GeneratedListing = itemResult.ok ? {
-          ...listing,
-          promotionImageId: itemResult.promotionImageId,
-          promotionAssignedAt: itemResult.promotionImageId ? timestamp : "",
-          lastUploadedAt: timestamp,
-          nextUpdateAt: log.nextUpdatedAt,
-          status: log.status,
-          statusMessage: log.statusMessage,
-          uploadError: "",
-        } : {
-          ...listing,
-          status: log.status,
-          statusMessage: log.statusMessage,
-          uploadError: log.error,
-        };
-        if (updatedListing.listingOrigin === "group-source" && updatedListing.listingGroupVariantId) {
-          listingGroup = replaceListingGroupVariantListing(
-            listingGroup,
-            updatedListing.listingGroupVariantId,
-            updatedListing,
-          ) as ListingGroup;
-        }
-        const replacedSourceListing = itemResult.ok && listing.rotationSourceListingId
-          ? project.listings.find((entry) => entry.id === listing.rotationSourceListingId)
-          : null;
-        if (replacedSourceListing) {
-          listingGroup = updateListingControl(listingGroup, replacedSourceListing, {
-            automaticUpdateEnabled: false,
-            status: WORKFLOW_STATUS.ARCHIVED,
-            statusMessage: "Durch erfolgreiche Rotation ersetzt · Löschung manuell prüfen",
-            lastUpdatedAt: timestamp,
-            lastSuccessAt: timestamp,
-            lastError: "",
-          }) as ListingGroup;
-        }
-        let updatedProject: ProjectInput = {
-          ...project,
-          listings: project.listings.map((entry) => {
-            if (entry.id === listing.id) return updatedListing;
-            if (replacedSourceListing && entry.id === replacedSourceListing.id) {
-              return {
-                ...entry,
-                rotationArchivedAt: timestamp,
-                status: WORKFLOW_STATUS.ARCHIVED,
-                statusMessage: "Durch erfolgreiche Rotation ersetzt · Löschung manuell prüfen",
-                uploadError: "",
-              };
-            }
-            return entry;
-          }),
-          listingGroup,
-        };
-        if (itemResult.ok && itemResult.promotionImageId) {
-          updatedProject = enforceSinglePromotionAssignment(
-            updatedProject,
-            listing.id,
-            itemResult.promotionImageId,
-            { now: timestamp },
-          ) as ProjectInput;
-        }
-        nextState = {
-          ...nextState,
-          projects: nextState.projects.map((candidate) => candidate.id === project.id ? updatedProject : candidate),
-        };
-        if (
-          itemResult.ok
-          && listing.rotationRemovedHouseId
-          && listing.rotationAddedHouseId
-        ) {
-          nextState = {
-            ...nextState,
-            houseDistribution: recordHouseRotation(
-              nextState.houseDistribution,
-              nextState.houses,
-              nextState.projects,
-              project.id,
-              listing.rotationRemovedHouseId,
-              listing.rotationAddedHouseId,
-              { now: timestamp },
-            ) as HouseDistributionState,
-          };
-        }
-        if (itemResult.ok && itemResult.promotionImageId) {
-          nextState = {
-            ...nextState,
-            ...recordPromotionUsage(nextState, {
-              projectId: project.id,
-              listingId: listing.id,
-              externalId: listing.externalId,
-              houseId: listing.templateId,
-              imageId: itemResult.promotionImageId,
-              mode: listing.lastUploadedAt || listing.listingOrigin === "rotation-copy" ? "update" : "create",
-            }, { now: timestamp }),
-          };
-        }
+      const snapshot = await loadDeviceCatalogSnapshot();
+      if (!snapshot) {
+        throw new Error("Die Transfers wurden protokolliert, aber der autoritative lokale Katalog konnte nicht neu geladen werden. Ein erneuter Lauf überspringt bereits übertragene Jobs.");
       }
-      nextState = {
-        ...nextState,
-        uploadHistory: [...(nextState.uploadHistory || []), ...newLogs].slice(-BATCH_UPLOAD_LOG_LIMIT),
-      };
-      setState(nextState);
+      acceptKnownDeviceCatalogSavedAt(snapshot.savedAt);
+      const nextState = normalizeMandatoryListingStandards(normalizeProjectOwners(snapshot.state));
+      setState({ ...nextState, selectedPlotIds: selectablePlotIds(nextState.plots, nextState.selectedPlotIds) });
       setBatchUploadProgress((current) => ({
         ...current,
         running: false,
