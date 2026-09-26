@@ -50,7 +50,7 @@ const PREVIOUS_PORTAL_DEFAULTS = Object.freeze({
 const PORTAL_TARGET = Object.freeze({
   heatingType: "keine Angabe (heizungsart wird im OpenImmo-Export weggelassen)",
   fuelType: "Wärmepumpe",
-  energyTypes: ["KFW40", "KFW55"],
+  energyTypes: ["KFW40"],
   energyClass: "A++ (projektierter Wert, kein individueller Energieausweis)",
   commissionRequired: false,
 });
@@ -157,7 +157,7 @@ function portalFields(listing, house) {
       label: "Energietyp",
       currentValue: [source.kfw40 && "KFW40", source.kfw55 && "KFW55"].filter(Boolean),
       targetValue: PORTAL_TARGET.energyTypes,
-      treatment: source.kfw40 && source.kfw55 ? "ALREADY_CORRECT" : "CENTRAL_EXPORT_MAPPING",
+      treatment: source.kfw40 && !source.kfw55 ? "ALREADY_CORRECT" : "CENTRAL_EXPORT_MAPPING",
     },
     {
       field: "energyClass",

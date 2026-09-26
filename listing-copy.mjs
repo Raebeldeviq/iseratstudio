@@ -2,6 +2,7 @@ import {
   releasedTitleUsps,
   TITLE_USP_ID,
 } from "./listing-claim-policy.mjs";
+import { parseHouseVariant } from "./image-sequence.mjs";
 
 const DESCRIPTION_CTA_START =
   "Du möchtest wissen, ob dieses Haus zu deinen Vorstellungen und deinem Budget passt?";
@@ -20,11 +21,11 @@ export const FIXED_DESCRIPTION_ENDING = `${FIXED_DESCRIPTION_FINANCING}
 ${FIXED_DESCRIPTION_CTA}`;
 
 /**
- * Zentral versionierte Inseratstandards. Die Texte sind keine Generatorausgabe:
- * Neue Inserate erhalten sie einmalig, bestehende manuelle Werte werden nur
- * durch eine bewusste feldweise Rücksetzung ersetzt.
+ * Zentral versionierte Inseratstandards. Die Texte sind keine Generatorausgabe.
+ * Ausstattung, Sonstiges, Anmerkung und AGB bewahren manuelle Quellen;
+ * Provision und Empfehlung sind ausdrücklich globale Portaltexte.
  */
-export const STATIC_COPY_VERSION = 1;
+export const STATIC_COPY_VERSION = 2;
 
 export const STATIC_COPY_FIELD = Object.freeze({
   EQUIPMENT: "equipment",
@@ -80,12 +81,17 @@ export const FIXED_ANNOTATION_TEXT =
 export const FIXED_TERMS_TEXT =
   "Wir weisen auf unsere Allgemeinen Geschäftsbedingungen hin. Durch weitere Inanspruchnahme unserer Leistungen erklären Sie die Kenntnis und Ihr Einverständnis.";
 
-export const FIXED_RECOMMENDATION_TEXT = `Für Sie bieten wir zusammen mit unserem strategischen Partner HEUN-Finanz auch attraktive Finanzierungsoptionen, einschließlich der Antragstellung für alle Förderungen!
+export const PREVIOUS_FIXED_RECOMMENDATION_TEXT = `Für Sie bieten wir zusammen mit unserem strategischen Partner HEUN-Finanz auch attraktive Finanzierungsoptionen, einschließlich der Antragstellung für alle Förderungen!
 
 Die Hausillustrationen und die Bilder der Innenausstattung können Extras zeigen, die nicht im angegebenen Kaufpreis enthalten sind.
 
 Gute Beratung ist der Anfang von allem. Deshalb analysieren wir gemeinsam mit Ihnen Ihre Ideen, Wünsche und Bedürfnisse und finden das passende Living Haus für Sie und Ihre Familie.
 Interessiert? Kontaktieren Sie mich und vereinbaren Sie noch heute ein kostenloses und unverbindliches Beratungsgespräch.`;
+
+export const FIXED_RECOMMENDATION_TEXT = `Gemeinsam mit unserem strategischen Partner HEUN-Finanz bieten wir Ihnen attraktive Finanzierungsmöglichkeiten – einschließlich der Beantragung sämtlicher für Ihr Bauvorhaben infrage kommender Fördermittel.
+Die Hausabbildungen und Bilder der Innenausstattung können Sonderausstattungen zeigen, die nicht im angegebenen Kaufpreis enthalten sind.
+Eine gute Beratung ist die Grundlage für alles. Deshalb analysieren wir gemeinsam mit Ihnen Ihre Vorstellungen, Wünsche und Bedürfnisse und finden das passende Living Haus für Sie und Ihre Familie.
+Interesse geweckt? Kontaktieren Sie mich noch heute und vereinbaren Sie ein kostenloses und unverbindliches Beratungsgespräch.`;
 
 /**
  * The final Phase 2B cleanup intentionally used this former, neutral
@@ -152,7 +158,10 @@ export const KNOWN_PREVIOUS_STATIC_COPY = Object.freeze({
   provision: Object.freeze([PREVIOUS_STATIC_COPY.provision]),
   annotation: Object.freeze([PREVIOUS_STATIC_COPY.annotation]),
   terms: Object.freeze([PREVIOUS_STATIC_COPY.terms]),
-  recommendation: Object.freeze([PREVIOUS_STATIC_COPY.recommendation]),
+  recommendation: Object.freeze([
+    PREVIOUS_STATIC_COPY.recommendation,
+    PREVIOUS_FIXED_RECOMMENDATION_TEXT,
+  ]),
 });
 
 const STANDARD_STATIC_COPY = Object.freeze({
@@ -186,8 +195,8 @@ export function staticCopySource(value) {
 
 /**
  * Reads a listing's six static fields without mutating it. Legacy text fields
- * are deliberately treated as manual so an application start or export can
- * never replace an unclassified existing value.
+ * are treated as manual, except for the explicitly global provision and
+ * recommendation fields that always resolve to the current central standard.
  */
 export function resolveListingStaticCopy(listing = {}) {
   const texts = listing?.texts && typeof listing.texts === "object" ? listing.texts : {};
@@ -207,11 +216,17 @@ export function resolveListingStaticCopy(listing = {}) {
   const terms = clean(stored.terms);
   const recommendation = clean(stored.recommendation);
   const values = { equipment, other, provision, annotation, terms, recommendation };
-  const sources = Object.fromEntries(STATIC_COPY_FIELDS.map((field) => [field, sourceFor(field, values[field])]));
+  const globallyFixedFields = new Set([STATIC_COPY_FIELD.PROVISION, STATIC_COPY_FIELD.RECOMMENDATION]);
+  const sources = Object.fromEntries(STATIC_COPY_FIELDS.map((field) => [
+    field,
+    globallyFixedFields.has(field) ? STATIC_COPY_SOURCE.STANDARD : sourceFor(field, values[field]),
+  ]));
   return {
     values: Object.fromEntries(STATIC_COPY_FIELDS.map((field) => [
       field,
-      sources[field] === STATIC_COPY_SOURCE.MANUAL
+      globallyFixedFields.has(field)
+        ? STANDARD_STATIC_COPY[field]
+        : sources[field] === STATIC_COPY_SOURCE.MANUAL
         ? values[field]
         : values[field] || STANDARD_STATIC_COPY[field],
     ])),
@@ -257,7 +272,7 @@ export const IMMOPROFESSIONAL_DEFAULTS = Object.freeze({
   electricFuel: false,
   airSourceHeatPump: true,
   kfw40: true,
-  kfw55: true,
+  kfw55: false,
   energyClass: "A++",
   commissionRequired: false,
   energyCertificateClass: "",
@@ -269,6 +284,26 @@ export const IMMOPROFESSIONAL_DEFAULTS = Object.freeze({
   environmentBus: true,
   environmentShopping: true,
 });
+
+export const BUNGALOW_HOUSE_MODEL_KEYS = Object.freeze([
+  "SOL82",
+  "SOL101",
+  "SOL107",
+  "SOL110",
+]);
+
+const BUNGALOW_HOUSE_MODEL_KEY_SET = new Set(BUNGALOW_HOUSE_MODEL_KEYS);
+
+/** Exact central portal mapping: only the four approved SOL/Solution models are bungalows. */
+export function portalHouseStructure(house = {}) {
+  const modelKey = parseHouseVariant(house?.name)?.modelKey || "";
+  const barrierFree = BUNGALOW_HOUSE_MODEL_KEY_SET.has(modelKey);
+  return {
+    modelKey,
+    floors: barrierFree ? 1 : 2,
+    barrierFree,
+  };
+}
 
 export const HOUSE_ENERGY_DEFAULTS = Object.freeze({
   energyClass: "",

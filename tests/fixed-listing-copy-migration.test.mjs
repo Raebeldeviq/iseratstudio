@@ -18,7 +18,11 @@ import {
   LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID,
   LIVING_HAUS_SERIES_ID,
 } from "../listing-claim-policy.mjs";
-import { IMMOPROFESSIONAL_DEFAULTS, PREVIOUS_STATIC_COPY } from "../listing-copy.mjs";
+import {
+  IMMOPROFESSIONAL_DEFAULTS,
+  PREVIOUS_STATIC_COPY,
+  STATIC_COPY_VERSION,
+} from "../listing-copy.mjs";
 
 const expectedCounts = {
   activeListings: 1,
@@ -143,7 +147,7 @@ test("plans exactly the five approved static fields, preserves protected listing
     },
   );
   assert.equal(Object.hasOwn(listing.staticCopySources, "terms"), false);
-  assert.equal(listing.staticCopyVersion, 1);
+  assert.equal(listing.staticCopyVersion, STATIC_COPY_VERSION);
   assert.equal(listing.unrelatedListingField, "unverändert");
   assert.equal(migrated.state.houses[0].unrelatedHouseField, "unverändert");
   assert.equal(migrated.state.projects[0].unrelatedProjectField, "unverändert");
@@ -217,7 +221,7 @@ test("creates a byte-identical restorable backup and commits the local snapshot 
   assert.equal(result.plan.changedFieldCount, 5);
   const persisted = await loadCatalogManifest(catalogDirectory);
   assert.equal(persisted.stored, true);
-  assert.equal(persisted.state.projects[0].listings[0].staticCopyVersion, 1);
+  assert.equal(persisted.state.projects[0].listings[0].staticCopyVersion, STATIC_COPY_VERSION);
   assert.equal((await runFixedListingCopyMigration(runOptions)).idempotent, true);
   assert.deepEqual(FIXED_LISTING_COPY_MIGRATION_GUARANTEE, {
     usesAi: false,

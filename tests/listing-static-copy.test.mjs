@@ -131,7 +131,7 @@ test("the exact equipment master is fact-validated, not globally exempted", () =
   assert.ok(noPackage.blockingIssues.some((issue) => /ikon_technical_package|photovoltaic/u.test(issue.reason)));
 });
 
-test("manual static copy survives normalization and OpenImmo exports every separate portal field", () => {
+test("normalization preserves manual storage while export enforces the two requested global portal texts", () => {
   const listing = newListing();
   listing.texts.equipment = "Manuelle Ausstattung ohne technische Werbeaussage.";
   listing.texts.other = "Manuelles Sonstiges.";
@@ -166,14 +166,14 @@ test("manual static copy survives normalization and OpenImmo exports every separ
   });
   assert.match(xml, /<ausstatt_beschr><!\[CDATA\[Manuelle Ausstattung ohne technische Werbeaussage\.\]\]><\/ausstatt_beschr>/u);
   assert.match(xml, /<sonstige_angaben><!\[CDATA\[Manuelles Sonstiges\.\]\]><\/sonstige_angaben>/u);
-  assert.doesNotMatch(xml, /<courtage_hinweis>/u);
+  assert.match(xml, /<courtage_hinweis><!\[CDATA\[Für den reinen Grundstückskauf fällt eine Provision an\./u);
   assert.equal(restoredListing.staticTexts.provision, "Manuelle Provision.");
   assert.match(xml, /feldname="Anmerkung"><!\[CDATA\[Manuelle Anmerkung\.\]\]/u);
   assert.match(xml, /feldname="Allgemeine Geschäftsbedingungen"><!\[CDATA\[Manuelle AGB\.\]\]/u);
-  assert.match(xml, /feldname="Freier Textblock für Empfehlungen"><!\[CDATA\[Manuelle Empfehlung\.\]\]/u);
+  assert.ok(xml.includes(`feldname="Freier Textblock für Empfehlungen"><![CDATA[${createStandardStaticCopy().recommendation}]]>`));
   assert.doesNotMatch(xml, /<heizungsart\b/u);
-  assert.match(xml, /<befeuerung elektro="false" luftwp="true" \/>/u);
-  assert.match(xml, /<energietyp kfw40="true" kfw55="true" \/>/u);
+  assert.match(xml, /<befeuerung ELEKTRO="false" LUFTWP="true" \/>/u);
+  assert.match(xml, /<energietyp KFW40="true" KFW55="false" \/>/u);
   assert.match(xml, /Projektierte Energieeffizienzklasse"><!\[CDATA\[A\+\+ – Planungswert/u);
   assert.match(xml, /<provisionspflichtig>false<\/provisionspflichtig>/u);
   assert.match(xml, /<baujahr>2027<\/baujahr>/u);

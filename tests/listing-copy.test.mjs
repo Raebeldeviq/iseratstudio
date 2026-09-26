@@ -191,7 +191,7 @@ test("keeps the immoprofessional defaults and legal copy explicit", () => {
     electricFuel: false,
     airSourceHeatPump: true,
     kfw40: true,
-    kfw55: true,
+    kfw55: false,
     energyClass: "A++",
     commissionRequired: false,
     energyCertificateClass: "",
@@ -206,7 +206,10 @@ test("keeps the immoprofessional defaults and legal copy explicit", () => {
   assert.equal(FIXED_PROVISION_TEXT, "Für den reinen Grundstückskauf fällt eine Provision an. Die Hausplanung/Bauträgerleistung (LivingHaus) ist davon nicht betroffen.");
   assert.match(FIXED_ANNOTATION_TEXT, /Daten des Verkäufers/);
   assert.match(FIXED_TERMS_TEXT, /Kenntnis und Ihr Einverständnis/);
-  assert.match(FIXED_RECOMMENDATION_TEXT, /HEUN-Finanz/);
+  assert.equal(FIXED_RECOMMENDATION_TEXT, `Gemeinsam mit unserem strategischen Partner HEUN-Finanz bieten wir Ihnen attraktive Finanzierungsmöglichkeiten – einschließlich der Beantragung sämtlicher für Ihr Bauvorhaben infrage kommender Fördermittel.
+Die Hausabbildungen und Bilder der Innenausstattung können Sonderausstattungen zeigen, die nicht im angegebenen Kaufpreis enthalten sind.
+Eine gute Beratung ist die Grundlage für alles. Deshalb analysieren wir gemeinsam mit Ihnen Ihre Vorstellungen, Wünsche und Bedürfnisse und finden das passende Living Haus für Sie und Ihre Familie.
+Interesse geweckt? Kontaktieren Sie mich noch heute und vereinbaren Sie ein kostenloses und unverbindliches Beratungsgespräch.`);
 });
 
 test("enforces global portal targets while preserving unrelated explicit values", () => {
@@ -235,7 +238,7 @@ test("enforces global portal targets while preserving unrelated explicit values"
     electricFuel: false,
     airSourceHeatPump: true,
     kfw40: true,
-    kfw55: true,
+    kfw55: false,
     energyClass: "A++",
     commissionRequired: false,
     energyCertificateClass: "C",
@@ -260,7 +263,7 @@ test("enforces global portal targets while preserving unrelated explicit values"
     electricFuel: false,
     airSourceHeatPump: true,
     kfw40: true,
-    kfw55: true,
+    kfw55: false,
     energyClass: "A++",
     commissionRequired: false,
     energyCertificateClass: "",

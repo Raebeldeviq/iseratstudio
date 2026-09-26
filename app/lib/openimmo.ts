@@ -4,6 +4,7 @@ import { imageSequenceIssues, orderHouseImages, parseHouseVariant } from "../../
 import {
   fillMissingProjectingDefaults,
   projectingEnvironmentLabels,
+  portalHouseStructure,
   FACTUAL_BUILDABILITY_NOTE,
   isCurrentStaticCopyText,
   resolveListingStaticCopy,
@@ -211,6 +212,7 @@ function creativePayloadManifest(input: PackageInput): CreativePayloadManifestEn
     const hero = images[0];
     if (!hero) throw new Error(`${listing.templateName}: Das OpenImmo-Paket besitzt kein führendes Bild.`);
     const action = hero.role === "promotion";
+    const portalStructure = portalHouseStructure(house);
     return {
       listingId: listing.id,
       externalId: listing.externalId,
@@ -224,7 +226,7 @@ function creativePayloadManifest(input: PackageInput): CreativePayloadManifestEn
       rooms: house.rooms,
       bedrooms: house.bedrooms,
       bathrooms: house.bathrooms,
-      floors: house.floors,
+      floors: portalStructure.floors,
       constructionYear: house.constructionYear,
       energyDemand: house.energyDemand,
       energyClass: house.energyClass,
@@ -277,6 +279,7 @@ function listingXml(
     other: staticCopy.values.other,
   };
   const projecting = fillMissingProjectingDefaults(listing.projectingSettings);
+  const portalStructure = portalHouseStructure(house);
   const technicalFacts = releasedTechnicalFacts({
     house,
     project,
@@ -284,21 +287,6 @@ function listingXml(
     houseSeries: LIVING_HAUS_SERIES_ID,
   });
   const technicalFact = (key: string) => technicalFacts.find((fact) => fact.key === key);
-  const exportableFact = (key: string) => {
-    const fact = technicalFact(key);
-    return fact?.status === "verified" || fact?.status === "contract_included" ? fact : undefined;
-  };
-  // OpenImmo booleans and numeric metadata cannot express a planning status.
-  // Planned facts remain available as explicitly planned free-text statements.
-  const plannedPortalFact = (key: string) => {
-    const fact = technicalFact(key);
-    return fact?.status === "planned"
-      && [FACT_EVIDENCE_KIND.PROJECTED_PORTAL_FIELD, FACT_EVIDENCE_KIND.PROJECTED_HOUSE_ENERGY_CLASS]
-        .includes(fact.evidenceKind)
-      ? fact
-      : undefined;
-  };
-  const heatPumpFact = plannedPortalFact("heat_pump") || exportableFact("heat_pump");
   const energyCertificateFact = (key: string) => {
     const fact = technicalFact(key);
     return fact?.evidenceKind === FACT_EVIDENCE_KIND.ENERGY_CERTIFICATE
@@ -318,7 +306,6 @@ function listingXml(
   const energyClassFact = energyCertificateFact("energy_class");
   const plannedEnergyDemandFact = plannedEnergyFact("energy_demand");
   const plannedEnergyClassFact = plannedEnergyFact("energy_class");
-  const efficiencyStandardFact = plannedPortalFact("efficiency_house_standard") || exportableFact("efficiency_house_standard");
   const energyDemand = energyDemandFact ? decimalFactValue(energyDemandFact.value) : null;
   const energyCertificatePass = energyDemand !== null
     ? `<energiepass>
@@ -364,6 +351,7 @@ function listingXml(
         <preise>
           <kaufpreis>${currency.format(listing.price)}</kaufpreis>
           <provisionspflichtig>false</provisionspflichtig>
+          <courtage_hinweis>${cdata(staticCopy.values.provision)}</courtage_hinweis>
           <waehrung iso_waehrung="EUR" />
         </preise>
         <flaechen>
@@ -373,15 +361,16 @@ function listingXml(
           <anzahl_zimmer>${currency.format(house.rooms)}</anzahl_zimmer>
           <anzahl_schlafzimmer>${currency.format(house.bedrooms)}</anzahl_schlafzimmer>
           <anzahl_badezimmer>${currency.format(house.bathrooms)}</anzahl_badezimmer>
-          <anzahl_etagen>${currency.format(house.floors)}</anzahl_etagen>
+          <anzahl_etagen>${portalStructure.floors}</anzahl_etagen>
         </flaechen>
         <ausstattung>
-          <ausstatt_kategorie WERTIGKEIT="${xml(projecting.equipmentQuality)}" />
-          <bad dusche="${projecting.shower}" wanne="${projecting.bathtub}" fenster="${projecting.bathroomWindow}" />
-          <kueche ebk="${projecting.fittedKitchen}" offen="${projecting.openKitchen}" />
-          <befeuerung elektro="false" luftwp="${heatPumpFact ? "true" : "false"}" />
+          <ausstatt_kategorie>${xml(projecting.equipmentQuality)}</ausstatt_kategorie>
+          <bad DUSCHE="${projecting.shower}" WANNE="${projecting.bathtub}" FENSTER="${projecting.bathroomWindow}" />
+          <kueche EBK="${projecting.fittedKitchen}" OFFEN="${projecting.openKitchen}" />
+          <befeuerung ELEKTRO="false" LUFTWP="${projecting.airSourceHeatPump}" />
           <gartennutzung>${projecting.gardenUse}</gartennutzung>
-          <energietyp kfw40="${Boolean(efficiencyStandardFact && /(?:effizienzhaus|kfw)\s*[- ]?40\b/iu.test(String(efficiencyStandardFact.value)))}" kfw55="${Boolean(efficiencyStandardFact && /(?:effizienzhaus|kfw)\s*[- ]?55\b/iu.test(String(efficiencyStandardFact.value)))}" />
+          <barrierefrei>${portalStructure.barrierFree}</barrierefrei>
+          <energietyp KFW40="${projecting.kfw40}" KFW55="${projecting.kfw55}" />
           <dachboden>${projecting.attic}</dachboden>
           <gaestewc>${projecting.guestWc}</gaestewc>
         </ausstattung>

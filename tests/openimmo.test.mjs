@@ -6,6 +6,7 @@ import { APP_VERSION } from "../app/lib/app-version.mjs";
 import {
   FIXED_ANNOTATION_TEXT,
   FACTUAL_BUILDABILITY_NOTE,
+  FIXED_PROVISION_TEXT,
   FIXED_RECOMMENDATION_TEXT,
   FIXED_TERMS_TEXT,
 } from "../listing-copy.mjs";
@@ -147,14 +148,15 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
   assert.ok(xml.includes(`senderversion="${APP_VERSION}"`));
   assert.match(xml, /<openimmo_obid>FPI-TEST-1<\/openimmo_obid>/);
   assert.match(xml, /<aktion aktionart="CHANGE" timestamp="[^"]+" \/>/);
-  assert.match(xml, /<bad dusche="true" wanne="true" fenster="true" \/>/);
-  assert.match(xml, /<kueche ebk="true" offen="true" \/>/);
+  assert.match(xml, /<bad DUSCHE="true" WANNE="true" FENSTER="true" \/>/);
+  assert.match(xml, /<kueche EBK="true" OFFEN="true" \/>/);
   assert.match(xml, /<user_defined_simplefield feldname="Umgebung"><!\[CDATA\[Bus, Einkaufsmöglichkeit\]\]><\/user_defined_simplefield>/);
-  assert.match(xml, /<ausstatt_kategorie WERTIGKEIT="GEHOBEN" \/>/);
+  assert.match(xml, /<ausstatt_kategorie>GEHOBEN<\/ausstatt_kategorie>/);
   assert.doesNotMatch(xml, /<heizungsart\b/u);
-  assert.match(xml, /<befeuerung elektro="false" luftwp="true" \/>/);
+  assert.match(xml, /<befeuerung ELEKTRO="false" LUFTWP="true" \/>/);
   assert.match(xml, /<gartennutzung>true<\/gartennutzung>/);
-  assert.match(xml, /<energietyp kfw40="true" kfw55="true" \/>/);
+  assert.match(xml, /<barrierefrei>false<\/barrierefrei>/);
+  assert.match(xml, /<energietyp KFW40="true" KFW55="false" \/>/);
   assert.match(xml, /<dachboden>true<\/dachboden>/);
   assert.match(xml, /<gaestewc>true<\/gaestewc>/);
   assert.match(xml, /<zustand zustand_art="PROJEKTIERT" \/>/);
@@ -162,7 +164,8 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
   assert.match(xml, /<verfuegbar_ab>2027<\/verfuegbar_ab>/);
   assert.doesNotMatch(xml, /<energiepass>|<wertklasse>/);
   assert.match(xml, /<provisionspflichtig>false<\/provisionspflichtig>/);
-  assert.doesNotMatch(xml, /<courtage_hinweis>/);
+  assert.match(xml, /<anzahl_etagen>2<\/anzahl_etagen>/);
+  assert.ok(xml.includes(`<courtage_hinweis><![CDATA[${FIXED_PROVISION_TEXT}]]></courtage_hinweis>`));
   assert.match(xml, /feldname="Projektierte Energieeffizienzklasse"/);
   assert.ok(xml.includes("Ausstattung"));
   assert.ok(xml.includes("Sonstiges"));
@@ -312,19 +315,19 @@ test("overwrites legacy portal deviations with the global object targets during 
   };
 
   const xml = buildOpenImmoXml(input);
-  assert.match(xml, /<ausstatt_kategorie WERTIGKEIT="GEHOBEN" \/>/);
+  assert.match(xml, /<ausstatt_kategorie>GEHOBEN<\/ausstatt_kategorie>/);
   assert.doesNotMatch(xml, /<heizungsart\b/u);
-  assert.match(xml, /<befeuerung elektro="false" luftwp="true" \/>/);
+  assert.match(xml, /<befeuerung ELEKTRO="false" LUFTWP="true" \/>/);
   assert.match(xml, /<gartennutzung>false<\/gartennutzung>/);
-  assert.match(xml, /<energietyp kfw40="true" kfw55="true" \/>/);
+  assert.match(xml, /<energietyp KFW40="true" KFW55="false" \/>/);
   assert.match(xml, /<zustand zustand_art="PROJEKTIERT" \/>/);
   assert.match(xml, /<baujahr>2027<\/baujahr>/);
   assert.match(xml, /<verfuegbar_ab>2027<\/verfuegbar_ab>/);
   assert.doesNotMatch(xml, /<wertklasse>/);
   assert.match(xml, /<provisionspflichtig>false<\/provisionspflichtig>/);
-  assert.doesNotMatch(xml, /<courtage_hinweis>/);
-  assert.match(xml, /<bad dusche="false" wanne="false" fenster="false" \/>/);
-  assert.match(xml, /<kueche ebk="false" offen="false" \/>/);
+  assert.match(xml, /<courtage_hinweis><!\[CDATA\[Für den reinen Grundstückskauf fällt eine Provision an\./);
+  assert.match(xml, /<bad DUSCHE="false" WANNE="false" FENSTER="false" \/>/);
+  assert.match(xml, /<kueche EBK="false" OFFEN="false" \/>/);
   assert.match(xml, /<dachboden>false<\/dachboden>/);
   assert.match(xml, /<gaestewc>false<\/gaestewc>/);
   assert.match(xml, /<user_defined_simplefield feldname="Umgebung"><!\[CDATA\[Einkaufsmöglichkeit\]\]><\/user_defined_simplefield>/);

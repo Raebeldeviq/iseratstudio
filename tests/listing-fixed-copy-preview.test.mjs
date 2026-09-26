@@ -97,7 +97,7 @@ test("classifies only an exact legacy system standard as a safe later migration 
   assert.ok(current.fields.every((field) => field.treatment === LISTING_FIXED_COPY_TREATMENT.ALREADY_CORRECT));
   assert.equal(report.counts.masterClaimBlock, 0);
   assert.equal(legacy.portalFields.find((field) => field.field === "heatingType")?.targetValue, "keine Angabe (heizungsart wird im OpenImmo-Export weggelassen)");
-  assert.deepEqual(legacy.portalFields.find((field) => field.field === "energyTypes")?.targetValue, ["KFW40", "KFW55"]);
+  assert.deepEqual(legacy.portalFields.find((field) => field.field === "energyTypes")?.targetValue, ["KFW40"]);
   assert.equal(legacy.portalFields.find((field) => field.field === "commissionRequired")?.targetValue, false);
   assert.ok(report.migrationCandidates.every((candidate) => candidate.treatment === LISTING_FIXED_COPY_TREATMENT.STANDARD_REPLACE_SAFE));
 });

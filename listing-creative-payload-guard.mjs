@@ -4,8 +4,10 @@ import JSZip from "jszip";
 
 import { parseHouseVariant } from "./image-sequence.mjs";
 import {
+  FIXED_PROVISION_TEXT,
   IMMOPROFESSIONAL_DEFAULTS,
   isCurrentStaticCopyText,
+  portalHouseStructure,
   resolveListingStaticCopy,
 } from "./listing-copy.mjs";
 import { assertListingClaimsCompliant, LIVING_HAUS_SERIES_ID } from "./listing-claim-policy.mjs";
@@ -62,6 +64,7 @@ export async function verifyCreativePayload(input) {
   const expectedHero = selection?.heroType === "action"
     ? input?.promotionImage
     : (house?.images || []).find((image) => text(image.id) === expectedHeroAssetId);
+  const portalStructure = portalHouseStructure(house);
 
   if (Number(selection?.format) !== 1) errors.push("Persistierte Creative-Auswahl fehlt oder besitzt ein unbekanntes Format.");
   if (text(selection?.rotationId) !== text(listing?.id)) errors.push("Creative-Rotation-ID stimmt nicht mit der Rotationskopie überein.");
@@ -77,9 +80,10 @@ export async function verifyCreativePayload(input) {
     if (text(actual.heroType) !== text(selection?.heroType) || text(actual.heroAssetId) !== expectedHeroAssetId) errors.push("Creative-Hero wurde im Payload überschrieben.");
     if (selection?.heroType === "action" && actual.promotionImageEnabled !== true) errors.push("Das persistierte Aktionsbild ist im Background-Payload nicht aktiviert.");
     if (selection?.heroType === "house" && actual.promotionImageEnabled === true) errors.push("Der Haus-Hero wurde unerwartet als Aktionsbild exportiert.");
-    for (const field of ["housePrice", "livingArea", "rooms", "bedrooms", "bathrooms", "floors", "constructionYear", "energyDemand"]) {
+    for (const field of ["housePrice", "livingArea", "rooms", "bedrooms", "bathrooms", "constructionYear", "energyDemand"]) {
       if (Number(actual[field]) !== Number(house?.[field])) errors.push(`Hausdatenfeld ${field} stammt nicht aus dem ausgewählten Haus.`);
     }
+    if (Number(actual.floors) !== portalStructure.floors) errors.push("Hausdatenfeld floors entspricht nicht der zentralen Portalzuordnung.");
     for (const field of ["houseType", "energyClass", "heatingType", "energySource", "architecture", "equipmentHighlights"]) {
       if (text(actual[field]) !== text(house?.[field])) errors.push(`Hausdatenfeld ${field} stammt nicht aus dem ausgewählten Haus.`);
     }
@@ -119,10 +123,13 @@ export async function verifyCreativePayload(input) {
     if (!zippedXml.includes(`<user_defined_simplefield feldname="Living Haus Modell">${cdataValue(house?.name)}</user_defined_simplefield>`)) errors.push("Payload enthält nicht den erwarteten Hausnamen.");
     if (!zippedXml.includes(`<wohnflaeche>${xmlValue(payloadNumber(house?.livingArea))}</wohnflaeche>`)) errors.push("Payload-Wohnfläche stimmt nicht mit dem ausgewählten Haus überein.");
     if (!zippedXml.includes(`<kaufpreis>${xmlValue(payloadNumber(listing?.price))}</kaufpreis>`)) errors.push("Payload-Kaufpreis stimmt nicht mit der persistierten Rotationskopie überein.");
-    for (const [tag, field] of [["anzahl_zimmer", "rooms"], ["anzahl_schlafzimmer", "bedrooms"], ["anzahl_badezimmer", "bathrooms"], ["anzahl_etagen", "floors"]]) {
+    for (const [tag, field] of [["anzahl_zimmer", "rooms"], ["anzahl_schlafzimmer", "bedrooms"], ["anzahl_badezimmer", "bathrooms"]]) {
       if (!zippedXml.includes(`<${tag}>${xmlValue(payloadNumber(house?.[field]))}</${tag}>`)) {
         errors.push(`Payload-Hausdatenfeld ${field} stimmt nicht mit dem ausgewählten Haus überein.`);
       }
+    }
+    if (!zippedXml.includes(`<anzahl_etagen>${portalStructure.floors}</anzahl_etagen>`)) {
+      errors.push("Payload-Etagenzahl entspricht nicht der zentralen Portalzuordnung.");
     }
     if (!zippedXml.includes(`<baujahr>${xmlValue(IMMOPROFESSIONAL_DEFAULTS.constructionYear)}</baujahr>`)) errors.push("Payload-Baujahr stimmt nicht mit dem globalen Portalwert überein.");
     if (project) {
@@ -164,8 +171,8 @@ export async function verifyCreativePayload(input) {
           errors.push(`Payload-statisches Textfeld ${tag} stimmt nicht mit der ausgewählten Rotationskopie überein.`);
         }
       }
-      if (zippedXml.includes("<courtage_hinweis>")) {
-        errors.push("Payload enthält trotz Provisionsfreiheit einen Courtage-Hinweis.");
+      if (!zippedXml.includes(`<courtage_hinweis>${cdataValue(FIXED_PROVISION_TEXT)}</courtage_hinweis>`)) {
+        errors.push("Payload enthält nicht den exakten globalen Provisionstext.");
       }
     }
   } catch (error) {

@@ -70,7 +70,7 @@ test("safe cleanup is idempotent and migrates canonical statuses", () => {
     electricFuel: false,
     airSourceHeatPump: true,
     kfw40: true,
-    kfw55: true,
+    kfw55: false,
     energyClass: "A++",
     commissionRequired: false,
     energyCertificateClass: "",
