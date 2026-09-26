@@ -164,7 +164,7 @@ export async function verifyCreativePayload(input) {
       const staticFieldChecks = [
         ["user_defined_simplefield feldname=\"Anmerkung\"", staticCopy.values.annotation],
         ["user_defined_simplefield feldname=\"Allgemeine Geschäftsbedingungen\"", staticCopy.values.terms],
-        ["user_defined_simplefield feldname=\"Freier Textblock für Empfehlungen\"", staticCopy.values.recommendation],
+        ["user_defined_simplefield feldname=\"allgemein2\"", staticCopy.values.recommendation],
       ];
       for (const [tag, value] of staticFieldChecks) {
         if (!zippedXml.includes(`<${tag}>${cdataValue(value)}`)) {

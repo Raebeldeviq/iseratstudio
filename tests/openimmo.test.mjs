@@ -146,8 +146,10 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
   const xml = buildOpenImmoXml(input);
 
   assert.ok(xml.includes(`senderversion="${APP_VERSION}"`));
+  assert.match(xml, /<openimmo_anid>30435<\/openimmo_anid>/u);
   assert.match(xml, /<openimmo_obid>FPI-TEST-1<\/openimmo_obid>/);
-  assert.match(xml, /<aktion aktionart="CHANGE" timestamp="[^"]+" \/>/);
+  assert.match(xml, /<objektnr_extern>FPI-TEST-1<\/objektnr_extern>/);
+  assert.match(xml, /<aktion aktionart="CHANGE" \/>/);
   assert.match(xml, /<bad DUSCHE="true" WANNE="true" FENSTER="true" \/>/);
   assert.match(xml, /<kueche EBK="true" OFFEN="true" \/>/);
   assert.match(xml, /<user_defined_simplefield feldname="Umgebung"><!\[CDATA\[Bus, Einkaufsmöglichkeit\]\]><\/user_defined_simplefield>/);
@@ -160,11 +162,16 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
   assert.match(xml, /<dachboden>true<\/dachboden>/);
   assert.match(xml, /<gaestewc>true<\/gaestewc>/);
   assert.match(xml, /<zustand zustand_art="PROJEKTIERT" \/>/);
+  assert.match(xml, /<user_defined_simplefield feldname="data104"><!\[CDATA\[HausInPlanung\]\]><\/user_defined_simplefield>/u);
   assert.match(xml, /<baujahr>2027<\/baujahr>/);
   assert.match(xml, /<verfuegbar_ab>2027<\/verfuegbar_ab>/);
   assert.doesNotMatch(xml, /<energiepass>|<wertklasse>/);
   assert.match(xml, /<provisionspflichtig>false<\/provisionspflichtig>/);
   assert.match(xml, /<anzahl_etagen>2<\/anzahl_etagen>/);
+  const geoXml = xml.match(/<geo>[\s\S]*?<\/geo>/u)?.[0] || "";
+  const areasXml = xml.match(/<flaechen>[\s\S]*?<\/flaechen>/u)?.[0] || "";
+  assert.match(geoXml, /<anzahl_etagen>2<\/anzahl_etagen>/u);
+  assert.doesNotMatch(areasXml, /<anzahl_etagen>/u);
   assert.ok(xml.includes(`<courtage_hinweis><![CDATA[${FIXED_PROVISION_TEXT}]]></courtage_hinweis>`));
   assert.match(xml, /feldname="Projektierte Energieeffizienzklasse"/);
   assert.ok(xml.includes("Ausstattung"));
@@ -173,6 +180,8 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
   assert.ok(xml.includes(FIXED_ANNOTATION_TEXT));
   assert.ok(xml.includes(FIXED_TERMS_TEXT));
   assert.ok(xml.includes(FIXED_RECOMMENDATION_TEXT));
+  assert.ok(xml.includes(`feldname="allgemein2"><![CDATA[${FIXED_RECOMMENDATION_TEXT}]]>`));
+  assert.doesNotMatch(xml, /AUF WUNSCH empfehlen/u);
   assert.ok(xml.indexOf("<kaufpreis>") < xml.indexOf("<provisionspflichtig>"));
   assert.ok(xml.indexOf("<provisionspflichtig>") < xml.indexOf("<waehrung "));
   assert.ok(xml.indexOf("<bad ") < xml.indexOf("<kueche "));
@@ -225,6 +234,24 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
     promotionImageEnabled: true,
   }]);
   assert.deepEqual(validateImportPackage(input), []);
+});
+
+test("exports floor count and barrier-free status in the actual OpenImmo fields for every approved bungalow", () => {
+  for (const name of ["Sol 82", "Solution 101", "Solution 107", "Solution 110"]) {
+    const input = energyScenarioInput();
+    input.houses[0].name = name;
+    input.listings[0].templateName = name;
+    const xml = buildOpenImmoXml(input);
+    const geoXml = xml.match(/<geo>[\s\S]*?<\/geo>/u)?.[0] || "";
+    const areasXml = xml.match(/<flaechen>[\s\S]*?<\/flaechen>/u)?.[0] || "";
+    assert.match(geoXml, /<anzahl_etagen>1<\/anzahl_etagen>/u, name);
+    assert.doesNotMatch(areasXml, /<anzahl_etagen>/u, name);
+    assert.match(xml, /<barrierefrei>true<\/barrierefrei>/u, name);
+  }
+
+  const nonBungalowXml = buildOpenImmoXml(energyScenarioInput());
+  assert.match(nonBungalowXml.match(/<geo>[\s\S]*?<\/geo>/u)?.[0] || "", /<anzahl_etagen>2<\/anzahl_etagen>/u);
+  assert.match(nonBungalowXml, /<barrierefrei>false<\/barrierefrei>/u);
 });
 
 test("overwrites legacy portal deviations with the global object targets during export", () => {

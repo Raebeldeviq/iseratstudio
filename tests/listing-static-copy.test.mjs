@@ -170,7 +170,7 @@ test("normalization preserves manual storage while export enforces the two reque
   assert.equal(restoredListing.staticTexts.provision, "Manuelle Provision.");
   assert.match(xml, /feldname="Anmerkung"><!\[CDATA\[Manuelle Anmerkung\.\]\]/u);
   assert.match(xml, /feldname="Allgemeine Geschäftsbedingungen"><!\[CDATA\[Manuelle AGB\.\]\]/u);
-  assert.ok(xml.includes(`feldname="Freier Textblock für Empfehlungen"><![CDATA[${createStandardStaticCopy().recommendation}]]>`));
+  assert.ok(xml.includes(`feldname="allgemein2"><![CDATA[${createStandardStaticCopy().recommendation}]]>`));
   assert.doesNotMatch(xml, /<heizungsart\b/u);
   assert.match(xml, /<befeuerung ELEKTRO="false" LUFTWP="true" \/>/u);
   assert.match(xml, /<energietyp KFW40="true" KFW55="false" \/>/u);

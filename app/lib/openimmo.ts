@@ -64,6 +64,10 @@ export type CreativePayloadManifestEntry = {
 
 const SUPPORTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const MAX_EXPORTED_IMAGES = 14;
+export const IMMOPROFESSIONAL_IMPORT_FIELDS = Object.freeze({
+  constructionPhase: Object.freeze({ fieldName: "data104", projectedValue: "HausInPlanung" }),
+  recommendation: Object.freeze({ fieldName: "allgemein2" }),
+});
 
 function listingImages(input: PackageInput, house: HouseTemplate, listing?: GeneratedListing): HouseImage[] {
   const orderedImages = orderHouseImages(house.images);
@@ -268,7 +272,7 @@ function listingXml(
   provider: ProviderSettings,
   timestamp: string,
 ): string {
-  const currency = new Intl.NumberFormat("de-DE", {
+  const decimal = new Intl.NumberFormat("en-US", {
     useGrouping: false,
     maximumFractionDigits: 2,
   });
@@ -310,7 +314,7 @@ function listingXml(
   const energyCertificatePass = energyDemand !== null
     ? `<energiepass>
             <epart>BEDARF</epart>
-            <endenergiebedarf>${currency.format(energyDemand)}</endenergiebedarf>
+            <endenergiebedarf>${decimal.format(energyDemand)}</endenergiebedarf>
             ${energyClassFact ? `<wertklasse>${xml(energyClassFact.value)}</wertklasse>` : ""}
             <baujahr>${xml(house.constructionYear)}</baujahr>
           </energiepass>`
@@ -335,6 +339,7 @@ function listingXml(
           <strasse>${xml(project.street)}</strasse>
           <hausnummer>${xml(project.houseNumber)}</hausnummer>
           <land iso_land="DEU" />
+          <anzahl_etagen>${portalStructure.floors}</anzahl_etagen>
           <lage_gebiet gebiete="WOHN" />
           ${project.district ? `<regionaler_zusatz>${xml(project.district)}</regionaler_zusatz>` : ""}
         </geo>
@@ -349,19 +354,18 @@ function listingXml(
           <personennummer>${xml(provider.providerNumber)}</personennummer>
         </kontaktperson>
         <preise>
-          <kaufpreis>${currency.format(listing.price)}</kaufpreis>
+          <kaufpreis>${decimal.format(listing.price)}</kaufpreis>
           <provisionspflichtig>false</provisionspflichtig>
           <courtage_hinweis>${cdata(staticCopy.values.provision)}</courtage_hinweis>
           <waehrung iso_waehrung="EUR" />
         </preise>
         <flaechen>
-          <wohnflaeche>${currency.format(house.livingArea)}</wohnflaeche>
-          <nutzflaeche>${currency.format(house.livingArea)}</nutzflaeche>
-          <grundstuecksflaeche>${currency.format(project.plotArea)}</grundstuecksflaeche>
-          <anzahl_zimmer>${currency.format(house.rooms)}</anzahl_zimmer>
-          <anzahl_schlafzimmer>${currency.format(house.bedrooms)}</anzahl_schlafzimmer>
-          <anzahl_badezimmer>${currency.format(house.bathrooms)}</anzahl_badezimmer>
-          <anzahl_etagen>${portalStructure.floors}</anzahl_etagen>
+          <wohnflaeche>${decimal.format(house.livingArea)}</wohnflaeche>
+          <nutzflaeche>${decimal.format(house.livingArea)}</nutzflaeche>
+          <grundstuecksflaeche>${decimal.format(project.plotArea)}</grundstuecksflaeche>
+          <anzahl_zimmer>${decimal.format(house.rooms)}</anzahl_zimmer>
+          <anzahl_schlafzimmer>${decimal.format(house.bedrooms)}</anzahl_schlafzimmer>
+          <anzahl_badezimmer>${decimal.format(house.bathrooms)}</anzahl_badezimmer>
         </flaechen>
         <ausstattung>
           <ausstatt_kategorie>${xml(projecting.equipmentQuality)}</ausstatt_kategorie>
@@ -378,6 +382,7 @@ function listingXml(
           <baujahr>${xml(projecting.constructionYear)}</baujahr>
           <zustand zustand_art="${xml(projecting.constructionPhase)}" />
           ${energyCertificatePass}
+          <user_defined_simplefield feldname="${IMMOPROFESSIONAL_IMPORT_FIELDS.constructionPhase.fieldName}">${cdata(IMMOPROFESSIONAL_IMPORT_FIELDS.constructionPhase.projectedValue)}</user_defined_simplefield>
         </zustand_angaben>
         ${infrastructureXml}
         <freitexte>
@@ -394,7 +399,7 @@ function listingXml(
           <user_defined_simplefield feldname="Living Haus Modell">${cdata(house.name)}</user_defined_simplefield>
           <user_defined_simplefield feldname="Anmerkung">${cdata(staticCopy.values.annotation)}</user_defined_simplefield>
           <user_defined_simplefield feldname="Allgemeine Geschäftsbedingungen">${cdata(staticCopy.values.terms)}</user_defined_simplefield>
-          <user_defined_simplefield feldname="Freier Textblock für Empfehlungen">${cdata(staticCopy.values.recommendation)}</user_defined_simplefield>
+          <user_defined_simplefield feldname="${IMMOPROFESSIONAL_IMPORT_FIELDS.recommendation.fieldName}">${cdata(staticCopy.values.recommendation)}</user_defined_simplefield>
         </freitexte>
         <anhaenge>${imageXml(listing, images)}</anhaenge>
         <verwaltung_objekt>
@@ -402,10 +407,11 @@ function listingXml(
           <verfuegbar_ab>${xml(projecting.availableFrom)}</verfuegbar_ab>
         </verwaltung_objekt>
         <verwaltung_techn>
-          <aktion aktionart="CHANGE" timestamp="${xml(timestamp)}" />
+          <objektnr_extern>${xml(listing.externalId)}</objektnr_extern>
+          <aktion aktionart="CHANGE" />
           <openimmo_obid>${xml(listing.externalId)}</openimmo_obid>
           <kennung_ursprung>${xml(listing.externalId)}</kennung_ursprung>
-          <stand_vom>${xml(timestamp)}</stand_vom>
+          <stand_vom>${xml(timestamp.slice(0, 10))}</stand_vom>
           <weitergabe_generell>false</weitergabe_generell>
           <sprache>de</sprache>
         </verwaltung_techn>
@@ -460,7 +466,8 @@ export function buildOpenImmoXml(input: PackageInput): string {
   <uebertragung art="OFFLINE" umfang="VOLL" version="1.2.7" sendersoftware="Fabian&amp;Pascal Inseratestudio" senderversion="${APP_VERSION}" techn_email="${xml(provider.email)}" regi_id="${xml(provider.providerNumber)}" timestamp="${xml(timestamp)}" />
   <anbieter>
     <anbieternr>${xml(provider.providerNumber)}</anbieternr>
-    <firma>${xml(provider.company)}</firma>${objects}
+    <firma>${xml(provider.company)}</firma>
+    <openimmo_anid>${xml(provider.providerNumber)}</openimmo_anid>${objects}
   </anbieter>
 </openimmo>`;
 }
