@@ -410,7 +410,7 @@ test("deterministic generation uses the fact-covered standard copy and preserves
   assert.doesNotMatch(generated.equipment, /QNG/u);
   assert.match(generated.title, /m², 5 Zimmer/u);
   assert.match(generated.title, /QNG-Siegel garantiert|DGNB-Serienzertifizierung|I-KON-Technikpaket/u);
-  assert.equal(generated.description.split(QNG_GUARANTEE_SENTENCE).length - 1, 1);
+  assert.doesNotMatch(generated.description, /QNG/u);
   assert.doesNotMatch(generated.description, /nachhaltig|energieeffizient|dgnb/iu);
 
   const completed = completeListingTexts(house, project, provider, {
@@ -430,7 +430,7 @@ test("deterministic generation uses the fact-covered standard copy and preserves
     project,
     houseSeries: LIVING_HAUS_SERIES_ID,
   }).ok, false);
-  assert.equal(completed.description.split(QNG_GUARANTEE_SENTENCE).length - 1, 1);
+  assert.doesNotMatch(completed.description, /QNG/u);
 });
 
 test("documents technical facts in neutral sentences without an environmental inference", () => {

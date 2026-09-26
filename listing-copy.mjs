@@ -1,14 +1,15 @@
 import {
-  qngGuaranteeSentence,
   releasedTitleUsps,
   TITLE_USP_ID,
 } from "./listing-claim-policy.mjs";
 
 const DESCRIPTION_CTA_START =
-  "Ruf direkt an und vereinbare deine persönliche Beratung zu Hausplanung und Grundstück:";
+  "Du möchtest wissen, ob dieses Haus zu deinen Vorstellungen und deinem Budget passt?";
 
-export const FIXED_DESCRIPTION_CTA = `Ruf direkt an und vereinbare deine persönliche Beratung zu Hausplanung und Grundstück: +49 160 930 87 202.
-Gemeinsam besprechen wir den aktuellen Planungsstand, mögliche Ausstattungsoptionen und die nächsten Schritte.`;
+export const FIXED_DESCRIPTION_CTA = `Du möchtest wissen, ob dieses Haus zu deinen Vorstellungen und deinem Budget passt? Ruf mich direkt unter +49 160 930 87 202 an oder buche dir bequem einen persönlichen Telefontermin:
+https://calendly.com/pascal-froehlich-livinghaus/erstinfo-via-telefon
+
+Denn am Ende entscheidet nicht nur das Haus – sondern auch, mit wem du es baust.`;
 
 /**
  * Zentral versionierte Inseratstandards. Die Texte sind keine Generatorausgabe:
@@ -489,15 +490,9 @@ function descriptionBody(value) {
   return body
     .split(/\n\s*\n/u)
     .map((paragraph) => paragraph.trim())
-    .filter((paragraph) => paragraph && !/(?:\+49\s*160\s*930\s*87\s*202|kostenlosen?\s+(?:und\s+unverbindlichen\s+)?Beratungstermin|Ruf\s+(?:mich\s+)?direkt)/iu.test(paragraph))
+    .filter((paragraph) => paragraph && !/(?:\+49\s*160\s*930\s*87\s*202|calendly\.com\/pascal-froehlich-livinghaus|kostenlosen?\s+(?:und\s+unverbindlichen\s+)?Beratungstermin|Ruf\s+(?:mich\s+)?direkt|Du möchtest wissen, ob dieses Haus)/iu.test(paragraph))
     .join("\n\n")
     .trim();
-}
-
-function appendQngGuarantee(description, house, project, context) {
-  const sentence = qngGuaranteeSentence(listingFactContext(house, project, context));
-  if (!sentence || description.includes(sentence)) return description;
-  return description ? `${description}\n\n${sentence}` : sentence;
 }
 
 export function enforceListingCopy(texts = {}, {
@@ -512,9 +507,8 @@ export function enforceListingCopy(texts = {}, {
   const suppliedDescription = clean(texts.description);
   const body = descriptionBody(suppliedDescription);
   const context = { houseSeries, listingFacts, facts, titleSeed };
-  const descriptionWithQngGuarantee = appendQngGuarantee(body, house, project, context);
-  const generatedDescription = descriptionWithQngGuarantee
-    ? `${descriptionWithQngGuarantee}\n\n${FIXED_DESCRIPTION_CTA}`
+  const generatedDescription = body
+    ? `${body}\n\n${FIXED_DESCRIPTION_CTA}`
     : FIXED_DESCRIPTION_CTA;
   return {
     // A title is initialized for a new listing but is never replaced merely

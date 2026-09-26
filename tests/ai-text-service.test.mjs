@@ -15,6 +15,7 @@ import {
 import {
   buildListingHeadline,
   enforceListingCopy,
+  FIXED_DESCRIPTION_CTA,
   FIXED_EQUIPMENT_TEXT,
   FIXED_OTHER_TEXT,
 } from "../listing-copy.mjs";
@@ -34,7 +35,7 @@ const testHouse = {
 const testProject = { city: "Schulzendorf", district: "" };
 const validTexts = enforceListingCopy({
   title: buildListingHeadline(testHouse, testProject),
-  description: longText("Der projektierte Entwurf verbindet klare Architektur mit flexibel nutzbaren Räumen und einer sorgfältig abgestimmten Planung für den Familienalltag.", 1250),
+  description: longText("Der projektierte Entwurf verbindet klare Architektur mit flexibel nutzbaren Räumen und einer sorgfältig abgestimmten Planung für den Familienalltag.", 1800),
   equipment: "",
   location: longText("Das Grundstück liegt in Schulzendorf und bietet einen stimmigen Rahmen für das geplante Zuhause; alle weiteren Details werden anhand bestätigter Standortdaten beurteilt.", 550),
   other: "",
@@ -53,6 +54,26 @@ test("removes the exact house number before building the AI source data", () => 
   const { variationId: generatedVariationId, ...sourceWithoutVolatileId } = source;
   assert.match(generatedVariationId, /^[0-9a-f-]{36}$/i);
   assert.doesNotMatch(JSON.stringify(sourceWithoutVolatileId), /Bergstraße|15732|27a/);
+});
+
+test("keeps offer prices and internal variants out of the AI source data", () => {
+  const source = buildSourceData({
+    project: { city: "Schulzendorf", plotArea: 600, plotPrice: 189000, additionalCosts: 32000 },
+    house: {
+      name: "SUN 144 V4 Tag",
+      housePrice: 358000,
+      architecture: "Offener Wohnbereich; Hauspreis laut Muster 358.000 Euro.",
+    },
+    configuredOfferPriceEuro: 579000,
+    selectedHouseNames: ["SUN 144 V4 Tag", "SUN 136 V2 Nacht"],
+  });
+  const serialized = JSON.stringify(source);
+  assert.equal(source.house.name, "SUN 144");
+  assert.deepEqual(source.allSelectedHouseNames, ["SUN 144", "SUN 136"]);
+  assert.equal("housePriceEuro" in source.house, false);
+  assert.equal("plotPriceEuro" in source.projectWithTownOnly, false);
+  assert.equal("configuredOfferPriceEuro" in source, false);
+  assert.doesNotMatch(serialized, /358\.000|189000|579000|V4|V2|Tag|Nacht|Hauspreis|Euro/u);
 });
 
 test("supplies only released series facts and projected energy values to the AI", () => {
@@ -103,9 +124,12 @@ test("uses the Responses API quality settings and a strict text schema", () => {
   assert.equal(request.text.format.type, "json_schema");
   assert.deepEqual(request.text.format.schema.required, ["description", "location"]);
   assert.deepEqual(Object.keys(request.text.format.schema.properties), ["description", "location"]);
-  assert.match(request.input[0].content[0].text, /gerundeter Wohnfläche und Zimmerzahl/);
+  assert.match(request.input[0].content[0].text, /185 bis 245 Wörter/);
+  assert.match(request.input[0].content[0].text, /Nenne niemals Preise oder preisbezogene Informationen/);
+  assert.match(request.input[0].content[0].text, /keine internen Hausvarianten/);
+  assert.match(request.input[0].content[0].text, /DGNB, QDF oder QNG/);
   assert.match(request.input[0].content[0].text, /keine allgemeinen Umwelt-, Klima-, Nachhaltigkeits- oder Energieversprechen/);
-  assert.match(request.input[0].content[0].text, /qng_guarantee/u);
+  assert.match(request.text.format.schema.properties.description.description, /185 bis 245 Wörtern/);
 });
 
 test("uses GPT-5.6 Luna as the economical default", () => {
@@ -141,6 +165,20 @@ test("accepts complete texts and rejects short or Markdown-formatted output", ()
   const errors = validateListingTexts({ ...validTexts, description: "## Zu kurz" }, testHouse, testProject);
   assert.ok(errors.some((value) => value.includes("zu kurz")));
   assert.ok(errors.some((value) => value.includes("Markdown")));
+});
+
+test("rejects prices and internal variants in the generated object description", () => {
+  const priceErrors = validateListingTexts({
+    ...validTexts,
+    description: `${validTexts.description.replace(FIXED_DESCRIPTION_CTA, "Der Kaufpreis beträgt 489.000 Euro.")}`,
+  }, testHouse, testProject);
+  assert.ok(priceErrors.some((value) => value.includes("Preisangabe")));
+
+  const variantErrors = validateListingTexts({
+    ...validTexts,
+    description: validTexts.description.replace(FIXED_DESCRIPTION_CTA, "Der Entwurf SUN 113 V4 Tag passt zum Familienalltag.\n\n" + FIXED_DESCRIPTION_CTA),
+  }, testHouse, testProject);
+  assert.ok(variantErrors.some((value) => value.includes("interne Hausvariante")));
 });
 
 test("requires the factual headline with place, rounded area and rooms", () => {

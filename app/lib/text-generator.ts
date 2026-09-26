@@ -7,6 +7,7 @@ import type {
 import { enforceListingCopy, fillMissingListingCopy } from "../../listing-copy.mjs";
 import {
   LIVING_HAUS_SERIES_ID,
+  releasedTechnicalFacts,
 } from "../../listing-claim-policy.mjs";
 
 function hash(value: string): number {
@@ -26,16 +27,23 @@ function joinParagraphs(values: Array<string | false | null | undefined>): strin
   return values.filter(Boolean).join("\n\n");
 }
 
-function section(title: string, body: string): string {
-  return `${title}\n${body}`;
-}
-
 function formatNumber(value: number): string {
   return new Intl.NumberFormat("de-DE", { maximumFractionDigits: 0 }).format(value);
 }
 
-function providerName(provider: ProviderSettings): string {
-  return `${provider.firstName} ${provider.lastName}`.trim();
+function customerFacingHouseName(value: string): string {
+  return value
+    .replace(/\b(?:V\d+|Tag|Nacht)\b/giu, " ")
+    .replace(/\s{2,}/gu, " ")
+    .trim();
+}
+
+function hasReleasedComfortVentilation(house: HouseTemplate): boolean {
+  return releasedTechnicalFacts({
+    house,
+    listingFacts: house.listingFacts,
+    houseSeries: LIVING_HAUS_SERIES_ID,
+  }).some((fact) => fact.key === "ventilation" && fact.verified === true);
 }
 
 export function totalPrice(house: HouseTemplate, project: ProjectInput): number {
@@ -85,74 +93,78 @@ export function completeListingTexts(
 export function generateListingTexts(
   house: HouseTemplate,
   project: ProjectInput,
-  provider: ProviderSettings,
+  _provider: ProviderSettings,
   version = 1,
   titleSeed = "",
 ): ListingTexts {
   const seed = `${house.id}:${project.street}:${project.houseNumber}:${project.zip}:${version}`;
-  const place = project.district.trim()
-    ? `${project.city}-${project.district}`
-    : project.city || "deinem Wunschort";
-  const rooms = `${formatNumber(house.rooms)} Zimmer`;
-  const livingArea = `${formatNumber(house.livingArea)} m² Wohnfläche`;
-  const plotArea = project.plotArea
-    ? `${formatNumber(project.plotArea)} m² großen Grundstück`
-    : "ausgewählten Grundstück";
+  const place = project.district.trim() && project.city.trim()
+    ? `${project.district.trim()} in ${project.city.trim()}`
+    : project.district.trim()
+      || project.city.trim()
+      || "deinem Wunschort";
+  const houseName = customerFacingHouseName(house.name);
+  const houseType = house.houseType.trim() || "Einfamilienhaus";
+  const houseReference = houseName ? `${houseName} als ${houseType}` : houseType;
+  const rooms = house.rooms > 0 ? `${formatNumber(house.rooms)} Zimmer` : "mehreren gut nutzbaren Räumen";
+  const livingArea = house.livingArea > 0 ? `rund ${formatNumber(house.livingArea)} m² Wohnfläche` : "viel Raum für den Alltag";
+  const plotArea = project.plotArea > 0
+    ? `ca. ${formatNumber(project.plotArea)} m² Grundstücksfläche`
+    : "dem ausgewählten Grundstück";
+  const bedroomSentence = house.bedrooms > 0
+    ? `${formatNumber(house.bedrooms)} Schlafzimmer schaffen Platz für Familie und persönliche Rückzugsorte.`
+    : "Die Räume lassen sich auf unterschiedliche Lebensphasen und Bedürfnisse ausrichten.";
+  const bathroomSentence = house.bathrooms > 0
+    ? house.bathrooms === 1
+      ? "Ein Badezimmer unterstützt einen entspannten Start in den Tag."
+      : `${formatNumber(house.bathrooms)} Badezimmer unterstützen einen entspannten Start in den Tag.`
+    : "Die Aufteilung schafft klare Bereiche für gemeinsames Leben und private Momente.";
+  const floorSentence = house.floors > 1
+    ? `Auf ${formatNumber(house.floors)} Ebenen entstehen kurze Wege und eine klare Trennung zwischen gemeinsamer Zeit und Rückzug.`
+    : "Auf einer Ebene verbindet die Raumaufteilung gemeinsames Leben mit gut nutzbaren privaten Bereichen.";
+  const comfortVentilation = hasReleasedComfortVentilation(house)
+    ? "Für diesen Entwurf ist eine Komfortlüftung mit Wärmerückgewinnung vorgesehen. Sie unterstützt den regelmäßigen Luftaustausch, ohne dass dafür dauerhaft Fenster geöffnet bleiben müssen. Als konkretes Ausstattungsmerkmal fügt sie sich in ein Hauskonzept ein, das sich an den Bedürfnissen des Alltags orientiert."
+    : "Die Planung konzentriert sich auf Räume, die den Alltag flexibel und angenehm begleiten können. Sie geben Raum für persönliche Ideen, die mit der Zeit wachsen und das Zuhause unverwechselbar machen.";
 
   const descriptionOpening = pick(
     [
-      `Auf einem ca. ${plotArea} in ${place} ist dieses moderne ${house.houseType || "Einfamilienhaus"} von Living Haus vorgesehen. ${rooms} und rund ${livingArea} schaffen den passenden Raum für Familie, Gäste und Homeoffice.`,
-      `Dieses projektierte ${house.houseType || "Haus"} von Living Haus bietet auf einem ca. ${plotArea} in ${place} ein modernes Zuhause mit ${rooms} und rund ${livingArea}.`,
-      `Mit dem ${house.name} entsteht auf einem ca. ${plotArea} in ${place} ein durchdachtes Zuhause. Der Entwurf verbindet ${livingArea}, ${rooms} und eine klare Architektur zu einem stimmigen Gesamtkonzept.`,
-      `Wer in ${place} den Schritt ins eigene Zuhause plant, findet mit dem ${house.name} eine überzeugende Grundlage: rund ${livingArea}, ${rooms} und ein ca. ${formatNumber(project.plotArea)} m² großes Grundstück.`,
+      `Dieses projektierte ${houseReference} in ${place} ist für Menschen gedacht, die sich ein Zuhause mit Raum für Nähe, Alltag und persönliche Ideen wünschen.`,
+      `Ein Zuhause, das gemeinsames Leben und eigene Rückzugsorte zusammenbringt: Mit diesem projektierten ${houseReference} in ${place} entsteht ein stimmiger Rahmen für die nächste Lebensphase.`,
+      `Wer in ${place} ein Haus sucht, das den Familienalltag ebenso aufnimmt wie ruhige persönliche Momente, findet mit diesem projektierten ${houseReference} eine überzeugende Grundlage.`,
     ],
     seed,
     2,
   );
 
-  const architecture = "Die Raumaufteilung verbindet Gemeinschaftsbereiche mit gut nutzbaren privaten Rückzugsräumen.";
-
-  const descriptionMiddle = pick(
+  const livingParagraph = pick(
     [
-      `Auf ${house.floors || 2} Ebenen entstehen helle Wohnbereiche, kurze Wege und komfortable Rückzugsräume. Mit ${house.bedrooms || "mehreren"} Schlafzimmern und ${house.bathrooms || "komfortablen"} Badezimmern lässt sich der Alltag ebenso angenehm organisieren wie das Arbeiten von zu Hause.`,
-      `Der Grundriss verteilt Wohnen, Kochen und Rückzug klar auf ${house.floors || 2} Etagen. ${house.bedrooms || "Mehrere"} Schlafzimmer und ${house.bathrooms || "großzügige"} Badezimmer sorgen dafür, dass das Haus auch langfristig flexibel nutzbar bleibt.`,
-      `Großzügige Gemeinschaftsflächen treffen auf private Rückzugsorte. So unterstützt das Konzept mit ${house.bedrooms || "mehreren"} Schlafzimmern und ${house.bathrooms || "mehreren"} Badezimmern sowohl lebendige Familienmomente als auch Ruhe und Konzentration.`,
+      `Mit ${livingArea} und ${rooms} bietet der Grundriss die Basis für ein lebendiges Familienleben. Wohnen, Essen und Zusammensein können den Mittelpunkt bilden, während weitere Räume Platz für Kinder, Gäste oder konzentriertes Arbeiten von zu Hause eröffnen. ${bedroomSentence} ${bathroomSentence}`,
+      `${livingArea} und ${rooms} geben dem Haus einen vielseitigen Rahmen. Der Grundriss kann gemeinsame Abende, den Familienalltag und persönliche Rückzugsorte miteinander verbinden. ${bedroomSentence} ${bathroomSentence}`,
+      `Der Grundriss ist auf ein Zuhause mit vielen Facetten ausgerichtet: ${livingArea} und ${rooms} lassen Raum für gemeinsame Zeit, individuelle Wünsche und Veränderungen im Alltag. ${bedroomSentence} ${bathroomSentence}`,
     ],
     seed,
     3,
   );
 
-  const flexibility = pick(
+  const plotParagraph = pick(
     [
-      "Der Grundriss kann innerhalb der technischen und baurechtlichen Möglichkeiten an deine Wünsche, deinen Alltag und deine Zukunftspläne angepasst werden.",
-      "Raumaufteilung, Zimmergrößen und Ausstattungsdetails lassen sich im Rahmen der technischen und baurechtlichen Voraussetzungen individuell weiterentwickeln.",
-      "Gemeinsam stimmen wir das Hauskonzept auf Grundstück, Budget und persönliche Vorstellungen ab – damit aus dem Entwurf dein Zuhause wird.",
+      `Auch außerhalb des Hauses bleibt Platz für eigene Vorstellungen: ${plotArea} schaffen eine Grundlage, um das Zuhause und seinen Außenbereich passend zum Leben in ${place} zu denken.`,
+      `Das Angebot verbindet Haus und ${plotArea}. So entsteht eine solide Basis, um Wohnen und Außenbereich auf die persönlichen Wünsche in ${place} abzustimmen.`,
+      `Mit ${plotArea} erhält das Hauskonzept einen passenden äußeren Rahmen. Hier kann ein Zuhause wachsen, das den Alltag in ${place} aufnimmt und Raum für neue Gewohnheiten lässt.`,
     ],
     seed,
     4,
   );
 
-  // Serien- und Standardpaketinformationen werden nicht zu Objektfakten
-  // erhoben. Sie benötigen künftig einen eigenen Evidenzdatensatz.
-  const standardBenefits = null;
-
-  const descriptionClosing = pick(
+  const outlook = pick(
     [
-      `Living Haus begleitet dich von der ersten Beratung über die individuelle Planung bis zur Umsetzung deines neuen Zuhauses in ${place}.`,
-      `Von der Planung bis zum Einzug bleibt das Projekt auf deine Wünsche ausgerichtet – für ein Zuhause in ${place}, das wirklich zu dir passt.`,
-      `So wird aus einem Hausentwurf Schritt für Schritt dein persönliches Zuhause in ${place}.`,
+      `${floorSentence} So entsteht ein Zuhause, das den Familienalltag ebenso selbstverständlich begleitet wie ruhige Momente für dich selbst. Dabei bietet der Entwurf Raum für vertraute Abläufe, spontane Begegnungen und die kleinen Momente, die aus vier Wänden einen persönlichen Lebensmittelpunkt machen.`,
+      `${floorSentence} Das schafft einen stimmigen Rahmen für gemeinsame Erinnerungen und die kleinen Rituale, die ein Zuhause persönlich machen. Dabei bleibt Platz für vertraute Abläufe, spontane Begegnungen und die kleinen Momente, die aus vier Wänden einen persönlichen Lebensmittelpunkt machen.`,
+      `${floorSentence} So findet der Alltag seinen Platz, ohne dass gemeinsame Zeit und persönliche Rückzugsmöglichkeiten zu kurz kommen. Dabei entsteht Raum für vertraute Abläufe, spontane Begegnungen und die kleinen Momente, die aus vier Wänden einen persönlichen Lebensmittelpunkt machen.`,
     ],
     seed,
-    6,
+    5,
   );
-
-  const contactName = providerName(provider);
-  const descriptionContact = provider.phone.trim()
-    ? section(
-        "Persönliche Beratung vereinbaren",
-        `Ruf ${contactName ? `${contactName} ` : "mich "}direkt unter ${provider.phone} an und lass dich persönlich zu Grundstück, Hausplanung, Ausstattung und Finanzierung beraten.`,
-      )
-    : "Gerne besprechen wir Grundstück, Hausplanung, Ausstattung und Finanzierung in einem persönlichen Beratungstermin.";
 
   const locationOpening = pick(
     [
@@ -186,13 +198,10 @@ export function generateListingTexts(
     title: "",
     description: joinParagraphs([
       descriptionOpening,
-      architecture,
-      descriptionMiddle,
-      flexibility,
-      standardBenefits,
-      descriptionClosing,
-      descriptionContact,
-      "Das Haus ist projektiert. Individuelle Anpassungen sind von den technischen, planerischen und baurechtlichen Voraussetzungen abhängig.",
+      livingParagraph,
+      plotParagraph,
+      comfortVentilation,
+      outlook,
     ]),
     // Statische Felder bleiben bewusst leer: enforceListingCopy initialisiert
     // sie ausschließlich für neue Inserate mit dem zentralen Mastertext.

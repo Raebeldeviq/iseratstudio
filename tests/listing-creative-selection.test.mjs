@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { buildOpenImmoXml } from "../app/lib/openimmo.ts";
 import { completeListingTexts, generateListingTexts, totalPrice } from "../app/lib/text-generator.ts";
-import { QNG_GUARANTEE_SENTENCE, QNG_GUARANTEE_TITLE } from "../listing-claim-policy.mjs";
+import { QNG_GUARANTEE_TITLE } from "../listing-claim-policy.mjs";
 import { createUploadJobId } from "../batch-upload.mjs";
 import { normalizeHouseDistribution } from "../house-distribution.mjs";
 import {
@@ -353,7 +353,7 @@ test("prepared copy persists one coherent house, text, price, image and OpenImmo
   assert.deepEqual(copy.staticCopySources, source.staticCopySources);
   assert.match(copy.texts.title, new RegExp(`${QNG_GUARANTEE_TITLE}`, "u"));
   assert.match(copy.texts.title, /DGNB-Serienzertifizierung/u);
-  assert.equal(copy.texts.description.split(QNG_GUARANTEE_SENTENCE).length - 1, 1);
+  assert.doesNotMatch(copy.texts.description, /QNG/u);
   assert.equal(copy.creativeSelection.houseId, copy.templateId);
   assert.equal(copy.creativeSelection.houseName, copy.templateName);
   assert.equal(copy.creativeSelection.heroAssetId, copy.creativeSelection.heroImageId);

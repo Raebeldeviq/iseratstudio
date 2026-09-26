@@ -27,7 +27,6 @@ import {
 import {
   LIVING_HAUS_SERIES_ID,
   LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID,
-  QNG_GUARANTEE_SENTENCE,
   QNG_GUARANTEE_TITLE,
   validateListingClaims,
 } from "../listing-claim-policy.mjs";
@@ -125,7 +124,7 @@ test("initializes only new static fields and keeps an explicit manual source acr
   assert.equal(resolveListingStaticCopy(manual).sources.equipment, STATIC_COPY_SOURCE.MANUAL);
 });
 
-test("adds the central QNG guarantee only for generated Living-Haus copy", () => {
+test("keeps the central QNG label in the generated title but out of the marketing description", () => {
   const generated = enforceListingCopy({
     description: "Sachliche Beschreibung des projektierten Hauses.",
   }, {
@@ -136,7 +135,7 @@ test("adds the central QNG guarantee only for generated Living-Haus copy", () =>
   });
   assert.match(generated.title, new RegExp(`${QNG_GUARANTEE_TITLE}`, "u"));
   assert.match(generated.title, /DGNB-Serienzertifizierung/u);
-  assert.equal(generated.description.split(QNG_GUARANTEE_SENTENCE).length - 1, 1);
+  assert.doesNotMatch(generated.description, /QNG/u);
   assert.ok(generated.description.endsWith(FIXED_DESCRIPTION_CTA));
 
   const foreignSeries = enforceListingCopy({
