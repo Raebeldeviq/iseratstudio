@@ -11,6 +11,7 @@ import {
   projectingEnvironmentLabels,
   FIXED_ANNOTATION_TEXT,
   FIXED_DESCRIPTION_CTA,
+  FIXED_DESCRIPTION_FINANCING,
   FIXED_EQUIPMENT_TEXT,
   FIXED_OTHER_TEXT,
   FIXED_PROVISION_TEXT,
@@ -106,6 +107,7 @@ test("preserves all existing static copy even when dynamic copy is regenerated",
   assert.equal(generated.other, "Alter Sonstiges-Text");
   assert.ok(generated.description.endsWith(FIXED_DESCRIPTION_CTA));
   assert.equal(generated.description.split(FIXED_DESCRIPTION_CTA).length - 1, 1);
+  assert.equal(generated.description.split(FIXED_DESCRIPTION_FINANCING).length - 1, 1);
 });
 
 test("initializes only new static fields and keeps an explicit manual source across read resolution", () => {

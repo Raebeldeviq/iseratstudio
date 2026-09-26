@@ -8,6 +8,7 @@ import {
 } from "../listing-claim-policy.mjs";
 import {
   FIXED_DESCRIPTION_CTA,
+  FIXED_DESCRIPTION_FINANCING,
   initializeListingStaticCopy,
   STATIC_COPY_SOURCE,
 } from "../listing-copy.mjs";
@@ -135,7 +136,11 @@ test("creates five compliant, price-free object descriptions with the new editor
     assert.doesNotMatch(descriptionBody, /€|\b(?:Euro|Kaufpreis|Hauspreis|Grundstückspreis|Gesamtpreis|Angebotspreis)\b/iu, entry.sample.id);
     assert.doesNotMatch(descriptionBody, /\bV\d+\b|\bV\d+\s+(?:Tag|Nacht)\b|\b(?:Tag|Nacht)\s+V\d+\b/iu, entry.sample.id);
     assert.doesNotMatch(descriptionBody, /\b(?:DGNB|QNG|QDF)\b/iu, entry.sample.id);
-    assert.doesNotMatch(descriptionBody, /\bFinanzierung\b/iu, entry.sample.id);
+    assert.equal(entry.texts.description.split(FIXED_DESCRIPTION_FINANCING).length - 1, 1, entry.sample.id);
+    assert.match(descriptionBody, /möglichen Fördermöglichkeiten/u, entry.sample.id);
+    assert.match(descriptionBody, /Zuhause-Darlehen/u, entry.sample.id);
+    assert.match(descriptionBody, /im persönlichen Gespräch/u, entry.sample.id);
+    assert.doesNotMatch(descriptionBody, /\b(?:Darlehenshöhe|Monatsrate|monatliche Rate|Finanzierungszusage|Förderzusage|für jeden geeignet)\b/iu, entry.sample.id);
     assert.match(descriptionBody, /Grundriss|Wohnfläche|Zimmer/u, entry.sample.id);
     assert.equal(validateListingClaims({
       texts: { description: entry.texts.description, location: entry.texts.location },

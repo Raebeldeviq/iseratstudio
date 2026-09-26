@@ -39,8 +39,10 @@ drei Testfälle:
 3. Fünf unterschiedliche Fallback-Texte werden auf Redaktion, Wortzahl und
    Compliance geprüft.
 
-Der kombinierte Stand besitzt daher 612 Tests: 611 bestanden, 0 fehlgeschlagen
-und 1 erwarteter Windows-Skip. Es wurden keine Tests entfernt.
+Der kombinierte Stand besaß vor der Finanzierungskorrektur 612 Tests. Der
+zusätzliche Guard-Test für den festen Finanzierungshinweis erhöht den finalen
+Stand auf 613 Tests: 612 bestanden, 0 fehlgeschlagen und 1 erwarteter
+Windows-Skip. Es wurden keine Tests entfernt.
 
 ## A++-Sonderprüfung
 
@@ -72,9 +74,10 @@ könnte dagegen als evidenzgebundene Policy-Erweiterung bewertet werden.
 ## Verifikation
 
 - Fokussierte Integrationssuite: 75/75 bestanden
-- Fünf Objekttext-Testgenerationen: 235, 235, 256, 245 und 247 Wörter
+- Fünf Objekttext-Testgenerationen nach Finanzierungskorrektur: 264, 264,
+  272, 274 und 276 Wörter
 - Claim-Scan dieser Texte: `BLOCK = 0`, `REVIEW = 0`
-- Vollständige Suite: 612 Tests, 611 bestanden, 0 fehlgeschlagen,
+- Vollständige Suite: 613 Tests, 612 bestanden, 0 fehlgeschlagen,
   1 erwarteter Windows-Skip
 - ESLint: 0 Fehler, 0 Warnungen
 - Produktions-Build: PASS
@@ -89,10 +92,11 @@ könnte dagegen als evidenzgebundene Policy-Erweiterung bewertet werden.
 - Externe LLM-Ausgaben bleiben sprachlich variabel. Längen-, Preis-, Varianten-
   und Claim-Grenzen werden jedoch vor Verwendung validiert; der deterministische
   Fallback erfüllt dieselben Regeln.
-- Der Prompt erlaubt einen kurzen Finanzierungshinweis nur bei einem konkreten,
-  strukturierten und freigegebenen Finanzierungsfakt. Ein solcher dedizierter
-  Fakt wird im aktuellen Faktenmodell nicht geliefert; die fünf geprüften Texte
-  enthalten deshalb regelkonform keinen Finanzierungshinweis.
+- Der zentral freigegebene Finanzierungshinweis nennt mögliche
+  Fördermöglichkeiten und das Zuhause-Darlehen, aber keine Höhe, Rate, Zusage
+  oder pauschale Eignung. Er verweist für die sinnvolle Kombination auf das
+  persönliche Gespräch und erscheint in jedem der fünf geprüften Texte exakt
+  einmal.
 - Das Portal kann das Standard-Energieklasse-Dropdown weiterhin als „keine
   Angabe“ darstellen. Diese bewusste Compliance-Grenze wurde nicht gelockert.
 - Bestehende veröffentlichte Inserate ändern sich erst durch einen späteren,

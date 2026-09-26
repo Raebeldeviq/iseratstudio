@@ -5,11 +5,19 @@ import {
 
 const DESCRIPTION_CTA_START =
   "Du möchtest wissen, ob dieses Haus zu deinen Vorstellungen und deinem Budget passt?";
+const DESCRIPTION_FINANCING_START =
+  "Neben möglichen Fördermöglichkeiten steht dir mit Living Haus auch das Zuhause-Darlehen";
+
+export const FIXED_DESCRIPTION_FINANCING = `${DESCRIPTION_FINANCING_START} als weitere Finanzierungsoption zur Verfügung. Welche Kombination für dein Bauvorhaben sinnvoll ist, klären wir gemeinsam im persönlichen Gespräch.`;
 
 export const FIXED_DESCRIPTION_CTA = `Du möchtest wissen, ob dieses Haus zu deinen Vorstellungen und deinem Budget passt? Ruf mich direkt unter +49 160 930 87 202 an oder buche dir bequem einen persönlichen Telefontermin:
 https://calendly.com/pascal-froehlich-livinghaus/erstinfo-via-telefon
 
 Denn am Ende entscheidet nicht nur das Haus – sondern auch, mit wem du es baust.`;
+
+export const FIXED_DESCRIPTION_ENDING = `${FIXED_DESCRIPTION_FINANCING}
+
+${FIXED_DESCRIPTION_CTA}`;
 
 /**
  * Zentral versionierte Inseratstandards. Die Texte sind keine Generatorausgabe:
@@ -492,12 +500,14 @@ export function buildListingHeadline(house = {}, project = {}, context = {}) {
 
 function descriptionBody(value) {
   let body = clean(value);
+  const fixedFinancingIndex = body.indexOf(DESCRIPTION_FINANCING_START);
   const fixedCtaIndex = body.indexOf(DESCRIPTION_CTA_START);
-  if (fixedCtaIndex >= 0) body = body.slice(0, fixedCtaIndex).trim();
+  const fixedEndingIndexes = [fixedFinancingIndex, fixedCtaIndex].filter((index) => index >= 0);
+  if (fixedEndingIndexes.length) body = body.slice(0, Math.min(...fixedEndingIndexes)).trim();
   return body
     .split(/\n\s*\n/u)
     .map((paragraph) => paragraph.trim())
-    .filter((paragraph) => paragraph && !/(?:\+49\s*160\s*930\s*87\s*202|calendly\.com\/pascal-froehlich-livinghaus|kostenlosen?\s+(?:und\s+unverbindlichen\s+)?Beratungstermin|Ruf\s+(?:mich\s+)?direkt|Du möchtest wissen, ob dieses Haus)/iu.test(paragraph))
+    .filter((paragraph) => paragraph && !/(?:Zuhause-Darlehen|Fördermöglichkeiten[^.]*Finanzierungsoption|\+49\s*160\s*930\s*87\s*202|calendly\.com\/pascal-froehlich-livinghaus|kostenlosen?\s+(?:und\s+unverbindlichen\s+)?Beratungstermin|Ruf\s+(?:mich\s+)?direkt|Du möchtest wissen, ob dieses Haus)/iu.test(paragraph))
     .join("\n\n")
     .trim();
 }
@@ -515,15 +525,15 @@ export function enforceListingCopy(texts = {}, {
   const body = descriptionBody(suppliedDescription);
   const context = { houseSeries, listingFacts, facts, titleSeed };
   const generatedDescription = body
-    ? `${body}\n\n${FIXED_DESCRIPTION_CTA}`
-    : FIXED_DESCRIPTION_CTA;
+    ? `${body}\n\n${FIXED_DESCRIPTION_ENDING}`
+    : FIXED_DESCRIPTION_ENDING;
   return {
     // A title is initialized for a new listing but is never replaced merely
     // because an AI call, app start or export passes through this helper.
     title: clean(texts.title) || buildListingHeadline(house, project, context),
     description: generated
       ? generatedDescription
-      : suppliedDescription || FIXED_DESCRIPTION_CTA,
+      : suppliedDescription || FIXED_DESCRIPTION_ENDING,
     // Equipment and other are initialized once for new listings. Their
     // persisted value wins afterwards; the static-copy source controls any
     // explicit reset in the caller rather than this generic helper.

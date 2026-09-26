@@ -16,6 +16,7 @@ import {
   buildListingHeadline,
   enforceListingCopy,
   FIXED_DESCRIPTION_CTA,
+  FIXED_DESCRIPTION_FINANCING,
   FIXED_EQUIPMENT_TEXT,
   FIXED_OTHER_TEXT,
 } from "../listing-copy.mjs";
@@ -124,12 +125,13 @@ test("uses the Responses API quality settings and a strict text schema", () => {
   assert.equal(request.text.format.type, "json_schema");
   assert.deepEqual(request.text.format.schema.required, ["description", "location"]);
   assert.deepEqual(Object.keys(request.text.format.schema.properties), ["description", "location"]);
-  assert.match(request.input[0].content[0].text, /185 bis 245 Wörter/);
+  assert.match(request.input[0].content[0].text, /160 bis 215 Wörter/);
+  assert.match(request.input[0].content[0].text, /Erzeuge selbst keinen Finanzierungshinweis/);
   assert.match(request.input[0].content[0].text, /Nenne niemals Preise oder preisbezogene Informationen/);
   assert.match(request.input[0].content[0].text, /keine internen Hausvarianten/);
   assert.match(request.input[0].content[0].text, /DGNB, QDF oder QNG/);
   assert.match(request.input[0].content[0].text, /keine allgemeinen Umwelt-, Klima-, Nachhaltigkeits- oder Energieversprechen/);
-  assert.match(request.text.format.schema.properties.description.description, /185 bis 245 Wörtern/);
+  assert.match(request.text.format.schema.properties.description.description, /160 bis 215 Wörtern/);
 });
 
 test("uses GPT-5.6 Luna as the economical default", () => {
@@ -179,6 +181,22 @@ test("rejects prices and internal variants in the generated object description",
     description: validTexts.description.replace(FIXED_DESCRIPTION_CTA, "Der Entwurf SUN 113 V4 Tag passt zum Familienalltag.\n\n" + FIXED_DESCRIPTION_CTA),
   }, testHouse, testProject);
   assert.ok(variantErrors.some((value) => value.includes("interne Hausvariante")));
+});
+
+test("adds only the central safe financing note and rejects AI-authored financing claims", () => {
+  assert.equal(validTexts.description.split(FIXED_DESCRIPTION_FINANCING).length - 1, 1);
+  assert.match(validTexts.description, /Zuhause-Darlehen/u);
+  assert.match(validTexts.description, /möglichen Fördermöglichkeiten/u);
+  assert.doesNotMatch(validTexts.description, /\b(?:Darlehenshöhe|Rate|Zusage|für jeden geeignet)\b/iu);
+
+  const unsafe = validateListingTexts({
+    ...validTexts,
+    description: validTexts.description.replace(
+      FIXED_DESCRIPTION_FINANCING,
+      `Eine Finanzierung mit einer festen Rate ist garantiert.\n\n${FIXED_DESCRIPTION_FINANCING}`,
+    ),
+  }, testHouse, testProject);
+  assert.ok(unsafe.some((error) => /nicht zentral freigegebenen Finanzierungshinweis/u.test(error)));
 });
 
 test("requires the factual headline with place, rounded area and rooms", () => {
