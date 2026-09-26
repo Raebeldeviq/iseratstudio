@@ -239,13 +239,15 @@ export function initializeListingStaticCopy(listing = {}) {
 
 export const IMMOPROFESSIONAL_DEFAULTS = Object.freeze({
   equipmentQuality: "GEHOBEN",
+  constructionYear: 2027,
   constructionPhase: "PROJEKTIERT",
+  availableFrom: "2027",
   attic: true,
   guestWc: true,
   gardenUse: true,
   underfloorHeating: false,
   electricFuel: false,
-  airSourceHeatPump: false,
+  airSourceHeatPump: true,
   kfw40: true,
   kfw55: true,
   energyClass: "A++",
@@ -291,18 +293,23 @@ export function fillMissingProjectingDefaults(values = {}) {
 
   return {
     ...source,
-    equipmentQuality: choice("equipmentQuality"),
-    constructionPhase: choice("constructionPhase"),
+    // These are global portal targets, not editable listing-specific defaults.
+    // Normalization intentionally replaces legacy deviations for existing and
+    // future listings while leaving unrelated equipment choices untouched.
+    equipmentQuality: IMMOPROFESSIONAL_DEFAULTS.equipmentQuality,
+    constructionYear: IMMOPROFESSIONAL_DEFAULTS.constructionYear,
+    constructionPhase: IMMOPROFESSIONAL_DEFAULTS.constructionPhase,
+    availableFrom: IMMOPROFESSIONAL_DEFAULTS.availableFrom,
     attic: flag("attic"),
     guestWc: flag("guestWc"),
     gardenUse: flag("gardenUse"),
     underfloorHeating: flag("underfloorHeating"),
     electricFuel: flag("electricFuel"),
-    airSourceHeatPump: flag("airSourceHeatPump"),
-    kfw40: flag("kfw40"),
-    kfw55: flag("kfw55"),
-    energyClass: choice("energyClass"),
-    commissionRequired: flag("commissionRequired"),
+    airSourceHeatPump: IMMOPROFESSIONAL_DEFAULTS.airSourceHeatPump,
+    kfw40: IMMOPROFESSIONAL_DEFAULTS.kfw40,
+    kfw55: IMMOPROFESSIONAL_DEFAULTS.kfw55,
+    energyClass: IMMOPROFESSIONAL_DEFAULTS.energyClass,
+    commissionRequired: IMMOPROFESSIONAL_DEFAULTS.commissionRequired,
     energyCertificateClass: choice("energyCertificateClass"),
     fittedKitchen: flag("fittedKitchen"),
     openKitchen: flag("openKitchen"),

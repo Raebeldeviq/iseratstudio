@@ -13,8 +13,9 @@ import {
 } from "./workflow-status.mjs";
 import { enforceSinglePromotionAssignment } from "./promotion-images.mjs";
 import { deletePlotRecordCascade, normalizePlotState } from "./plot-records.mjs";
+import { fillMissingProjectingDefaults } from "./listing-copy.mjs";
 
-export const STUDIO_DATA_SCHEMA_VERSION = 4;
+export const STUDIO_DATA_SCHEMA_VERSION = 5;
 
 function normalizedText(value) {
   return String(value ?? "")
@@ -81,6 +82,7 @@ function cleanListing(listing) {
     : normalizeWorkflowStatus(source.status ?? uploadStatus, WORKFLOW_STATUS.DRAFT);
   return {
     ...source,
+    projectingSettings: fillMissingProjectingDefaults(source.projectingSettings),
     status,
     statusMessage: workflowStatusMessage(source.status ?? uploadStatus, source.statusMessage),
   };

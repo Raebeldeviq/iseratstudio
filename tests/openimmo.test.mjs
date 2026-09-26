@@ -6,7 +6,6 @@ import { APP_VERSION } from "../app/lib/app-version.mjs";
 import {
   FIXED_ANNOTATION_TEXT,
   FACTUAL_BUILDABILITY_NOTE,
-  FIXED_PROVISION_TEXT,
   FIXED_RECOMMENDATION_TEXT,
   FIXED_TERMS_TEXT,
 } from "../listing-copy.mjs";
@@ -159,10 +158,12 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
   assert.match(xml, /<dachboden>true<\/dachboden>/);
   assert.match(xml, /<gaestewc>true<\/gaestewc>/);
   assert.match(xml, /<zustand zustand_art="PROJEKTIERT" \/>/);
+  assert.match(xml, /<baujahr>2027<\/baujahr>/);
+  assert.match(xml, /<verfuegbar_ab>2027<\/verfuegbar_ab>/);
   assert.doesNotMatch(xml, /<energiepass>|<wertklasse>/);
   assert.match(xml, /<provisionspflichtig>false<\/provisionspflichtig>/);
+  assert.doesNotMatch(xml, /<courtage_hinweis>/);
   assert.match(xml, /feldname="Projektierte Energieeffizienzklasse"/);
-  assert.ok(xml.includes(FIXED_PROVISION_TEXT));
   assert.ok(xml.includes("Ausstattung"));
   assert.ok(xml.includes("Sonstiges"));
   assert.ok(xml.includes(FACTUAL_BUILDABILITY_NOTE));
@@ -170,7 +171,7 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
   assert.ok(xml.includes(FIXED_TERMS_TEXT));
   assert.ok(xml.includes(FIXED_RECOMMENDATION_TEXT));
   assert.ok(xml.indexOf("<kaufpreis>") < xml.indexOf("<provisionspflichtig>"));
-  assert.ok(xml.indexOf("<courtage_hinweis>") < xml.indexOf("<waehrung "));
+  assert.ok(xml.indexOf("<provisionspflichtig>") < xml.indexOf("<waehrung "));
   assert.ok(xml.indexOf("<bad ") < xml.indexOf("<kueche "));
   assert.ok(xml.indexOf("<gartennutzung>") < xml.indexOf("<energietyp "));
   assert.ok(xml.indexOf("</zustand_angaben>") < xml.indexOf("<infrastruktur>"));
@@ -223,7 +224,7 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
   assert.deepEqual(validateImportPackage(input), []);
 });
 
-test("does not overwrite explicit projecting values during export", () => {
+test("overwrites legacy portal deviations with the global object targets during export", () => {
   const input = {
     project: {
       street: "Teststraße",
@@ -243,7 +244,9 @@ test("does not overwrite explicit projecting values during export", () => {
       version: 1,
       projectingSettings: {
         equipmentQuality: "LUXUS",
+        constructionYear: 2031,
         constructionPhase: "ERSTBEZUG",
+        availableFrom: "2031",
         attic: false,
         guestWc: false,
         gardenUse: false,
@@ -281,7 +284,7 @@ test("does not overwrite explicit projecting values during export", () => {
       bathrooms: 2,
       floors: 2,
       housePrice: 400000,
-      constructionYear: 2027,
+      constructionYear: 2031,
       energyDemand: 18,
       energyClass: "B",
       heatingType: "Radiatoren",
@@ -309,14 +312,17 @@ test("does not overwrite explicit projecting values during export", () => {
   };
 
   const xml = buildOpenImmoXml(input);
-  assert.match(xml, /<ausstatt_kategorie WERTIGKEIT="LUXUS" \/>/);
+  assert.match(xml, /<ausstatt_kategorie WERTIGKEIT="GEHOBEN" \/>/);
   assert.doesNotMatch(xml, /<heizungsart\b/u);
   assert.match(xml, /<befeuerung elektro="false" luftwp="true" \/>/);
   assert.match(xml, /<gartennutzung>false<\/gartennutzung>/);
   assert.match(xml, /<energietyp kfw40="true" kfw55="true" \/>/);
-  assert.match(xml, /<zustand zustand_art="ERSTBEZUG" \/>/);
+  assert.match(xml, /<zustand zustand_art="PROJEKTIERT" \/>/);
+  assert.match(xml, /<baujahr>2027<\/baujahr>/);
+  assert.match(xml, /<verfuegbar_ab>2027<\/verfuegbar_ab>/);
   assert.doesNotMatch(xml, /<wertklasse>/);
   assert.match(xml, /<provisionspflichtig>false<\/provisionspflichtig>/);
+  assert.doesNotMatch(xml, /<courtage_hinweis>/);
   assert.match(xml, /<bad dusche="false" wanne="false" fenster="false" \/>/);
   assert.match(xml, /<kueche ebk="false" offen="false" \/>/);
   assert.match(xml, /<dachboden>false<\/dachboden>/);

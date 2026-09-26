@@ -300,7 +300,9 @@ export type ListingStaticTexts = {
 
 export type ProjectingSettings = {
   equipmentQuality?: string;
+  constructionYear?: number;
   constructionPhase?: string;
+  availableFrom?: string;
   attic?: boolean;
   guestWc?: boolean;
   gardenUse?: boolean;

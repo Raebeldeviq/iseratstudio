@@ -364,7 +364,6 @@ function listingXml(
         <preise>
           <kaufpreis>${currency.format(listing.price)}</kaufpreis>
           <provisionspflichtig>false</provisionspflichtig>
-          <courtage_hinweis>${cdata(staticCopy.values.provision)}</courtage_hinweis>
           <waehrung iso_waehrung="EUR" />
         </preise>
         <flaechen>
@@ -387,7 +386,7 @@ function listingXml(
           <gaestewc>${projecting.guestWc}</gaestewc>
         </ausstattung>
         <zustand_angaben>
-          <baujahr>${xml(house.constructionYear)}</baujahr>
+          <baujahr>${xml(projecting.constructionYear)}</baujahr>
           <zustand zustand_art="${xml(projecting.constructionPhase)}" />
           ${energyCertificatePass}
         </zustand_angaben>
@@ -411,6 +410,7 @@ function listingXml(
         <anhaenge>${imageXml(listing, images)}</anhaenge>
         <verwaltung_objekt>
           <objektadresse_freigeben>false</objektadresse_freigeben>
+          <verfuegbar_ab>${xml(projecting.availableFrom)}</verfuegbar_ab>
         </verwaltung_objekt>
         <verwaltung_techn>
           <aktion aktionart="CHANGE" timestamp="${xml(timestamp)}" />

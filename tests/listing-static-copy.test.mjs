@@ -166,7 +166,8 @@ test("manual static copy survives normalization and OpenImmo exports every separ
   });
   assert.match(xml, /<ausstatt_beschr><!\[CDATA\[Manuelle Ausstattung ohne technische Werbeaussage\.\]\]><\/ausstatt_beschr>/u);
   assert.match(xml, /<sonstige_angaben><!\[CDATA\[Manuelles Sonstiges\.\]\]><\/sonstige_angaben>/u);
-  assert.match(xml, /<courtage_hinweis><!\[CDATA\[Manuelle Provision\.\]\]><\/courtage_hinweis>/u);
+  assert.doesNotMatch(xml, /<courtage_hinweis>/u);
+  assert.equal(restoredListing.staticTexts.provision, "Manuelle Provision.");
   assert.match(xml, /feldname="Anmerkung"><!\[CDATA\[Manuelle Anmerkung\.\]\]/u);
   assert.match(xml, /feldname="Allgemeine Geschäftsbedingungen"><!\[CDATA\[Manuelle AGB\.\]\]/u);
   assert.match(xml, /feldname="Freier Textblock für Empfehlungen"><!\[CDATA\[Manuelle Empfehlung\.\]\]/u);
@@ -175,6 +176,8 @@ test("manual static copy survives normalization and OpenImmo exports every separ
   assert.match(xml, /<energietyp kfw40="true" kfw55="true" \/>/u);
   assert.match(xml, /Projektierte Energieeffizienzklasse"><!\[CDATA\[A\+\+ – Planungswert/u);
   assert.match(xml, /<provisionspflichtig>false<\/provisionspflichtig>/u);
+  assert.match(xml, /<baujahr>2027<\/baujahr>/u);
+  assert.match(xml, /<verfuegbar_ab>2027<\/verfuegbar_ab>/u);
 });
 
 test("a manual blocked claim remains stored and prevents export instead of being replaced", () => {

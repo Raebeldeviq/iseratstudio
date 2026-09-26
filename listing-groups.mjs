@@ -36,7 +36,7 @@ export const LISTING_GROUP_AUTOMATION_DEFAULTS = Object.freeze({
 });
 
 const REQUIRED_PROJECTING_DEFAULT_KEYS = Object.freeze([
-  "equipmentQuality", "constructionPhase", "attic", "guestWc", "gardenUse",
+  "equipmentQuality", "constructionYear", "constructionPhase", "availableFrom", "attic", "guestWc", "gardenUse",
   "underfloorHeating", "electricFuel", "airSourceHeatPump", "kfw40", "kfw55",
   "energyClass", "commissionRequired", "energyCertificateClass", "fittedKitchen",
   "openKitchen", "shower", "bathtub", "bathroomWindow", "environmentBus",

@@ -179,13 +179,15 @@ test("keeps planning language out of the sales location and exposes the separate
 test("keeps the immoprofessional defaults and legal copy explicit", () => {
   assert.deepEqual(IMMOPROFESSIONAL_DEFAULTS, {
     equipmentQuality: "GEHOBEN",
+    constructionYear: 2027,
     constructionPhase: "PROJEKTIERT",
+    availableFrom: "2027",
     attic: true,
     guestWc: true,
     gardenUse: true,
     underfloorHeating: false,
     electricFuel: false,
-    airSourceHeatPump: false,
+    airSourceHeatPump: true,
     kfw40: true,
     kfw55: true,
     energyClass: "A++",
@@ -205,7 +207,7 @@ test("keeps the immoprofessional defaults and legal copy explicit", () => {
   assert.match(FIXED_RECOMMENDATION_TEXT, /HEUN-Finanz/);
 });
 
-test("fills only missing projecting defaults and preserves explicit user values", () => {
+test("enforces global portal targets while preserving unrelated explicit values", () => {
   assert.deepEqual(fillMissingProjectingDefaults({
     equipmentQuality: "keine Angabe",
     constructionPhase: "",
@@ -221,17 +223,19 @@ test("fills only missing projecting defaults and preserves explicit user values"
     environmentBus: false,
   }), {
     equipmentQuality: "GEHOBEN",
+    constructionYear: 2027,
     constructionPhase: "PROJEKTIERT",
+    availableFrom: "2027",
     attic: true,
     guestWc: true,
     gardenUse: true,
     underfloorHeating: false,
     electricFuel: false,
-    airSourceHeatPump: false,
-    kfw40: false,
+    airSourceHeatPump: true,
+    kfw40: true,
     kfw55: true,
-    energyClass: "B",
-    commissionRequired: true,
+    energyClass: "A++",
+    commissionRequired: false,
     energyCertificateClass: "C",
     fittedKitchen: false,
     bathroomWindow: false,
@@ -244,13 +248,15 @@ test("fills only missing projecting defaults and preserves explicit user values"
 
   assert.deepEqual(fillMissingProjectingDefaults(), {
     equipmentQuality: "GEHOBEN",
+    constructionYear: 2027,
     constructionPhase: "PROJEKTIERT",
+    availableFrom: "2027",
     attic: true,
     guestWc: true,
     gardenUse: true,
     underfloorHeating: false,
     electricFuel: false,
-    airSourceHeatPump: false,
+    airSourceHeatPump: true,
     kfw40: true,
     kfw55: true,
     energyClass: "A++",

@@ -3,7 +3,11 @@ import { createHash } from "node:crypto";
 import JSZip from "jszip";
 
 import { parseHouseVariant } from "./image-sequence.mjs";
-import { isCurrentStaticCopyText, resolveListingStaticCopy } from "./listing-copy.mjs";
+import {
+  IMMOPROFESSIONAL_DEFAULTS,
+  isCurrentStaticCopyText,
+  resolveListingStaticCopy,
+} from "./listing-copy.mjs";
 import { assertListingClaimsCompliant, LIVING_HAUS_SERIES_ID } from "./listing-claim-policy.mjs";
 
 export const CREATIVE_PAYLOAD_MISMATCH = "CREATIVE_PAYLOAD_MISMATCH";
@@ -120,7 +124,7 @@ export async function verifyCreativePayload(input) {
         errors.push(`Payload-Hausdatenfeld ${field} stimmt nicht mit dem ausgewählten Haus überein.`);
       }
     }
-    if (!zippedXml.includes(`<baujahr>${xmlValue(house?.constructionYear)}</baujahr>`)) errors.push("Payload-Baujahr stimmt nicht mit dem ausgewählten Haus überein.");
+    if (!zippedXml.includes(`<baujahr>${xmlValue(IMMOPROFESSIONAL_DEFAULTS.constructionYear)}</baujahr>`)) errors.push("Payload-Baujahr stimmt nicht mit dem globalen Portalwert überein.");
     if (project) {
       const staticCopy = resolveListingStaticCopy(listing);
       const expectedTexts = {
@@ -151,7 +155,6 @@ export async function verifyCreativePayload(input) {
         }
       }
       const staticFieldChecks = [
-        ["courtage_hinweis", staticCopy.values.provision],
         ["user_defined_simplefield feldname=\"Anmerkung\"", staticCopy.values.annotation],
         ["user_defined_simplefield feldname=\"Allgemeine Geschäftsbedingungen\"", staticCopy.values.terms],
         ["user_defined_simplefield feldname=\"Freier Textblock für Empfehlungen\"", staticCopy.values.recommendation],
@@ -160,6 +163,9 @@ export async function verifyCreativePayload(input) {
         if (!zippedXml.includes(`<${tag}>${cdataValue(value)}`)) {
           errors.push(`Payload-statisches Textfeld ${tag} stimmt nicht mit der ausgewählten Rotationskopie überein.`);
         }
+      }
+      if (zippedXml.includes("<courtage_hinweis>")) {
+        errors.push("Payload enthält trotz Provisionsfreiheit einen Courtage-Hinweis.");
       }
     }
   } catch (error) {

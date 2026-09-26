@@ -18,7 +18,7 @@ import {
   LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID,
   LIVING_HAUS_SERIES_ID,
 } from "../listing-claim-policy.mjs";
-import { PREVIOUS_STATIC_COPY } from "../listing-copy.mjs";
+import { IMMOPROFESSIONAL_DEFAULTS, PREVIOUS_STATIC_COPY } from "../listing-copy.mjs";
 
 const expectedCounts = {
   activeListings: 1,
@@ -60,7 +60,7 @@ function state() {
         status: "draft",
         statusMessage: "Entwurf",
         unrelatedListingField: "unverändert",
-        projectingSettings: { kfw40: true, kfw55: true, energyClass: "A++" },
+        projectingSettings: { ...IMMOPROFESSIONAL_DEFAULTS },
         texts: {
           title: "Unveränderter Titel",
           description: "Unveränderte Beschreibung",
@@ -102,7 +102,7 @@ function state() {
       isActive: true,
     }],
     uploadHistory: [],
-    dataSchemaVersion: 4,
+    dataSchemaVersion: 5,
     promotionImage: null,
     promotionImages: [],
     promotionUsage: [],
@@ -130,7 +130,7 @@ test("plans exactly the five approved static fields, preserves protected listing
   assert.equal(listing.texts.title, "Unveränderter Titel");
   assert.equal(listing.texts.description, "Unveränderte Beschreibung");
   assert.equal(listing.texts.location, "Unveränderte Lage");
-  assert.deepEqual(listing.projectingSettings, { kfw40: true, kfw55: true, energyClass: "A++" });
+  assert.deepEqual(listing.projectingSettings, IMMOPROFESSIONAL_DEFAULTS);
   assert.equal(listing.staticTexts.terms, PREVIOUS_STATIC_COPY.terms);
   assert.deepEqual(
     Object.fromEntries(Object.entries(listing.staticCopySources).filter(([field]) => field !== "terms")),

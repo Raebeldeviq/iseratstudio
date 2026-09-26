@@ -5,7 +5,23 @@ import { auditStudioState, cleanupStudioState, STUDIO_DATA_SCHEMA_VERSION } from
 import { WORKFLOW_STATUS } from "../workflow-status.mjs";
 
 function fixture() {
-  const listing = { id: "listing-1", externalId: "FPI-1", templateId: "house-1", uploadStatus: "Upload erfolgreich" };
+  const listing = {
+    id: "listing-1",
+    externalId: "FPI-1",
+    templateId: "house-1",
+    uploadStatus: "Upload erfolgreich",
+    projectingSettings: {
+      equipmentQuality: "LUXUS",
+      constructionYear: 2031,
+      constructionPhase: "ERSTBEZUG",
+      availableFrom: "2031",
+      airSourceHeatPump: false,
+      kfw40: false,
+      kfw55: false,
+      energyClass: "B",
+      commissionRequired: true,
+    },
+  };
   const control = { listingId: "listing-1", status: "Entwurf wartet auf Upload", processLease: { token: "old", startedAt: "2026-07-20T00:00:00.000Z" } };
   return {
     version: 1,
@@ -42,6 +58,30 @@ test("safe cleanup is idempotent and migrates canonical statuses", () => {
   assert.equal("notes" in first.state.projects[0], false);
   assert.equal(first.state.projects[0].listings.length, 1);
   assert.equal(first.state.projects[0].listings[0].status, WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT);
+  assert.deepEqual(first.state.projects[0].listings[0].projectingSettings, {
+    equipmentQuality: "GEHOBEN",
+    constructionYear: 2027,
+    constructionPhase: "PROJEKTIERT",
+    availableFrom: "2027",
+    attic: true,
+    guestWc: true,
+    gardenUse: true,
+    underfloorHeating: false,
+    electricFuel: false,
+    airSourceHeatPump: true,
+    kfw40: true,
+    kfw55: true,
+    energyClass: "A++",
+    commissionRequired: false,
+    energyCertificateClass: "",
+    fittedKitchen: true,
+    openKitchen: true,
+    shower: true,
+    bathtub: true,
+    bathroomWindow: true,
+    environmentBus: true,
+    environmentShopping: true,
+  });
   assert.equal("uploadStatus" in first.state.projects[0].listings[0], false);
   assert.equal(first.state.projects[0].listingGroup.listingControls.length, 1);
   assert.equal(first.state.projects[0].listingGroup.listingControls[0].status, WORKFLOW_STATUS.PREPARED);
