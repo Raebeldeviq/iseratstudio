@@ -23,7 +23,7 @@ test("normalizes only the supported local credentials", () => {
     unrelated: "must not be stored",
   }), {
     openAiKey: "sk-test",
-    aiModel: "gpt-5.6-luna",
+    aiModel: "gpt-6-luna",
     ftpHost: "example.test",
     ftpUser: "user",
     ftpPassword: "secret",
@@ -58,8 +58,8 @@ test("exposes only non-secret credential status to the browser", () => {
   assert.equal("ftpPassword" in status, false);
 });
 
-test("accepts all three GPT-5.6 quality profiles", () => {
-  for (const aiModel of ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"]) {
+test("accepts GPT-6 Luna and the stronger profiles", () => {
+  for (const aiModel of ["gpt-6-luna", "gpt-5.6-terra", "gpt-5.6-sol"]) {
     assert.equal(normalizeCredentials({ aiModel }).aiModel, aiModel);
   }
 });

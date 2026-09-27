@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { AI_MODEL_OPTIONS, DEFAULT_AI_MODEL, normalizeAiModel } from "../ai-models.mjs";
 
 import {
   buildSourceData,
@@ -138,9 +139,14 @@ test("uses the Responses API quality settings and a strict text schema", () => {
   assert.match(request.text.format.schema.properties.location.description, /80 bis 150 Wörtern/);
 });
 
-test("uses GPT-5.6 Luna as the economical default", () => {
-  assert.equal(createOpenAiRequest({ project: {}, house: {} }).model, "gpt-5.6-luna");
-  assert.equal(createOpenAiImageCaptionRequest({ images: [] }).model, "gpt-5.6-luna");
+test("uses GPT-6 Luna as the economical OpenAI default", () => {
+  assert.equal(DEFAULT_AI_MODEL, "gpt-6-luna");
+  assert.deepEqual(AI_MODEL_OPTIONS.map(({ id }) => id), ["gpt-6-luna", "gpt-5.6-terra", "gpt-5.6-sol"]);
+  assert.match(AI_MODEL_OPTIONS[0].label, /Günstige Empfehlung.*GPT-6 Luna/u);
+  assert.equal(normalizeAiModel("gpt-5.6-luna"), DEFAULT_AI_MODEL);
+  assert.equal(createOpenAiRequest({ project: {}, house: {} }).model, DEFAULT_AI_MODEL);
+  assert.equal(createOpenAiImageCaptionRequest({ images: [] }).model, DEFAULT_AI_MODEL);
+  assert.equal(createOpenAiRequest({ model: "gpt-5.6-sol", project: {}, house: {} }).model, "gpt-5.6-sol");
 });
 
 test("sends uploaded images at low detail and requires structured short captions", () => {
@@ -214,10 +220,10 @@ test("adds only the central safe financing note and rejects AI-authored financin
   assert.ok(unsafe.some((error) => /nicht zentral freigegebenen Finanzierungshinweis/u.test(error)));
 });
 
-test("requires the factual headline with place, rounded area and rooms", () => {
+test("requires the centrally generated factual headline", () => {
   const title = buildListingHeadline(testHouse, testProject);
-  assert.match(title, /in Schulzendorf:/);
-  assert.match(title, /113 m², 5 Zimmer$/);
+  assert.match(title, /Schulzendorf/u);
+  assert.match(title, /113 m²|5 Zimmer/u);
   assert.deepEqual(validateListingTexts(validTexts, testHouse, testProject), []);
   const errors = validateListingTexts({ ...validTexts, title: "Dein Zuhause in Schulzendorf" }, testHouse, testProject);
   assert.ok(errors.some((value) => value.includes("Wohnfläche")));

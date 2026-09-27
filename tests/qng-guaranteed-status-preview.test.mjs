@@ -25,7 +25,7 @@ function stateWithListing(texts = {}, seriesId = "livinghaus") {
   };
 }
 
-test("plans a deterministic two-USP title and central QNG description without mutating the input", () => {
+test("plans a deterministic single-USP title and preserves the historical QNG description preview without mutating input", () => {
   const state = stateWithListing();
   const before = structuredClone(state);
   const preview = planQngGuaranteedStatusMigration(state);
@@ -42,15 +42,16 @@ test("plans a deterministic two-USP title and central QNG description without mu
   const title = preview.listings[0].title;
   assert.equal(title.treatment, QNG_GUARANTEE_PREVIEW_TREATMENT.REPLACE_TITLE);
   assert.equal(title.previousText, "Projektierte Wohnidee");
-  assert.match(title.proposedText, /in Berlin: 150 m², 5 Zimmer/u);
-  assert.equal(title.usp1?.id, "qng_guarantee");
-  assert.equal(title.usp2?.id, "dgnb_series_certification");
+  assert.match(title.proposedText, /Berlin/u);
+  assert.match(title.proposedText, /150 m²/u);
+  assert.equal(title.usp1?.id, "bau_cockpit");
+  assert.equal(title.usp2, null);
+  assert.doesNotMatch(title.proposedText, /QNG.*garantiert/iu);
   assert.equal(title.claimValidator.ok, true);
   assert.equal(title.claimValidator.blockingIssues.length, 0);
   assert.equal(title.titleLength, title.proposedText.length);
   assert.ok(title.titleLength <= title.titleLimit);
-  assert.equal(title.usp1?.evidence.evidenceKind, "qng_series_guarantee");
-  assert.match(title.usp2?.evidence.evidenceReference || "", /DGNB/u);
+  assert.match(title.usp1?.evidence.evidenceReference || "", /Bauherren-Cockpit/u);
   assert.deepEqual(preview.listings[0].description, {
     treatment: QNG_GUARANTEE_PREVIEW_TREATMENT.ADD_DESCRIPTION,
     previousText: "Sachliche Objektbeschreibung.",
@@ -125,6 +126,6 @@ test("reports deterministic opening, USP and pair distributions for the active t
   assert.ok(Object.keys(preview.distribution.emotionalOpenings).length > 1);
   assert.ok(Object.keys(preview.distribution.uspCombinations).length > 1);
   assert.equal(Object.values(preview.distribution.uspCombinations).reduce((sum, count) => sum + count, 0), 16);
-  assert.ok(preview.listings.every((listing) => listing.title.usp1 && listing.title.usp2));
+  assert.ok(preview.listings.every((listing) => listing.title.usp1 && !listing.title.usp2));
   assert.ok(preview.listings.every((listing) => listing.title.claimValidator.ok));
 });

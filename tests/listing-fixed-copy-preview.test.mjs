@@ -102,13 +102,13 @@ test("classifies only an exact legacy system standard as a safe later migration 
   assert.ok(report.migrationCandidates.every((candidate) => candidate.treatment === LISTING_FIXED_COPY_TREATMENT.STANDARD_REPLACE_SAFE));
 });
 
-test("reports a master-text block when the I-KON package evidence is missing", () => {
+test("the revised equipment master does not imply I-KON when package evidence is missing", () => {
   const input = state();
   input.houses[0].technicalPackage = "";
   const report = planListingFixedCopyPreview(input);
-  assert.equal(report.counts.masterClaimPass, 0);
-  assert.equal(report.counts.masterClaimBlock, 3);
-  assert.ok(report.listings.every((listing) => listing.masterClaimValidator.blockingIssues.length > 0));
+  assert.equal(report.counts.masterClaimPass, 3);
+  assert.equal(report.counts.masterClaimBlock, 0);
+  assert.ok(report.listings.every((listing) => listing.masterClaimValidator.blockingIssues.length === 0));
 });
 
 test("CLI loads one catalog snapshot, supports JSON and has no mutation path", async () => {

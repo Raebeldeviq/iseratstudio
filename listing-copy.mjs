@@ -1,6 +1,5 @@
 import {
   releasedTitleUsps,
-  TITLE_USP_ID,
 } from "./listing-claim-policy.mjs";
 import { parseHouseVariant } from "./image-sequence.mjs";
 
@@ -25,7 +24,7 @@ ${FIXED_DESCRIPTION_CTA}`;
  * Ausstattung, Sonstiges, Anmerkung und AGB bewahren manuelle Quellen;
  * Provision und Empfehlung sind ausdrücklich globale Portaltexte.
  */
-export const STATIC_COPY_VERSION = 2;
+export const STATIC_COPY_VERSION = 3;
 
 export const STATIC_COPY_FIELD = Object.freeze({
   EQUIPMENT: "equipment",
@@ -39,7 +38,7 @@ export const STATIC_COPY_FIELD = Object.freeze({
 export const STATIC_COPY_FIELDS = Object.freeze(Object.values(STATIC_COPY_FIELD));
 export const STATIC_COPY_SOURCE = Object.freeze({ STANDARD: "standard", MANUAL: "manual" });
 
-export const FIXED_EQUIPMENT_TEXT = `Bei Living Haus erlebst du Hausbau auf einem neuen Level – einfach, transparent und umfassend begleitet. Viele Leistungen, die du für dein Bauvorhaben benötigst, sind bereits im Leistungsumfang enthalten: von der Bodenplatte und einem umfangreichen Versicherungspaket über Architektur- und Planungsleistungen bis hin zu Grundstücks- und Finanzierungsservice. Hinzu kommt die 18-monatige Festpreisgarantie von Living Haus, die dir zusätzliche Planungssicherheit gibt.
+export const PREVIOUS_FIXED_EQUIPMENT_TEXT = `Bei Living Haus erlebst du Hausbau auf einem neuen Level – einfach, transparent und umfassend begleitet. Viele Leistungen, die du für dein Bauvorhaben benötigst, sind bereits im Leistungsumfang enthalten: von der Bodenplatte und einem umfangreichen Versicherungspaket über Architektur- und Planungsleistungen bis hin zu Grundstücks- und Finanzierungsservice. Hinzu kommt die 18-monatige Festpreisgarantie von Living Haus, die dir zusätzliche Planungssicherheit gibt.
 
 Ein wichtiger Bestandteil deines Living Hauses ist das I-KON-Konzept. Dabei werden verschiedene Komponenten der Haus- und Energietechnik aufeinander abgestimmt: Photovoltaikanlage, Batteriespeicher, Wärmepumpentechnik, Komfortlüftung mit Wärmerückgewinnung und eine entsprechend ausgelegte Gebäudehülle. So entsteht ein abgestimmtes technisches Gesamtkonzept, das die Nutzung selbst erzeugter Energie unterstützt und den Energiebedarf des Hauses berücksichtigt.
 
@@ -56,6 +55,12 @@ Und während des gesamten Weges begleite ich dich persönlich: Ich, Pascal Fröh
 Living Haus verbindet planbaren Hausbau, moderne Haustechnik, individuelle Gestaltungsmöglichkeiten und persönliche Betreuung.
 
 👉 Ruf mich direkt an und vereinbare deine persönliche Beratung: +49 160 930 87 202.`;
+
+export const FIXED_EQUIPMENT_TEXT = `Bei Living Haus bilden konkrete Leistungen den Rahmen für dein Bauvorhaben: Die 18-monatige Festpreisgarantie beginnt mit der Auftragsbestätigung. Das Leistungspaket umfasst eine Bodenplatte, Bauversicherungen sowie Architektur- und Planungsleistungen. Welche Ausführung und welche Leistungen für dein Haus vereinbart werden, ergibt sich aus der individuellen Bau- und Leistungsbeschreibung.
+
+Mit der Bau-Cockpit-App kannst du Termine, den Baufortschritt und wichtige Dokumente an einem Ort verfolgen. Für den Innenausbau stehen das Zuhause-Paket mit passenden Materialien, Ausbau-Coachings und digitale Tutorials zur Verfügung. Umfang und Auswahl werden für dein konkretes Bauvorhaben abgestimmt.
+
+Die HausStatterei bietet Raum, Ausstattungswünsche und Gestaltungsideen zu besprechen. So wird aus vielen einzelnen Entscheidungen Schritt für Schritt ein Haus, das zu deinen Vorstellungen passt.`;
 
 export const FIXED_OTHER_TEXT = `Das hier angebotene Grundstück ist im obigen Preis eingerechnet. Für die Hausplanung/Bauträgerleistung von Living Haus fällt keine zusätzliche Provision an. Die im Inserat ausgewiesene Provision betrifft ausschließlich den reinen Grundstückskauf.
 
@@ -153,7 +158,7 @@ Interessiert? Kontaktiere mich und vereinbare noch heute einen kostenlosen und u
  * manual source always wins, even if its text happens to match a legacy copy.
  */
 export const KNOWN_PREVIOUS_STATIC_COPY = Object.freeze({
-  equipment: Object.freeze([PREVIOUS_STATIC_COPY.equipment]),
+  equipment: Object.freeze([PREVIOUS_STATIC_COPY.equipment, PREVIOUS_FIXED_EQUIPMENT_TEXT]),
   other: Object.freeze([PREVIOUS_STATIC_COPY.other, PRE_PHASE2B_LEGACY_OTHER_TEXT]),
   provision: Object.freeze([PREVIOUS_STATIC_COPY.provision]),
   annotation: Object.freeze([PREVIOUS_STATIC_COPY.annotation]),
@@ -228,6 +233,8 @@ export function resolveListingStaticCopy(listing = {}) {
         ? STANDARD_STATIC_COPY[field]
         : sources[field] === STATIC_COPY_SOURCE.MANUAL
         ? values[field]
+        : field === STATIC_COPY_FIELD.EQUIPMENT && values[field] === PREVIOUS_FIXED_EQUIPMENT_TEXT
+        ? STANDARD_STATIC_COPY[field]
         : values[field] || STANDARD_STATIC_COPY[field],
     ])),
     sources,
@@ -375,22 +382,12 @@ export const LISTING_TITLE_MAX_LENGTH = 220;
 export const LISTING_TITLE_MIN_LENGTH = 55;
 
 const HEADLINE_OPENINGS = Object.freeze([
-  "Sicher wohnen",
-  "Entspannt wohnen",
-  "Endlich ankommen",
-  "Hier zuhause sein",
-  "Mehr Raum fürs Leben",
-  "Platz fürs Familienleben",
-  "Zuhause beginnt hier",
-  "Euer neues Zuhause",
-  "Zeit für die eigenen vier Wände",
-  "Wohnen, wie es zu euch passt",
-]);
-
-const TITLE_USP_PAIR_PREFERENCES = Object.freeze([
-  Object.freeze({ ids: [TITLE_USP_ID.QNG_GUARANTEE, TITLE_USP_ID.DGNB_SERIES_CERTIFICATION], weight: 5 }),
-  Object.freeze({ ids: [TITLE_USP_ID.QNG_GUARANTEE, TITLE_USP_ID.IKON_TECHNICAL_PACKAGE], weight: 3 }),
-  Object.freeze({ ids: [TITLE_USP_ID.DGNB_SERIES_CERTIFICATION, TITLE_USP_ID.IKON_TECHNICAL_PACKAGE], weight: 2 }),
+  "Mehr Zuhause. Mehr Möglichkeiten",
+  "Platz für euer Familienleben",
+  "Hier beginnt euer nächstes Kapitel",
+  "Ein Zuhause für große Pläne",
+  "Wohnen nach euren Vorstellungen",
+  "Raum für das, was zählt",
 ]);
 
 function hash(value) {
@@ -454,74 +451,53 @@ function headlineSeed(house, project, context) {
   ].join(":");
 }
 
-function pickWeightedPair(pairs, seed) {
-  const weight = pairs.reduce((sum, pair) => sum + pair.weight, 0);
-  if (!weight) return undefined;
-  let position = hash(`${seed}:usp-pair`) % weight;
-  for (const pair of pairs) {
-    if (position < pair.weight) return pair;
-    position -= pair.weight;
-  }
-  return pairs.at(-1);
-}
-
 function selectTitleUsps(context, seed) {
   const available = releasedTitleUsps(context);
-  const byId = new Map(available.map((usp) => [usp.id, usp]));
-  const selectablePairs = TITLE_USP_PAIR_PREFERENCES
-    .filter((pair) => pair.ids.every((id) => byId.has(id)));
-  const selectedPair = pickWeightedPair(selectablePairs, seed);
-  if (selectedPair) return selectedPair.ids.map((id) => byId.get(id));
-  return available.slice().sort((left, right) => left.priority - right.priority).slice(0, 2);
+  return available.length ? [available[hash(`${seed}:usp`) % available.length]] : [];
 }
 
-function titleFrom(opening, house, project, usps) {
+function titleFrom(opening, house, project, usps, style) {
   const area = germanNumber(Math.round(finiteNumber(house.livingArea)));
   const rooms = germanNumber(house.rooms, 1);
-  const base = `${opening} in ${listingPlace(project)}: ${area} m², ${rooms} Zimmer`;
-  return usps.length ? `${base} – ${usps.map((usp) => usp.label).join(" & ")}` : base;
+  const place = listingPlace(project);
+  const details = area !== "0" ? `${area} m²` : "dein neues Zuhause";
+  const roomDetails = rooms !== "0" ? `${rooms} Zimmer` : "Raum für euch";
+  const candidates = [
+    `${opening} in ${place}: ${details}, ${roomDetails}`,
+    `${opening}: ${details} in ${place}`,
+    `${details} für große Pläne: ${roomDetails} in ${place}`,
+    `${place} ruft: ${opening} mit ${details}`,
+    `${roomDetails} für euer Leben in ${place}: ${opening}`,
+    `Ankommen in ${place}: ${details} für euren nächsten Schritt`,
+  ];
+  const base = candidates[style % candidates.length];
+  return usps.length ? `${base} – ${usps[0].label}` : base;
 }
 
 /**
- * Selects a stable, evidence-backed two-USP title. `titleSeed` is optional
+ * Selects a stable, evidence-backed single-USP title. `titleSeed` is optional
  * but lets rotations keep their variation stable per generated version.
  */
 export function planListingHeadline(house = {}, project = {}, context = {}) {
   const factContext = listingFactContext(house, project, context);
   const seed = headlineSeed(house, project, context);
   const usps = selectTitleUsps(factContext, seed);
-  const opening = HEADLINE_OPENINGS[hash(`${seed}:opening`) % HEADLINE_OPENINGS.length];
-  let selectedOpening = opening;
-  let selectedUsps = usps;
-  let title = titleFrom(selectedOpening, house, project, selectedUsps);
-
-  if (title.length < LISTING_TITLE_MIN_LENGTH) {
-    const longerOpenings = HEADLINE_OPENINGS
-      .filter((candidate) => titleFrom(candidate, house, project, selectedUsps).length >= LISTING_TITLE_MIN_LENGTH)
-      .sort((left, right) => left.length - right.length || left.localeCompare(right, "de-DE"));
-    if (longerOpenings.length) {
-      selectedOpening = longerOpenings[hash(`${seed}:long-opening`) % longerOpenings.length];
-      title = titleFrom(selectedOpening, house, project, selectedUsps);
-    }
-  }
-  if (title.length > LISTING_TITLE_MAX_LENGTH) {
-    const shorterOpenings = HEADLINE_OPENINGS
-      .filter((candidate) => candidate.length < selectedOpening.length)
-      .sort((left, right) => left.length - right.length || left.localeCompare(right, "de-DE"));
-    if (shorterOpenings.length) {
-      selectedOpening = shorterOpenings[hash(`${seed}:short-opening`) % shorterOpenings.length];
-      title = titleFrom(selectedOpening, house, project, selectedUsps);
-    }
-  }
-  if (title.length > LISTING_TITLE_MAX_LENGTH && selectedUsps.length === 2) {
-    selectedUsps = selectedUsps.slice(0, 1);
-    title = titleFrom(selectedOpening, house, project, selectedUsps);
-  }
+  const style = hash(`${seed}:style`) % 6;
+  const openings = HEADLINE_OPENINGS.map((_, index) => HEADLINE_OPENINGS[(hash(`${seed}:opening`) + index) % HEADLINE_OPENINGS.length]);
+  const variants = openings.flatMap((candidate) =>
+    Array.from({ length: 6 }, (_, index) => ({
+      opening: candidate,
+      title: titleFrom(candidate, house, project, usps, (style + index) % 6),
+    })));
+  const selected = variants.find((variant) =>
+    variant.title.length >= LISTING_TITLE_MIN_LENGTH
+    && variant.title.length <= LISTING_TITLE_MAX_LENGTH) || variants[0];
+  const title = selected.title;
 
   return {
     title,
-    opening: selectedOpening,
-    usps: selectedUsps,
+    opening: selected.opening,
+    usps,
     availableUsps: releasedTitleUsps(factContext),
     length: title.length,
     maxLength: LISTING_TITLE_MAX_LENGTH,

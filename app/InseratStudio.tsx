@@ -2,6 +2,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { ChangeEvent, useEffect, useState } from "react";
+import { AI_MODEL_OPTIONS, DEFAULT_AI_MODEL } from "../ai-models.mjs";
 import { isDraftListing, mergeListingCollection } from "../listing-catalog-view.mjs";
 import { activeWorkingListingCount } from "../active-listings.mjs";
 import { plotAddressSelection, selectablePlotIds, selectablePlotProjects } from "../plot-selection.mjs";
@@ -158,7 +159,7 @@ function normalizePromotionLibrary(value: StudioState): PromotionLibraryState {
 }
 
 type Tab = "plots" | "houses" | "preview" | "manager" | "settings";
-type AiModel = "gpt-5.6-luna" | "gpt-5.6-terra" | "gpt-5.6-sol";
+type AiModel = "gpt-6-luna" | "gpt-5.6-terra" | "gpt-5.6-sol";
 type FtpSecurity = "explicit" | "implicit" | "none";
 type MediaLibraryKind = "house" | "floorplan" | "interior" | "location" | "marketing";
 type ManagerSortKey = "city" | "uploadDate" | "lastUpdate" | "nextUpdate" | "health" | "status";
@@ -830,7 +831,7 @@ export default function InseratStudio() {
   const [uploadStatus, setUploadStatus] = useState("");
   const [helperOnline, setHelperOnline] = useState(false);
   const [openAiKey, setOpenAiKey] = useState("");
-  const [aiModel, setAiModel] = useState<AiModel>("gpt-5.6-luna");
+  const [aiModel, setAiModel] = useState<AiModel>(DEFAULT_AI_MODEL);
   const [generatingAi, setGeneratingAi] = useState(false);
   const [credentialsReady, setCredentialsReady] = useState(false);
   const [credentialSaveLabel, setCredentialSaveLabel] = useState("Verschlüsselter Zugangstresor wird vorbereitet …");
@@ -1005,9 +1006,9 @@ export default function InseratStudio() {
           setOpenAiKeyVerified(Boolean(data.credentials.hasOpenAiKey));
           const storedModel = data.credentials.aiModel;
           setAiModel(
-            storedModel === "gpt-5.6-terra" || storedModel === "gpt-5.6-sol"
+            storedModel === "gpt-6-luna" || storedModel === "gpt-5.6-terra" || storedModel === "gpt-5.6-sol"
               ? storedModel
-              : "gpt-5.6-luna",
+              : DEFAULT_AI_MODEL,
           );
           setFtpHost(data.credentials.ftpHost || IMMOPROFESSIONAL_FTPS_HOST);
           setFtpUser(data.credentials.ftpUser || IMMOPROFESSIONAL_DEFAULT_USERNAME);
@@ -3911,9 +3912,7 @@ export default function InseratStudio() {
               <label className="field">
                 <span>Qualitätsprofil</span>
                 <select value={aiModel} onChange={(event) => setAiModel(event.target.value as AiModel)}>
-                  <option value="gpt-5.6-luna">Günstige Empfehlung · GPT-5.6 Luna</option>
-                  <option value="gpt-5.6-terra">Mehr Qualitätsreserve · GPT-5.6 Terra</option>
-                  <option value="gpt-5.6-sol">Maximale Textqualität · GPT-5.6 Sol</option>
+                  {AI_MODEL_OPTIONS.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}
                 </select>
               </label>
             </div>

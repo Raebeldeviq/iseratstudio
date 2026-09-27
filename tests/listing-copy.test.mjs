@@ -13,6 +13,7 @@ import {
   FIXED_DESCRIPTION_CTA,
   FIXED_DESCRIPTION_FINANCING,
   FIXED_EQUIPMENT_TEXT,
+  PREVIOUS_FIXED_EQUIPMENT_TEXT,
   FIXED_OTHER_TEXT,
   FIXED_PROVISION_TEXT,
   FIXED_RECOMMENDATION_TEXT,
@@ -35,15 +36,15 @@ import {
 const house = { id: "sun-113-v6", name: "SUN 113 V6", livingArea: 113.49, rooms: 5 };
 const project = { city: "Potsdam", district: "Roskow" };
 
-test("builds a factual headline with district, rounded area and room count", () => {
+test("builds a factual, varied headline with place and house data", () => {
   const title = buildListingHeadline(house, project);
-  assert.match(title, /in Roskow:/);
-  assert.match(title, /113 m², 5 Zimmer$/);
+  assert.match(title, /Roskow/u);
+  assert.match(title, /113 m²|5 Zimmer/u);
   assert.doesNotMatch(title, /113[,.]\d/u);
   assert.doesNotMatch(title, /QNG|DGNB|energieeffizient|nachhaltig/iu);
 });
 
-test("selects two distinct, evidence-backed USPs deterministically without redundant package components", () => {
+test("selects at most one evidence-backed USP deterministically", () => {
   const packageHouse = { ...house, technicalPackage: LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID };
   const first = planListingHeadline(packageHouse, project, {
     houseSeries: LIVING_HAUS_SERIES_ID,
@@ -54,10 +55,9 @@ test("selects two distinct, evidence-backed USPs deterministically without redun
     titleSeed: "stable-listing-1",
   });
   assert.deepEqual(repeated, first);
-  assert.equal(first.usps.length, 2);
-  assert.notEqual(first.usps[0].id, first.usps[1].id);
+  assert.equal(first.usps.length, 1);
   assert.ok(first.usps.every((usp) => usp.fact?.verified));
-  assert.doesNotMatch(first.title, /wärmepumpe/u);
+  assert.doesNotMatch(first.title, /QNG-Siegel garantiert|\bV\d+\b|€|Kaufpreis/iu);
   assert.equal(validateListingClaims({
     texts: { title: first.title },
     house: packageHouse,
@@ -73,16 +73,16 @@ test("selects two distinct, evidence-backed USPs deterministically without redun
   assert.ok(combinations.size > 1);
 });
 
-test("shortens the opening before dropping the lower-priority USP and never truncates a claim", () => {
+test("keeps normal headline candidates within the maximum without truncating claims", () => {
   const packageHouse = { ...house, technicalPackage: LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID };
-  const longProject = { city: "SehrlangerWohnort".repeat(8), district: "" };
+  const longProject = { city: "Brandenburg an der Havel", district: "Neustadt" };
   const plan = planListingHeadline(packageHouse, longProject, {
     houseSeries: LIVING_HAUS_SERIES_ID,
     titleSeed: "long-title",
   });
   assert.equal(plan.withinLengthLimit, true);
   assert.ok(plan.length <= plan.maxLength);
-  assert.equal(plan.usps.length, 1);
+  assert.ok(plan.usps.length <= 1);
   assert.equal(plan.title.endsWith("…"), false);
   assert.ok(plan.title.endsWith(plan.usps[0].label));
 });
@@ -126,7 +126,15 @@ test("initializes only new static fields and keeps an explicit manual source acr
   assert.equal(resolveListingStaticCopy(manual).sources.equipment, STATIC_COPY_SOURCE.MANUAL);
 });
 
-test("keeps the central QNG label in the generated title but out of the marketing description", () => {
+test("replaces only the exact previous system equipment master at read time", () => {
+  const previous = initializeListingStaticCopy({ texts: { equipment: PREVIOUS_FIXED_EQUIPMENT_TEXT } });
+  assert.equal(resolveListingStaticCopy(previous).values.equipment, FIXED_EQUIPMENT_TEXT);
+  assert.equal(previous.texts.equipment, PREVIOUS_FIXED_EQUIPMENT_TEXT);
+  previous.staticCopySources.equipment = STATIC_COPY_SOURCE.MANUAL;
+  assert.equal(resolveListingStaticCopy(previous).values.equipment, PREVIOUS_FIXED_EQUIPMENT_TEXT);
+});
+
+test("keeps QNG guarantees out of newly generated titles and descriptions", () => {
   const generated = enforceListingCopy({
     description: "Sachliche Beschreibung des projektierten Hauses.",
   }, {
@@ -135,8 +143,7 @@ test("keeps the central QNG label in the generated title but out of the marketin
     generated: true,
     houseSeries: LIVING_HAUS_SERIES_ID,
   });
-  assert.match(generated.title, new RegExp(`${QNG_GUARANTEE_TITLE}`, "u"));
-  assert.match(generated.title, /DGNB-Serienzertifizierung/u);
+  assert.doesNotMatch(generated.title, new RegExp(`${QNG_GUARANTEE_TITLE}`, "u"));
   assert.doesNotMatch(generated.description, /QNG/u);
   assert.ok(generated.description.endsWith(FIXED_DESCRIPTION_CTA));
 

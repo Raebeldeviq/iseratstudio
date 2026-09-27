@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { APPLICATION_DATA_DIRECTORY } from "./platform-paths.mjs";
 import { normalizeFtpHost } from "./ftp-config.mjs";
+import { normalizeAiModel } from "./ai-models.mjs";
 
 const KEYCHAIN_SERVICE = "de.fabian-pascal.inseratstudio.credentials";
 const KEYCHAIN_ACCOUNT = userInfo().username;
@@ -84,9 +85,8 @@ function clean(value, maximum = 500) {
 }
 
 export function normalizeCredentials(input = {}) {
-  const supportedModels = new Set(["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"]);
   const supportedSecurity = new Set(["explicit", "implicit", "none"]);
-  const model = supportedModels.has(input.aiModel) ? input.aiModel : "gpt-5.6-luna";
+  const model = normalizeAiModel(input.aiModel);
   const ftpSecure = supportedSecurity.has(input.ftpSecure) ? input.ftpSecure : "explicit";
   return {
     openAiKey: clean(input.openAiKey, 400),

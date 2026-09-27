@@ -1,5 +1,24 @@
 # Änderungsprotokoll
 
+## Unreleased · Luna 6, evidenzbasierte USPs und Ein-USP-Überschriften – 27. September 2026
+
+### Report
+
+- Die günstige OpenAI-Empfehlung verwendet zentral `gpt-6-luna`; Terra und Sol bleiben wählbar. Bestehende gespeicherte 5.6-Luna-Auswahlen fallen auf die neue Empfehlung zurück.
+- Die Living-Haus-Checkliste ist in der bestehenden Claim-Policy als kategorisierter USP-Bestand erfasst. Titel wählen höchstens einen aus einem passenden, freigegebenen Fakt mit Evidenz. Neue Titel enthalten keine QNG-Garantiezusage.
+- Der neue Ausstattungsstandard nennt konkrete belegte Leistungen ohne pauschale Leistungsversprechen. Nur der exakt erkannte alte Systemstandard wird beim Lesen ersetzt; manuelle Texte bleiben unverändert.
+- Zehn read-only generierte Titel mit Faktquelle und Claim-Ergebnis sind in [der Freigabenotiz](docs/releases/Luna6-USP-Titel-2026-09-27.md) dokumentiert.
+
+### Begründung
+
+Die Modellwahl hat eine gemeinsame Konfiguration für Oberfläche, gespeicherte Zugangseinstellungen und OpenAI-Anfragen. USP-Auswahl und Evidenzprüfung verbleiben in der vorhandenen zentralen Claim-Policy; die Export- und Uploadbarrieren wurden nicht geändert.
+
+### Hürden und Risiken
+
+- Die Checkliste beschreibt Hersteller- und Serienleistungen, aber nicht automatisch die individuelle Förderfähigkeit oder jede Hauskonfiguration. KFN/QNG-Förderfähigkeit und ausstattungsabhängige Merkmale werden daher nicht pauschal in Titel übernommen.
+- Historische manuelle Texte und bereits veröffentlichte Überschriften bleiben erhalten. Die neue Formulierung greift bei Neugenerierung bzw. bei exakt erkanntem alten Systemstandard; ein Massenlauf oder Upload erfolgt nicht.
+- Der historische QNG-Garantie-Fakt der bisherigen Policy bleibt für Bestandsdaten unangetastet; er ist keine Quelle für neue Titel. Eine gesonderte fachliche Bereinigung dieser Altlogik wäre ein eigener Auftrag.
+
 ## Unreleased · Globale Bildrollenübernahme – 22. September 2026
 
 ### Report

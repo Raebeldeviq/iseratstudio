@@ -94,7 +94,7 @@ function titlePreview(project, listing, house, context) {
     return {
       treatment: QNG_GUARANTEE_PREVIEW_TREATMENT.MANUAL_REVIEW,
       ...base,
-      reason: "Die Zwei-USP-Überschrift überschreitet das zulässige Titellimit, obwohl der niedrigere USP bereits entfernt wurde.",
+      reason: "Die Überschrift überschreitet das zulässige Titellimit.",
     };
   }
   if (!claimValidation.ok) {

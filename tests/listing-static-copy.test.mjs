@@ -119,16 +119,16 @@ test("the exact equipment master is fact-validated, not globally exempted", () =
   });
   assert.equal(valid.ok, true, JSON.stringify(valid.blockingIssues));
 
-  const noPackage = validateListingClaims({
+  const noSeriesEvidence = validateListingClaims({
     texts: listing.texts,
     staticTexts: listing.staticTexts,
     approvedMasterTextFields: ["equipment"],
-    house: { ...house(), technicalPackage: "" },
+    house: { ...house(), technicalPackage: "", seriesId: "fremdhersteller" },
     project: project(listing),
-    houseSeries: LIVING_HAUS_SERIES_ID,
+    houseSeries: "fremdhersteller",
   });
-  assert.equal(noPackage.ok, false);
-  assert.ok(noPackage.blockingIssues.some((issue) => /ikon_technical_package|photovoltaic/u.test(issue.reason)));
+  assert.equal(noSeriesEvidence.ok, false);
+  assert.ok(noSeriesEvidence.blockingIssues.some((issue) => /included_building_services|fixed_price_guarantee/u.test(issue.reason)));
 });
 
 test("normalization preserves manual storage while export enforces the two requested global portal texts", () => {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  CHECKLIST_USP_CATALOG,
   CLAIM_CATEGORY,
   FACT_EVIDENCE_KIND,
   FACT_SCOPE,
@@ -53,6 +54,16 @@ const issueCategories = (text, facts = []) => validateListingClaims({
   texts: { description: text },
   listingFacts: facts,
 }).blockingIssues.map((issue) => issue.category);
+
+test("keeps checklist USPs categorized and requires separate released evidence for headlines", () => {
+  assert.equal(CHECKLIST_USP_CATALOG.length, 26);
+  assert.deepEqual(new Set(CHECKLIST_USP_CATALOG.map((usp) => usp.category)), new Set(["A", "B", "C", "D"]));
+  assert.equal(CHECKLIST_USP_CATALOG.find((usp) => usp.label === "QNG-förderfähig")?.category, "C");
+  assert.equal(CHECKLIST_USP_CATALOG.find((usp) => usp.label === "Zuhause-Darlehen")?.titleEligible, false);
+  assert.deepEqual(releasedTitleUsps({ houseSeries: "fremdhersteller" }), []);
+  assert.ok(releasedTitleUsps({ houseSeries: LIVING_HAUS_SERIES_ID }).every((usp) => usp.fact?.evidenceReference));
+  assert.ok(releasedTitleUsps({ houseSeries: LIVING_HAUS_SERIES_ID }).every((usp) => !/QNG.*garantiert/iu.test(usp.label)));
+});
 
 test("blocks every required general, performance and climate claim with a structured BLOCK finding", () => {
   const cases = [
@@ -187,7 +198,10 @@ test("releases compact title USPs only from the matching structured series and p
     house: { technicalPackage: "livinghaus-ikon-standard" },
   };
   assert.deepEqual(releasedTitleUsps(context).map((usp) => usp.id), [
-    "qng_guarantee",
+    "fixed_price_guarantee",
+    "building_insurance",
+    "bau_cockpit",
+    "structural_guarantee",
     "dgnb_series_certification",
     "ikon_technical_package",
   ]);
@@ -406,10 +420,11 @@ test("deterministic generation uses the fact-covered standard copy and preserves
   }).ok, true);
   assert.equal(generated.equipment, FIXED_EQUIPMENT_TEXT);
   assert.equal(generated.other, FIXED_OTHER_TEXT);
-  assert.match(generated.equipment, /DGNB-Zertifizierung/u);
+  assert.match(generated.equipment, /18-monatige Festpreisgarantie/u);
+  assert.doesNotMatch(generated.equipment, /Hausbau auf einem neuen Level|rundum sorglos|maximale Sicherheit/iu);
   assert.doesNotMatch(generated.equipment, /QNG/u);
-  assert.match(generated.title, /m², 5 Zimmer/u);
-  assert.match(generated.title, /QNG-Siegel garantiert|DGNB-Serienzertifizierung|I-KON-Technikpaket/u);
+  assert.match(generated.title, /\b(?:m²|Zimmer)\b/u);
+  assert.doesNotMatch(generated.title, /QNG-Siegel garantiert/u);
   assert.doesNotMatch(generated.description, /QNG/u);
   assert.doesNotMatch(generated.description, /nachhaltig|energieeffizient|dgnb/iu);
 

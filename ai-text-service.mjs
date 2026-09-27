@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { normalizeAiModel } from "./ai-models.mjs";
 import {
   buildListingHeadline,
   enforceListingCopy,
@@ -12,8 +13,6 @@ import {
   validateListingClaims,
 } from "./listing-claim-policy.mjs";
 
-const DEFAULT_MODEL = "gpt-5.6-luna";
-const ALLOWED_MODELS = new Set([DEFAULT_MODEL, "gpt-5.6-terra", "gpt-5.6-sol"]);
 const TEXT_FIELDS = ["title", "description", "equipment", "location", "other"];
 const AI_TEXT_FIELDS = ["description", "location"];
 const MAX_IMAGE_CAPTIONS = 14;
@@ -173,7 +172,7 @@ export function buildSourceData(input = {}, retryFeedback = []) {
 }
 
 export function createOpenAiRequest(input, retryFeedback = []) {
-  const model = ALLOWED_MODELS.has(input.model) ? input.model : DEFAULT_MODEL;
+  const model = normalizeAiModel(input.model);
   return {
     model,
     store: false,
@@ -213,7 +212,7 @@ export function createOpenAiRequest(input, retryFeedback = []) {
 }
 
 export function createOpenAiImageCaptionRequest(input = {}) {
-  const model = ALLOWED_MODELS.has(input.model) ? input.model : DEFAULT_MODEL;
+  const model = normalizeAiModel(input.model);
   const images = Array.isArray(input.images) ? input.images.slice(0, MAX_IMAGE_CAPTIONS) : [];
   const houseName = cleanString(input.house?.name, 180);
   const houseType = cleanString(input.house?.houseType, 120);
@@ -484,7 +483,7 @@ export async function generateAiListing(input = {}) {
     error.httpStatus = 400;
     throw error;
   }
-  if (input.model && !ALLOWED_MODELS.has(input.model)) {
+  if (input.model && normalizeAiModel(input.model) !== input.model) {
     const error = new Error("Das ausgewählte KI-Modell wird nicht unterstützt.");
     error.httpStatus = 400;
     throw error;
@@ -520,7 +519,7 @@ export async function generateAiListing(input = {}) {
     if (!feedback.length) {
       return {
         texts: Object.fromEntries(TEXT_FIELDS.map((field) => [field, texts[field].trim()])),
-        model: input.model || DEFAULT_MODEL,
+        model: normalizeAiModel(input.model),
         qualityChecked: true,
         attempts: attempt,
       };
@@ -539,7 +538,7 @@ export async function generateAiImageCaptions(input = {}) {
     error.httpStatus = 400;
     throw error;
   }
-  if (input.model && !ALLOWED_MODELS.has(input.model)) {
+  if (input.model && normalizeAiModel(input.model) !== input.model) {
     const error = new Error("Das ausgewählte KI-Modell wird nicht unterstützt.");
     error.httpStatus = 400;
     throw error;
@@ -588,7 +587,7 @@ export async function generateAiImageCaptions(input = {}) {
 
   return {
     captions,
-    model: input.model || DEFAULT_MODEL,
+    model: normalizeAiModel(input.model),
   };
 }
 

@@ -81,7 +81,42 @@ export const TITLE_USP_ID = Object.freeze({
   QNG_GUARANTEE: "qng_guarantee",
   DGNB_SERIES_CERTIFICATION: "dgnb_series_certification",
   IKON_TECHNICAL_PACKAGE: "ikon_technical_package",
+  FIXED_PRICE_GUARANTEE: "fixed_price_guarantee",
+  BUILDING_INSURANCE: "building_insurance",
+  BAU_COCKPIT: "bau_cockpit",
+  ZUHAUSE_PACKAGE: "zuhause_package",
+  STRUCTURAL_GUARANTEE: "structural_guarantee",
 });
+
+/** The checklist is a source inventory; only released facts make an entry usable. */
+export const CHECKLIST_USP_CATALOG = Object.freeze([
+  ["18 Monate Festpreisgarantie", "A", "fixed_price_guarantee", true],
+  ["Anpassung an den Baupreisindex", "A", "price_index_adjustment", false],
+  ["Bauversicherungen", "A", "included_building_services", true],
+  ["Zuhause-Darlehen", "D", "zuhause_loan", false],
+  ["Bauherren-Cockpit / Living-Haus-App", "A", "bau_cockpit", true],
+  ["DGNB-Serienzertifizierung", "A", "certification", true],
+  ["DGNB-Serienzertifizierung in Gold", "B", "dgnb_gold_eligibility", false],
+  ["QDF-Zertifizierung und digitale Hausbauakte", "D", "manufacturer_quality", false],
+  ["30 Jahre Garantie auf tragende Konstruktion", "A", "structural_guarantee", true],
+  ["5 Jahre Gewährleistung", "D", "statutory_warranty", false],
+  ["Ausstattungsberatung in der HausStatterei", "A", "hausstatterei_consultation", false],
+  ["Architektenleistung", "A", "included_building_services", false],
+  ["Bodengutachten / Gründungsempfehlung", "B", "foundation_recommendation", false],
+  ["Baustelleneinrichtung", "B", "site_setup", false],
+  ["KFN-förderfähig", "C", "kfn_eligibility", false],
+  ["QNG-förderfähig", "C", "qng_eligibility", false],
+  ["I-KON vorkonfiguriert", "B", "ikon_technical_package", true],
+  ["Luft-Wärmepumpe", "B", "heat_pump", false],
+  ["Komfortlüftung mit Wärmerückgewinnung", "B", "ventilation", false],
+  ["Zuhause-Paket", "B", "zuhause_package", false],
+  ["Bodengleiche Duschen", "B", "walk_in_shower", false],
+  ["Individuelle Küchenplanung", "B", "kitchen_planning", false],
+  ["Hoher industrieller Vorfertigungsgrad", "A", "prefabrication", false],
+  ["Bodenplatte/Keller aus einer Hand", "B", "foundation_contract", false],
+  ["Rollläden", "B", "shutters", false],
+  ["DIY-Ausbau-Coaching", "B", "zuhause_package", false],
+].map(([label, category, factKey, titleEligible]) => Object.freeze({ label, category, factKey, titleEligible })));
 
 /**
  * Die folgenden Fakten sind ausdrücklich freigegebene Living-Haus-
@@ -97,7 +132,7 @@ export const VERIFIED_LIVING_HAUS_SERIES_FACTS = Object.freeze([
     status: FACT_STATUS.VERIFIED,
     verified: true,
     seriesId: LIVING_HAUS_SERIES_ID,
-    evidenceReference: "Verifizierte Living-Haus-Serienfreigabe: DGNB",
+    evidenceReference: "living-haus-checkliste.pdf, Seite 1: DGNB-Serienzertifizierung in Gold; bestehende Living-Haus-Serienfreigabe",
   }),
   Object.freeze({
     key: "qng_guarantee",
@@ -121,7 +156,7 @@ export const VERIFIED_LIVING_HAUS_SERIES_FACTS = Object.freeze([
     status: FACT_STATUS.VERIFIED,
     verified: true,
     seriesId: LIVING_HAUS_SERIES_ID,
-    evidenceReference: "Verifizierte Living-Haus-Produktfreigabe: 18-monatige Festpreisgarantie",
+    evidenceReference: "living-haus-checkliste.pdf, Seite 1: 18 Monate Festpreisgarantie ab Auftragsbestätigung",
   }),
   Object.freeze({
     key: "included_building_services",
@@ -131,7 +166,7 @@ export const VERIFIED_LIVING_HAUS_SERIES_FACTS = Object.freeze([
     status: FACT_STATUS.VERIFIED,
     verified: true,
     seriesId: LIVING_HAUS_SERIES_ID,
-    evidenceReference: "Verifizierte Living-Haus-Produktfreigabe: enthaltene Bau- und Beratungsleistungen",
+    evidenceReference: "living-haus-checkliste.pdf, Seiten 1–2: Bauversicherungen und Architektenleistung; bestehende Produktfreigabe für weitere Leistungen",
   }),
   Object.freeze({
     key: "kitchen_eligible_configuration",
@@ -161,7 +196,27 @@ export const VERIFIED_LIVING_HAUS_SERIES_FACTS = Object.freeze([
     status: FACT_STATUS.VERIFIED,
     verified: true,
     seriesId: LIVING_HAUS_SERIES_ID,
-    evidenceReference: "Verifizierte Living-Haus-Produktfreigabe: Bau-Cockpit-App",
+    evidenceReference: "living-haus-checkliste.pdf, Seite 1: Bauherren-Cockpit / Living Haus App",
+  }),
+  Object.freeze({
+    key: "hausstatterei_consultation",
+    value: "Ausstattungsberatung in der HausStatterei",
+    source: FACT_SOURCE.VERIFIED_SERIES,
+    scope: FACT_SCOPE.HOUSE_SERIES,
+    status: FACT_STATUS.VERIFIED,
+    verified: true,
+    seriesId: LIVING_HAUS_SERIES_ID,
+    evidenceReference: "living-haus-checkliste.pdf, Seite 2: Ausstattungsberatung in der HausStatterei",
+  }),
+  Object.freeze({
+    key: "structural_guarantee",
+    value: "30 Jahre Garantie auf die tragende Holzkonstruktion",
+    source: FACT_SOURCE.VERIFIED_SERIES,
+    scope: FACT_SCOPE.HOUSE_SERIES,
+    status: FACT_STATUS.VERIFIED,
+    verified: true,
+    seriesId: LIVING_HAUS_SERIES_ID,
+    evidenceReference: "living-haus-checkliste.pdf, Seite 1: auf das dort definierte tragende Holzrahmenwerk begrenzte 30-jährige Garantie",
   }),
   Object.freeze({
     key: "dgnb_gold_eligibility",
@@ -918,17 +973,9 @@ function collectTextFields(input = {}) {
 const EQUIPMENT_MASTER_FACT_KEYS = Object.freeze([
   "included_building_services",
   "fixed_price_guarantee",
-  "ikon_technical_package",
-  "photovoltaic",
-  "battery_storage",
-  "heat_pump",
-  "ventilation",
-  "heat_recovery",
-  "building_envelope",
-  "kitchen_eligible_configuration",
   "zuhause_package",
   "bau_cockpit",
-  "dgnb_gold_eligibility",
+  "hausstatterei_consultation",
 ]);
 
 function approvedMasterTextFields(input = {}) {
@@ -1131,6 +1178,12 @@ export function releasedListingFacts(input = {}) {
       || fact.key === "qng_planning_certificate"
       || fact.key === "qng_certified"
       || fact.key === "manufacturer_quality"
+      || fact.key === "fixed_price_guarantee"
+      || fact.key === "included_building_services"
+      || fact.key === "bau_cockpit"
+      || fact.key === "zuhause_package"
+      || fact.key === "hausstatterei_consultation"
+      || fact.key === "structural_guarantee"
     )
   ));
 }
@@ -1176,24 +1229,43 @@ export function releasedTitleUsps(input = {}) {
   const facts = releasedListingFacts(input);
   return [
     {
-      id: TITLE_USP_ID.QNG_GUARANTEE,
-      label: QNG_GUARANTEE_TITLE,
+      id: TITLE_USP_ID.FIXED_PRICE_GUARANTEE,
+      label: "18 Monate Festpreisgarantie",
       priority: 1,
-      fact: facts.find(qngGuaranteeFact),
+      fact: facts.find((fact) => fact.key === "fixed_price_guarantee" && fact.status === FACT_STATUS.VERIFIED && factHasRequiredEvidence(fact)),
+    },
+    {
+      id: TITLE_USP_ID.BUILDING_INSURANCE,
+      label: "Bauversicherungen inklusive",
+      priority: 2,
+      fact: facts.find((fact) => fact.key === "included_building_services" && /versicherung/iu.test(clean(fact.value)) && factHasRequiredEvidence(fact)),
+    },
+    {
+      id: TITLE_USP_ID.BAU_COCKPIT,
+      label: "Bau-Cockpit-App",
+      priority: 3,
+      fact: facts.find((fact) => fact.key === "bau_cockpit" && factHasRequiredEvidence(fact)),
+    },
+    {
+      id: TITLE_USP_ID.STRUCTURAL_GUARANTEE,
+      label: "30 Jahre Garantie auf die tragende Holzkonstruktion",
+      priority: 4,
+      fact: facts.find((fact) => fact.key === "structural_guarantee" && factHasRequiredEvidence(fact)),
     },
     {
       id: TITLE_USP_ID.DGNB_SERIES_CERTIFICATION,
       label: "DGNB-Serienzertifizierung",
-      priority: 2,
+      priority: 5,
       fact: facts.find(dgnbSeriesCertificationFact),
     },
     {
       id: TITLE_USP_ID.IKON_TECHNICAL_PACKAGE,
       label: "I-KON-Technikpaket",
-      priority: 3,
+      priority: 6,
       fact: facts.find(ikonTechnicalPackageFact),
     },
-  ].filter((usp) => usp.fact);
+  ].filter((usp) => usp.fact && CHECKLIST_USP_CATALOG.some((entry) =>
+    entry.titleEligible && entry.factKey === usp.fact.key));
 }
 
 export function technicalFactSentences(input = {}) {
