@@ -8,7 +8,7 @@ import {
   validateListingGroupVariant,
 } from "./listing-groups.mjs";
 import { fillMissingProjectingDefaults } from "./listing-copy.mjs";
-import { objectNumberForListing } from "./listing-object-number.mjs";
+import { allocateObjectNumbers } from "./object-number-sequence.mjs";
 import {
   CREATIVE_SELECTION_FORMAT,
   planCreativeHeroSelection,
@@ -71,9 +71,9 @@ export function prepareListingRotationInState(state, projectId, listingId, optio
     return { state, ok: false, message: issues[0], issues, copy: null };
   }
 
-  const reservedObjectNumbers = collectReservedObjectNumbers(state);
   const copyId = String(options.copyId || idFactory());
-  const externalId = objectNumberForListing(null, copyId, reservedObjectNumbers);
+  const allocation = allocateObjectNumbers(state, 1);
+  const externalId = allocation.objectNumbers[0];
   const version = Math.max(1, Number(sourceListing.version) || 1) + 1;
   const variedTexts = generateListingTexts(house, project, state.provider, version);
   const heroSelection = planCreativeHeroSelection(state, {
@@ -196,7 +196,7 @@ export function prepareListingRotationInState(state, projectId, listingId, optio
     copy,
   ];
   return {
-    state: replaceProject(state, { ...project, listingGroup: group, listings: projectListings }),
+    state: replaceProject(allocation.state, { ...project, listingGroup: group, listings: projectListings }),
     ok: true,
     message: `${copy.externalId} mit „${copy.templateName}“ wurde für den FTPS-Upload vorbereitet. Die veröffentlichte Quelle bleibt unverändert aktiv.`,
     issues: [],

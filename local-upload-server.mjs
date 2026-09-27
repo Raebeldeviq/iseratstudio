@@ -52,6 +52,7 @@ import { buildImportPackage } from "./app/lib/openimmo.ts";
 import { createUploadJobId } from "./batch-upload.mjs";
 import { eligiblePromotionHeroImages } from "./listing-creative-selection.mjs";
 import { assertCreativePayload } from "./listing-creative-payload-guard.mjs";
+import { assertOpenImmoExternalIdsInArchive } from "./openimmo-external-id-guard.mjs";
 import {
   assertProductionRuntime,
   loadHelperRuntimeProvenance,
@@ -488,6 +489,7 @@ async function automaticRotationUpload({ state, project, listing, runId, batchOv
       packageResult,
       archive,
     });
+    const externalIdGuard = await assertOpenImmoExternalIdsInArchive(archive);
     await logUpload("creative-payload-verified", {
       ...uploadJob,
       runId,
@@ -497,6 +499,7 @@ async function automaticRotationUpload({ state, project, listing, runId, batchOv
       runtimeOwnershipValid: runtimeOwnership.valid,
       runtimePortOwnerPid: runtimeOwnership.portOwnerPids[0],
       ...creativeGuard.diagnostics,
+      ...externalIdGuard.diagnostics,
     });
     const vault = await credentialVault();
     const ftp = vault.credentials;
@@ -762,7 +765,14 @@ const server = createServer(async (request, response) => {
 
   if (isManualBatchResumption) {
     const projectIds = requestUrl.searchParams.getAll("projectId");
-    const protectedListingIds = completedManualBatchListingIds(await uploadJobLedger.read(), projectIds);
+    const activeListingIds = requestUrl.searchParams.getAll("listingId");
+    const activeJobIds = requestUrl.searchParams.getAll("jobId");
+    const protectedListingIds = completedManualBatchListingIds(
+      await uploadJobLedger.read(),
+      projectIds,
+      activeListingIds.length ? activeListingIds : null,
+      activeJobIds.length ? activeJobIds : null,
+    );
     send(response, 200, { ok: true, protectedListingIds }, origin);
     return;
   }
@@ -989,6 +999,8 @@ const server = createServer(async (request, response) => {
       }
       if (!archiveBytes) throw new Error("Das Importpaket ist leer.");
       await uploadLog("received", { filename, archiveBytes, host: ftp.ftpHost, remotePath: ftp.ftpPath });
+      const externalIdGuard = await assertOpenImmoExternalIdsInArchive(await readFile(temporaryUploadPath));
+      await uploadLog("external-id-verified", { filename, archiveBytes, ...externalIdGuard.diagnostics });
 
       client = new Client(300_000);
       client.ftp.verbose = false;
@@ -1156,6 +1168,8 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    const externalIdGuard = await assertOpenImmoExternalIdsInArchive(archive);
+
     const vault = await credentialVault();
     const ftp = vault.credentials;
     if (!ftp.ftpHost || !ftp.ftpUser || !ftp.ftpPassword) {
@@ -1188,6 +1202,7 @@ const server = createServer(async (request, response) => {
       archiveBytes: archive.length,
       host: String(ftp.ftpHost),
       remotePath,
+      ...externalIdGuard.diagnostics,
     });
 
     client = new Client(45_000);

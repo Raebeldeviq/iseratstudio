@@ -36,13 +36,22 @@ export function assertBrowserCatalogTransition(current, next) {
     'lastUploadedAt','transferredAt','importConfirmedAt','importReportId','supersededByListingId',
     'replacementConfirmedAt','externalDeletionPending','productionDeleteState','deletedAt',
     'confirmationSource','legacyProviderVerifiedAt','legacyReconciliationId','manualReconciliation'];
+  const archivedListing = (projectId, listingId) => (next?.listingResetHistory || [])
+    .filter(archive => archive?.kind === 'plot-listing-reset' && archive.projectId === projectId)
+    .flatMap(archive => archive.listings || [])
+    .find(listing => listing?.id === listingId);
+  for (const archive of current?.listingResetHistory || []) {
+    const replacement = (next?.listingResetHistory || []).find(candidate => candidate?.id === archive?.id);
+    if (!replacement || JSON.stringify(replacement) !== JSON.stringify(archive)) throw conflict(`Resetarchiv ${archive?.id || 'ohne ID'}`);
+  }
   for (const project of current?.projects || []) {
     const incoming = next?.projects?.find(item => item.id === project.id);
     const unique = mergeListingCollection(incoming?.listings || []);
     for (const listing of project.listings || []) {
       if (isDraftListing(listing)) continue;
       const replacement = unique.find(item => item.id === listing.id);
-      if (!replacement || protectedFields.some(field => JSON.stringify(listing[field]) !== JSON.stringify(replacement[field]))) {
+      const retained = replacement || archivedListing(project.id, listing.id);
+      if (!retained || protectedFields.some(field => JSON.stringify(listing[field]) !== JSON.stringify(retained[field]))) {
         throw conflict(listing.id);
       }
     }

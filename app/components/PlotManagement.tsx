@@ -54,6 +54,8 @@ type Props = {
   onSelectionChange: (ids: string[]) => void;
   onSave: (plots: PlotRecord[], message: string) => void;
   onDelete: (plot: PlotRecord) => void;
+  onResetListings: (plot: PlotRecord) => void;
+  resetDisabled: boolean;
   onSync: (dryRun: boolean) => void;
   onScheduleChange: (enabled: boolean) => void;
 };
@@ -132,6 +134,8 @@ export default function PlotManagement({
   onSelectionChange,
   onSave,
   onDelete,
+  onResetListings,
+  resetDisabled,
   onSync,
   onScheduleChange,
 }: Props) {
@@ -148,6 +152,7 @@ export default function PlotManagement({
   const [importRows, setImportRows] = useState<PlotImportPreviewRow[]>([]);
   const [importErrors, setImportErrors] = useState<string[]>([]);
   const [message, setMessage] = useState("");
+  const [resetTarget, setResetTarget] = useState<{ plot: PlotRecord; listingCount: number } | null>(null);
   const excelInput = useRef<HTMLInputElement>(null);
   const pdfInput = useRef<HTMLInputElement>(null);
 
@@ -391,6 +396,18 @@ export default function PlotManagement({
     onDelete(plot);
   };
 
+  const beginListingReset = (plot: PlotRecord) => {
+    const listingCount = selectionMeta[plot.id]?.listingCount || 0;
+    if (!listingCount || resetDisabled) return;
+    setResetTarget({ plot, listingCount });
+  };
+
+  const confirmListingReset = () => {
+    if (!resetTarget || resetDisabled) return;
+    onResetListings(resetTarget.plot);
+    setResetTarget(null);
+  };
+
   const importExcel = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = "";
@@ -488,7 +505,7 @@ export default function PlotManagement({
             <label className="plot-selection-main"><input type="checkbox" disabled={!address.selectable} checked={address.selectable && selectedPlotIds.includes(plot.id)} onChange={() => togglePlot(plot.id)} aria-label={`${formatPlotStreet(plot) || 'Adresse offen'} auswählen`} /><span><b>{formatPlotStreet(plot) || "–"}</b><small>{plot.postalCode || "–"} {plot.city || "–"}</small>{!address.selectable ? <small>{address.reason}</small> : address.houseNumberUnconfirmed ? <small>Hausnummer unbestätigt – vor Veröffentlichung prüfen</small> : null}</span></label>
             <div className="plot-selection-facts"><span><small>Grundstück</small><b>{plot.plotSizeSqm ? `${number(plot.plotSizeSqm)} m²` : "–"}</b></span><span><small>Kaufpreis</small><b>{plot.purchasePrice ? euro(plot.purchasePrice) : "–"}</b></span><span><small>Plattform-Upload</small><b>{uploadDate ? date(uploadDate) : "Noch nicht hochgeladen"}</b></span></div>
             <em>{listingCount} Inserate{appearance.detail ? <small>{appearance.detail}</small> : null}</em>
-            <div className="plot-actions"><button onClick={() => beginEdit(plot)}>Bearbeiten</button>{plot.exposeFileReference ? <button onClick={() => openExpose(plot)}>Exposé öffnen</button> : null}{!showReview ? <button className="danger-link" onClick={() => removePlot(plot)}>Löschen</button> : null}</div>
+            <div className="plot-actions"><button onClick={() => beginEdit(plot)}>Bearbeiten</button><button className="secondary" disabled={resetDisabled || !listingCount} onClick={() => beginListingReset(plot)}>Inserate zurücksetzen</button>{plot.exposeFileReference ? <button onClick={() => openExpose(plot)}>Exposé öffnen</button> : null}{!showReview ? <button className="danger-link" onClick={() => removePlot(plot)}>Löschen</button> : null}</div>
           </article>;
         })}</div></section>)}</div>
         </section>)}</div>
@@ -544,6 +561,15 @@ export default function PlotManagement({
 
             {message ? <div className="plot-inline-message" role="status">{message}</div> : null}
             <div className="action-bar"><span>Änderungen werden zentral gespeichert und an alle verknüpften Inseratsarbeitsstände weitergereicht.</span><div className="button-row"><button className="secondary" onClick={closeEditor}>Abbrechen</button><button className="primary" disabled={pdfBusy} onClick={saveDraft}>Grundstück speichern</button></div></div>
+          </div>
+        </div>
+      ) : null}
+      {resetTarget ? (
+        <div className="plot-editor-backdrop" role="dialog" aria-modal="true" aria-label="Inserate zurücksetzen">
+          <div className="plot-editor content-card">
+            <div className="section-heading"><div><span className="eyebrow">Lokaler Arbeitsbestand</span><h2>{resetTarget.listingCount} vorbereitete Inserate für {formatPlotStreet(resetTarget.plot)} zurücksetzen?</h2></div></div>
+            <p>Das Grundstück bleibt erhalten. Die aktuellen Inseratentwürfe und vorbereiteten Uploadstände werden entfernt. Historische Auditdaten und belegte Fakten bleiben im lokalen Resetarchiv erhalten.</p>
+            <div className="action-bar"><span>Es wird kein Portal, FTP-Transfer, Scheduler oder Excel-Abgleich gestartet.</span><div className="button-row"><button className="secondary" disabled={resetDisabled} onClick={() => setResetTarget(null)}>Abbrechen</button><button className="primary" disabled={resetDisabled} onClick={confirmListingReset}>{resetTarget.listingCount} Inserate zurücksetzen</button></div></div>
           </div>
         </div>
       ) : null}

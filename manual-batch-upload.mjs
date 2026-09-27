@@ -1,4 +1,5 @@
-import { createBatchUploadPlan } from "./batch-upload.mjs";
+import { createBatchUploadPlan, createUploadJobId } from "./batch-upload.mjs";
+import { batchEligibleListings } from "./active-listings.mjs";
 import { listingControl } from "./listing-groups.mjs";
 import { updatePreparedCopyAfterUpload } from "./listing-transfer-state.mjs";
 import { WORKFLOW_STATUS } from "./workflow-status.mjs";
@@ -23,16 +24,35 @@ export function requiresPlotDailyUploadClaim(uploadOrigin) {
   return text(uploadOrigin) !== UPLOAD_ORIGIN.MANUAL_BATCH;
 }
 
-export function completedManualBatchListingIds(uploadLedger, projectIds = []) {
+export function completedManualBatchListingIds(uploadLedger, projectIds = [], activeListingIds = null, activeJobIds = null) {
   const selectedProjectIds = new Set((Array.isArray(projectIds) ? projectIds : []).map(text).filter(Boolean));
+  const activeIds = Array.isArray(activeListingIds)
+    ? new Set(activeListingIds.map(text).filter(Boolean))
+    : null;
+  const activeJobs = Array.isArray(activeJobIds)
+    ? new Set(activeJobIds.map(text).filter(Boolean))
+    : null;
   return [...new Set((uploadLedger?.jobs || [])
-    .filter((job) => selectedProjectIds.has(text(job.projectId)) && isCompletedTransfer(job.status))
+    .filter((job) => selectedProjectIds.has(text(job.projectId))
+      && (!activeIds || activeIds.has(text(job.listingId)))
+      && (!activeJobs || !text(job.jobId) || activeJobs.has(text(job.jobId)))
+      && isCompletedTransfer(job.status))
     .map((job) => text(job.listingId))
     .filter(Boolean))];
 }
 
 export function createManualBatchResumptionPlan(state, projectIds, uploadLedger, options = {}) {
-  const protectedListingIds = completedManualBatchListingIds(uploadLedger, projectIds);
+  const activeEntries = (state?.projects || [])
+    .filter((project) => (projectIds || []).includes(project.id))
+    .flatMap((project) => batchEligibleListings(project).map((listing) => ({ project, listing })));
+  const activeListingIds = activeEntries.map(({ listing }) => listing?.id).filter(Boolean);
+  const activeJobIds = activeEntries.map(({ project, listing }) => createUploadJobId(project, listing));
+  const protectedListingIds = completedManualBatchListingIds(
+    uploadLedger,
+    projectIds,
+    activeListingIds,
+    activeJobIds,
+  );
   const excludedListingIds = [...new Set([
     ...(options.excludedListingIds || []),
     ...protectedListingIds,

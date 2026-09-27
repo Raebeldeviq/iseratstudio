@@ -97,6 +97,9 @@ export function createInitialStudioState({ houses } = {}) {
     },
     promotionUsage: [],
     uploadHistory: [],
+    objectNumberSequence: { format: 1, prefix: "30460", next: 1 },
+    externalIdCorrectionHistory: [],
+    listingResetHistory: [],
     scheduler: createListingScheduler(),
     houseDistribution: normalizeHouseDistribution({}, initialHouses, initialProjects),
   };

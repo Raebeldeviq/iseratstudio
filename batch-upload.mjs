@@ -5,6 +5,7 @@ import {
 } from "./promotion-images.mjs";
 import { MAX_UPLOAD_LOGS } from "./listing-rules.mjs";
 import { normalizeWorkflowStatus, WORKFLOW_STATUS } from "./workflow-status.mjs";
+import { batchEligibleListings } from "./active-listings.mjs";
 
 export const BATCH_UPLOAD_LOG_LIMIT = MAX_UPLOAD_LOGS;
 export const ESTIMATED_SECONDS_PER_LISTING = 35;
@@ -62,9 +63,8 @@ export function createBatchUploadPlan(state, projectIds, options = {}) {
     const pendingRotationSourceIds = new Set((project.listings || [])
       .filter((listing) => listing.listingOrigin === "rotation-copy" && listing.rotationSourceListingId && !listing.lastUploadedAt)
       .map((listing) => listing.rotationSourceListingId));
-    const listings = (project.listings || []).filter((listing) =>
+    const listings = batchEligibleListings(project).filter((listing) =>
       !excludedListingIds.has(listing.id)
-      && !listing.rotationArchivedAt
       && !pendingRotationSourceIds.has(listing.id));
     const override = library.promotionSettings.manualSelection
       ? promotionOverrides[project.id] || {}

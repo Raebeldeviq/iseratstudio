@@ -68,7 +68,7 @@ function house(id, index = 0) {
 function historyCopy(id, projectId, houseId, selectedAt, heroImageId = `${houseId}-image-1`, promotionImageId = "") {
   return {
     id,
-    externalId: `30460-${String(id.replace(/\D/gu, "") || 1).padStart(6, "0")}`,
+    externalId: `30460-${String(id.replace(/\D/gu, "") || 1)}`,
     templateId: houseId,
     templateName: `Haus ${houseId.toUpperCase()}`,
     listingOrigin: "rotation-copy",
@@ -124,7 +124,7 @@ function fullState() {
     const houseValue = houses[index];
     const listing = {
       id: `source-${index + 1}`,
-      externalId: `30460-${String(index + 1).padStart(6, "0")}`,
+      externalId: `30460-${index + 1}`,
       templateId: houseValue.id,
       templateName: houseValue.name,
       price: totalPrice(houseValue, project),

@@ -2,49 +2,42 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  createHvObjectNumber,
+  allocateObjectNumbers,
   HV_OBJECT_NUMBER_PREFIX,
   isHvObjectNumber,
-  objectNumberForListing,
-} from "../listing-object-number.mjs";
+  normalizeObjectNumberSequence,
+} from "../object-number-sequence.mjs";
+import { objectNumberForListing } from "../listing-object-number.mjs";
 
-test("creates deterministic object numbers in the 30460-XXXXXX format", () => {
-  const first = createHvObjectNumber("listing-1");
-  const repeated = createHvObjectNumber("listing-1");
+test("allocates the next globally persisted 30460-N number without leading zeroes", () => {
+  const state = {
+    projects: [{ listings: [{ externalId: "30460-41" }] }],
+    listingResetHistory: [{ listings: [{ externalId: "30460-45" }] }],
+    objectNumberSequence: { format: 1, prefix: "30460", next: 42 },
+  };
+  const allocation = allocateObjectNumbers(state, 2);
 
   assert.equal(HV_OBJECT_NUMBER_PREFIX, "30460");
-  assert.match(first, /^30460-\d{6}$/u);
-  assert.equal(repeated, first);
-  assert.equal(isHvObjectNumber(first), true);
-  assert.equal(isHvObjectNumber("30460-12345"), false);
+  assert.deepEqual(allocation.objectNumbers, ["30460-46", "30460-47"]);
+  assert.equal(allocation.state.objectNumberSequence.next, 48);
+  assert.equal(isHvObjectNumber("30460-1"), true);
+  assert.equal(isHvObjectNumber("30460-999999"), true);
+  assert.equal(isHvObjectNumber("30460-000001"), false);
   assert.equal(isHvObjectNumber("FPI-123456"), false);
 });
 
-test("avoids duplicate object numbers inside one allocation run", () => {
-  const reserved = new Set();
-  const first = createHvObjectNumber("same-seed", reserved);
-  const second = createHvObjectNumber("same-seed", reserved);
-
-  assert.notEqual(second, first);
-  assert.equal(reserved.has(first), true);
-  assert.equal(reserved.has(second), true);
+test("never moves the persisted sequence backwards", () => {
+  const state = {
+    projects: [{ listings: [{ externalId: "30460-2" }] }],
+    objectNumberSequence: { format: 1, prefix: "30460", next: 120 },
+  };
+  assert.deepEqual(normalizeObjectNumberSequence(state), { format: 1, prefix: "30460", next: 120 });
 });
 
-test("renumbers drafts but preserves correct and confirmed existing identifiers", () => {
-  assert.match(
-    objectNumberForListing({ id: "draft", externalId: "FPI-DRAFT" }, "draft"),
-    /^30460-\d{6}$/u,
+test("fails closed instead of retaining or generating an FPI fallback", () => {
+  assert.throws(
+    () => objectNumberForListing({ id: "draft", externalId: "FPI-DRAFT" }),
+    { code: "EXTERNAL_OBJECT_NUMBER_REQUIRED" },
   );
-  assert.equal(
-    objectNumberForListing({ id: "current", externalId: "30460-123456" }, "current"),
-    "30460-123456",
-  );
-  assert.equal(
-    objectNumberForListing({
-      id: "uploaded",
-      externalId: "FPI-LEGACY-UPLOADED",
-      lastUploadedAt: "2026-07-27T12:00:00.000Z",
-    }, "uploaded"),
-    "FPI-LEGACY-UPLOADED",
-  );
+  assert.equal(objectNumberForListing({ id: "current", externalId: "30460-123456" }), "30460-123456");
 });

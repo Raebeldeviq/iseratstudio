@@ -1,5 +1,6 @@
 import JSZip from "jszip";
 import { APP_VERSION } from "./app-version.mjs";
+import { isHvObjectNumber } from "../../object-number-sequence.mjs";
 import { imageSequenceIssues, orderHouseImages, parseHouseVariant } from "../../image-sequence.mjs";
 import {
   fillMissingProjectingDefaults,
@@ -105,8 +106,8 @@ export function validateImportPackage(input: PackageInput): string[] {
   const externalIds = new Set<string>();
   for (const listing of input.listings) {
     const label = listing.templateName || listing.externalId || "Inserat";
-    if (!/^[a-zA-Z0-9._-]{1,100}$/.test(listing.externalId)) {
-      errors.push(`${label}: externe Objekt-ID ist ungültig.`);
+    if (!isHvObjectNumber(listing.externalId)) {
+      errors.push(`${label}: externe Objekt-ID muss das Format 30460-N besitzen.`);
     } else if (externalIds.has(listing.externalId)) {
       errors.push(`${label}: externe Objekt-ID ist doppelt.`);
     }

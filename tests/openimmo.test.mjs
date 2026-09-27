@@ -85,7 +85,7 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
     },
     listings: [{
       id: "listing-1",
-      externalId: "FPI-TEST-1",
+      externalId: "30460-101",
       templateId: "house-1",
       templateName: "Testhaus",
       price: 500000,
@@ -147,8 +147,9 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
 
   assert.ok(xml.includes(`senderversion="${APP_VERSION}"`));
   assert.match(xml, /<openimmo_anid>30435<\/openimmo_anid>/u);
-  assert.match(xml, /<openimmo_obid>FPI-TEST-1<\/openimmo_obid>/);
-  assert.match(xml, /<objektnr_extern>FPI-TEST-1<\/objektnr_extern>/);
+  assert.match(xml, /<openimmo_obid>30460-101<\/openimmo_obid>/);
+  assert.match(xml, /<objektnr_extern>30460-101<\/objektnr_extern>/);
+  assert.match(xml, /<kennung_ursprung>30460-101<\/kennung_ursprung>/);
   assert.match(xml, /<aktion aktionart="CHANGE" \/>/);
   assert.match(xml, /<bad DUSCHE="true" WANNE="true" FENSTER="true" \/>/);
   assert.match(xml, /<kueche EBK="true" OFFEN="true" \/>/);
@@ -197,7 +198,7 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
   const secondListing = {
     ...input.listings[0],
     id: "listing-2",
-    externalId: "FPI-TEST-2",
+    externalId: "30460-102",
   };
   const perListingXml = buildOpenImmoXml({
     ...input,
@@ -207,13 +208,13 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
     promotionImagesByListingId: { [input.listings[0].id]: input.promotionImage },
   });
   assert.equal(perListingXml.match(/Aktuelles Angebot für dein neues Zuhause/g)?.length, 1);
-  assert.ok(perListingXml.indexOf("Aktuelles Angebot für dein neues Zuhause") < perListingXml.indexOf("FPI-TEST-2"));
+  assert.ok(perListingXml.indexOf("Aktuelles Angebot für dein neues Zuhause") < perListingXml.indexOf("30460-102"));
   const packageResult = await buildImportPackage(input);
-  assert.match(packageResult.filename, /testprojekt-testhaus-fpi-test-1-\d{4}-\d{2}-\d{2}\.zip/);
+  assert.match(packageResult.filename, /testprojekt-testhaus-30460-101-\d{4}-\d{2}-\d{2}\.zip/);
   assert.match(packageResult.xmlFilename, /\.xml$/u);
   assert.deepEqual(packageResult.creativePayloadManifest, [{
     listingId: "listing-1",
-    externalId: "FPI-TEST-1",
+    externalId: "30460-101",
     houseId: "house-1",
     houseName: "Testhaus",
     houseVersion: "",
@@ -235,7 +236,7 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
     heroType: "action",
     heroAssetId: "promotion-image-1",
     payloadImageAssetIds: ["promotion-image-1", "image-1", "image-2", "image-3", "image-4"],
-    firstImageFilename: "fpi-test-1-01-aktuelles-angebot-fur-dein-neues-zuhause.jpg",
+    firstImageFilename: "30460-101-01-aktuelles-angebot-fur-dein-neues-zuhause.jpg",
     promotionImageEnabled: true,
   }]);
   assert.deepEqual(validateImportPackage(input), []);
@@ -272,7 +273,7 @@ test("overwrites legacy portal deviations with the global object targets during 
     },
     listings: [{
       id: "listing-explicit-projecting-values",
-      externalId: "FPI-EXPLICIT-VALUES",
+      externalId: "30460-103",
       templateId: "house-explicit-projecting-values",
       templateName: "Bestandshaus",
       price: 500000,
@@ -439,7 +440,7 @@ test("exports the fixed role sequence and keeps the action image in front", () =
     },
     listings: [{
       id: "listing-role-order",
-      externalId: "FPI-ROLE-ORDER",
+      externalId: "30460-105",
       templateId: "house-role-order",
       templateName: "SUN 130 V2",
       price: 500000,

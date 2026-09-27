@@ -3,6 +3,7 @@
 
 import { ChangeEvent, useEffect, useState } from "react";
 import { isDraftListing, mergeListingCollection } from "../listing-catalog-view.mjs";
+import { activeWorkingListingCount } from "../active-listings.mjs";
 import { plotAddressSelection, selectablePlotIds, selectablePlotProjects } from "../plot-selection.mjs";
 import {
   captionForImageRole,
@@ -99,11 +100,14 @@ import {
   applyPlotToProject,
   createProjectFromPlot,
   deletePlotRecordCascade,
+  formatPlotStreet,
   normalizePlotState,
   patchPlotFromProject,
   plotAddressKey,
   plotFromProject,
 } from "../plot-records.mjs";
+import { latestResetListingFacts, resetPlotListings } from "../plot-listing-reset.mjs";
+import { allocateObjectNumbers, isHvObjectNumber } from "../object-number-sequence.mjs";
 import { normalizeWorkflowStatus, workflowStatusLabel, WORKFLOW_STATUS } from "../workflow-status.mjs";
 import {
   formatClaimIssue,
@@ -276,19 +280,28 @@ function createVariantListing(
   variantId: string,
   order: number,
   previous?: GeneratedListing | null,
+  allocatedExternalId = "",
+  preservedListingFacts: GeneratedListing["listingFacts"] = [],
 ): GeneratedListing {
   // Bestehende Texte bleiben Bestandsdaten. Eine Neugenerierung erfolgt nur
   // auf ausdrückliche Nutzeraktion und nie während der Normalisierung.
-  if (previous) return { ...previous };
+  if (previous && !isDraftListing(previous)) return { ...previous };
   const version = Math.max(1, previous?.version || 1);
+  const persistedExternalId = String(previous?.externalId || "").trim();
+  const externalId = isHvObjectNumber(persistedExternalId)
+    ? persistedExternalId
+    : String(allocatedExternalId || "").trim();
+  if (!isHvObjectNumber(externalId)) {
+    throw new Error("Für das neue Inserat fehlt eine gültige externe Objektnummer 30460-N.");
+  }
   return initializeListingStaticCopy({
     ...previous,
     id: previous?.id || uid(),
-    externalId: previous?.externalId
-      || `FPI-${project.id.slice(0, 8)}-V${order}-${variantId.slice(0, 6)}`.toUpperCase(),
+    externalId,
     templateId: house.id,
     templateName: house.name,
     price: totalPrice(house, project),
+    listingFacts: previous?.listingFacts || preservedListingFacts,
     texts: completeListingTexts(
       house,
       project,
@@ -305,8 +318,23 @@ function createVariantListing(
   });
 }
 
+function existingOrAllocatedExternalId(
+  previous: GeneratedListing | null | undefined,
+  allocate: () => string,
+): string {
+  const existing = String(previous?.externalId || "").trim();
+  if (previous && !isDraftListing(previous)) return existing;
+  return isHvObjectNumber(existing) ? existing : allocate();
+}
+
 function normalizeMandatoryListingStandards(inputState: StudioState): StudioState {
   const state = cleanupStudioState(inputState, { apply: true }).state as StudioState;
+  let stateWithObjectNumbers = state;
+  const allocateExternalId = () => {
+    const allocation = allocateObjectNumbers(stateWithObjectNumbers, 1);
+    stateWithObjectNumbers = allocation.state as StudioState;
+    return allocation.objectNumbers[0];
+  };
   const promotion = normalizePromotionLibrary(state);
   const houses = state.houses.map((storedHouse) => {
     const house = applyConfirmedHouseModelDetails(storedHouse);
@@ -339,7 +367,16 @@ function normalizeMandatoryListingStandards(inputState: StudioState): StudioStat
           listingGroup,
           index + 1,
           house,
-          createVariantListing(house, project, state.provider, variant.id, index + 1, previous),
+          createVariantListing(
+            house,
+            project,
+            state.provider,
+            variant.id,
+            index + 1,
+            previous,
+            existingOrAllocatedExternalId(previous, allocateExternalId),
+            latestResetListingFacts(state, project.id, house.id),
+          ),
         );
       }
 
@@ -352,7 +389,16 @@ function normalizeMandatoryListingStandards(inputState: StudioState): StudioStat
           listingGroup,
           variant.order,
           house,
-          createVariantListing(house, project, state.provider, variant.id, variant.order, variant.listing),
+          createVariantListing(
+            house,
+            project,
+            state.provider,
+            variant.id,
+            variant.order,
+            variant.listing,
+            existingOrAllocatedExternalId(variant.listing, allocateExternalId),
+            latestResetListingFacts(state, project.id, house.id),
+          ),
           { active: variant.order <= HOUSES_PER_PROJECT },
         );
       }
@@ -378,7 +424,7 @@ function normalizeMandatoryListingStandards(inputState: StudioState): StudioStat
       };
     });
   return {
-    ...state,
+    ...stateWithObjectNumbers,
     ...promotion,
     uploadHistory: Array.isArray(state.uploadHistory) ? state.uploadHistory.slice(-BATCH_UPLOAD_LOG_LIMIT) : [],
     houses,
@@ -1093,7 +1139,7 @@ export default function InseratStudio() {
       .sort((left, right) => Date.parse(right) - Date.parse(left))[0] || "";
     const listingCount = linked.reduce((sum, project) => {
       const group = normalizeListingGroup(project.listingGroup, project.id) as ListingGroup;
-      return sum + Math.max(project.listings.length, group.variants.filter((variant) => variant.active && variant.templateId).length);
+      return sum + activeWorkingListingCount(project, group);
     }, 0);
     return [plot.id, {
       listingCount,
@@ -1283,6 +1329,31 @@ export default function InseratStudio() {
         body: JSON.stringify({ reference: plot.exposeFileReference }),
       }).catch(() => setNotice("Das Grundstück wurde vollständig gelöscht; die lokale Exposé-Datei konnte noch nicht archiviert werden."));
     }
+  };
+
+  const resetPlotListingWork = (plot: PlotRecord) => {
+    if (uploading) {
+      setNotice("Ein laufender Sammel-Upload muss zuerst abgeschlossen werden.");
+      return;
+    }
+    const result = resetPlotListings(state, plot.id);
+    if (!result.changed) {
+      setNotice(`${formatPlotStreet(plot)} enthält keinen aktiven Inserate-Arbeitsbestand.`);
+      return;
+    }
+    const resetListingIds = new Set(result.resetListingIds);
+    const resetProjectIds = new Set(
+      state.projects.filter((project) => project.plotId === plot.id).map((project) => project.id),
+    );
+    setState(result.state as StudioState);
+    setExcludedUploadIds((current) => current.filter((listingId) => !resetListingIds.has(listingId)));
+    setBatchItemStatuses((current) => Object.fromEntries(
+      Object.entries(current).filter(([listingId]) => !resetListingIds.has(listingId)),
+    ));
+    setPromotionOverrides((current) => Object.fromEntries(
+      Object.entries(current).filter(([projectId]) => !resetProjectIds.has(projectId)),
+    ));
+    setNotice(`${result.activeListingCount} Inserate für ${formatPlotStreet(plot)} wurden lokal zurückgesetzt. Grundstück und Audit-Historie bleiben erhalten.`);
   };
 
   const setPlotSyncSchedule = async (enabled: boolean) => {
@@ -2136,6 +2207,12 @@ export default function InseratStudio() {
       setNotice(`Vorbereitung blockiert: ${committed.issues.join(" · ")} Bitte zuerst die gewichtete Vorschau erstellen und vollständig prüfen.`);
       return;
     }
+    let stateWithObjectNumbers = state;
+    const allocateExternalId = () => {
+      const allocation = allocateObjectNumbers(stateWithObjectNumbers, 1);
+      stateWithObjectNumbers = allocation.state as StudioState;
+      return allocation.objectNumbers[0];
+    };
     const issues: string[] = [];
     let preparedListings = 0;
     const projects = state.projects.map((project) => {
@@ -2169,7 +2246,16 @@ export default function InseratStudio() {
           group,
           index + 1,
           house,
-          createVariantListing(house, project, state.provider, variant.id, index + 1, previous),
+          createVariantListing(
+            house,
+            project,
+            state.provider,
+            variant.id,
+            index + 1,
+            previous,
+            existingOrAllocatedExternalId(previous, allocateExternalId),
+            latestResetListingFacts(state, project.id, house.id),
+          ),
         ) as ListingGroup;
       }
       const sourceListings = group.variants
@@ -2189,7 +2275,7 @@ export default function InseratStudio() {
       };
     });
     setState({
-      ...state,
+      ...stateWithObjectNumbers,
       projects,
       houseDistribution: committed.distribution as HouseDistributionState,
     });
@@ -2243,12 +2329,17 @@ export default function InseratStudio() {
     if (!house || !sourceVariant) {
       return { state: current, message: "Das gewichtete Ersatzhaus oder der Ausgangsplatz ist nicht mehr vorhanden.", ok: false };
     }
+    const allocation = allocateObjectNumbers(current, 1);
+    const copyExternalId = allocation.objectNumbers[0];
     const targetSeed = createVariantListing(
       house,
       project,
       current.provider,
       sourceVariant.id,
       sourceVariant.order,
+      null,
+      copyExternalId,
+      latestResetListingFacts(current, project.id, house.id),
     );
     group = assignListingGroupVariant(
       group,
@@ -2278,7 +2369,7 @@ export default function InseratStudio() {
     const copy: GeneratedListing = {
       ...variantListing,
       id: copyId,
-      externalId: `FPI-${project.id.slice(0, 6)}-V${variant.order}-${copyId.slice(0, 8)}`.toUpperCase(),
+      externalId: copyExternalId,
       templateId: house.id,
       templateName: house.name,
       price: totalPrice(house, project),
@@ -2323,7 +2414,7 @@ export default function InseratStudio() {
     group = releaseListingOperation(group, sourceListing, token) as ListingGroup;
     return {
       state: {
-        ...current,
+        ...allocation.state,
         projects: current.projects.map((item) => item.id === project.id
           ? { ...item, listingGroup: group, listings: [...item.listings, copy] }
           : item),
@@ -2452,6 +2543,8 @@ export default function InseratStudio() {
             || projectSnapshot.listings.find(
               (listing) => listing.templateId === house.id && listing.listingOrigin !== "rotation-copy",
             );
+          const preservedListingFacts = previous?.listingFacts
+            || latestResetListingFacts(state, projectSnapshot.id, house.id);
           const response = await helperFetch("/generate-texts", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -2492,7 +2585,7 @@ export default function InseratStudio() {
                 lastName: state.provider.lastName,
                 phone: state.provider.phone,
               },
-              listingFacts: previous?.listingFacts,
+              listingFacts: preservedListingFacts,
               previousTexts: previous?.texts,
               listingPosition: index + 1,
               listingCount: houseSnapshots.length,
@@ -2521,20 +2614,25 @@ export default function InseratStudio() {
             },
             version,
           );
-          return { house, index, variant, previous, texts, version };
+          return { house, index, variant, previous, preservedListingFacts, texts, version };
         }),
       );
 
-      const sourceListings: GeneratedListing[] = generated.map(({ house, index, variant, previous, texts, version }) => {
+      let stateWithObjectNumbers = state;
+      const allocateExternalId = () => {
+        const allocation = allocateObjectNumbers(stateWithObjectNumbers, 1);
+        stateWithObjectNumbers = allocation.state as StudioState;
+        return allocation.objectNumbers[0];
+      };
+      const sourceListings: GeneratedListing[] = generated.map(({ house, variant, previous, preservedListingFacts, texts, version }) => {
         const nextListing: GeneratedListing = {
         ...previous,
         id: previous?.id ?? uid(),
-        externalId:
-          previous?.externalId ??
-          `FPI-${projectSnapshot.id.slice(0, 8)}-${house.id.slice(0, 6)}-${index + 1}`.toUpperCase(),
+        externalId: existingOrAllocatedExternalId(previous, allocateExternalId),
         templateId: house.id,
         templateName: house.name,
         price: totalPrice(house, projectSnapshot),
+        listingFacts: previous?.listingFacts || preservedListingFacts,
         texts,
         version,
         projectingSettings: fillMissingProjectingDefaults(previous?.projectingSettings),
@@ -2558,6 +2656,7 @@ export default function InseratStudio() {
 
       setState((current) => ({
         ...current,
+        objectNumberSequence: stateWithObjectNumbers.objectNumberSequence,
         projects: current.projects.map((project) =>
           project.id === projectSnapshot.id ? { ...project, listings, listingGroup } : project,
         ),
@@ -2771,6 +2870,12 @@ export default function InseratStudio() {
     try {
       const parameters = new URLSearchParams();
       for (const projectId of effectiveBatchProjectIds) parameters.append("projectId", projectId);
+      for (const address of batchPlan.addresses as Array<{ items: Array<{ listingId: string; jobId: string }> }>) {
+        for (const item of address.items) {
+          parameters.append("listingId", item.listingId);
+          parameters.append("jobId", item.jobId);
+        }
+      }
       const response = await helperFetch(`/manual-batch-resumption?${parameters.toString()}`);
       const data = (await response.json()) as { ok?: boolean; protectedListingIds?: string[]; message?: string };
       if (!response.ok || !data.ok || !Array.isArray(data.protectedListingIds)) {
@@ -3229,6 +3334,8 @@ export default function InseratStudio() {
           onSelectionChange={updateCentralPlotSelection}
           onSave={savePlotRecords}
           onDelete={deletePlot}
+          onResetListings={resetPlotListingWork}
+          resetDisabled={uploading}
           onSync={runPlotSync}
           onScheduleChange={setPlotSyncSchedule}
         />{centralHousePoolPanel}</>

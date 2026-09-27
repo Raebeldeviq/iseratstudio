@@ -490,6 +490,18 @@ export type ListingGroup = {
   updatedAt: string;
 };
 
+export type ListingResetArchive = {
+  id: string;
+  kind: "plot-listing-reset";
+  resetAt: string;
+  plotId: string;
+  projectId: string;
+  listingCount: number;
+  listingIds: string[];
+  listings: GeneratedListing[];
+  listingGroup: ListingGroup;
+};
+
 export type SchedulerSettings = {
   enabled: boolean;
   paused: boolean;
@@ -636,6 +648,12 @@ export type StudioState = {
   promotionSettings?: PromotionSettings;
   promotionUsage?: PromotionUsage[];
   uploadHistory?: BatchUploadLog[];
+  objectNumberSequence?: {
+    format: 1;
+    prefix: "30460";
+    next: number;
+  };
+  listingResetHistory?: ListingResetArchive[];
   importReports?: ImportReportRecord[];
   importReportReviews?: ImportReportReview[];
   mailImportReportStatus?: {

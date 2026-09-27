@@ -82,7 +82,7 @@ function project(listing) {
 function newListing() {
   return initializeListingStaticCopy({
     id: "static-listing",
-    externalId: "30460-STATIC",
+    externalId: "30460-501",
     templateId: "static-house",
     templateName: "SUN 151 V8",
     price: 500000,

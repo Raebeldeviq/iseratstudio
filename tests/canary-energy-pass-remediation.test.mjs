@@ -52,9 +52,19 @@ test("restores the confirmed Canary energy pass through existing verified listin
 
   const normalized = cleanupStudioState(result.state, { apply: true, now: "2026-09-27T12:00:00.000Z" }).state;
   const target = normalized.projects[0].listings.find((listing) => listing.externalId === "FPI-E0B464-V1-A4810212");
+  assert.throws(
+    () => buildOpenImmoXml({
+      project: normalized.projects[0],
+      listings: [target],
+      houses: normalized.houses,
+      provider: normalized.provider,
+    }),
+    /30460-N/u,
+  );
+  const transferableTarget = { ...target, externalId: "30460-70" };
   const xml = buildOpenImmoXml({
     project: normalized.projects[0],
-    listings: [target],
+    listings: [transferableTarget],
     houses: normalized.houses,
     provider: normalized.provider,
   });
