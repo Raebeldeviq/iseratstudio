@@ -66,6 +66,7 @@ const SUPPORTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"])
 const MAX_EXPORTED_IMAGES = 14;
 export const IMMOPROFESSIONAL_IMPORT_FIELDS = Object.freeze({
   constructionPhase: Object.freeze({ fieldName: "data104", projectedValue: "HausInPlanung" }),
+  provision: Object.freeze({ fieldName: "anklickbar" }),
   recommendation: Object.freeze({ fieldName: "allgemein2" }),
 });
 
@@ -399,7 +400,6 @@ function listingXml(
           <user_defined_simplefield feldname="Living Haus Modell">${cdata(house.name)}</user_defined_simplefield>
           <user_defined_simplefield feldname="Anmerkung">${cdata(staticCopy.values.annotation)}</user_defined_simplefield>
           <user_defined_simplefield feldname="Allgemeine Geschäftsbedingungen">${cdata(staticCopy.values.terms)}</user_defined_simplefield>
-          <user_defined_simplefield feldname="${IMMOPROFESSIONAL_IMPORT_FIELDS.recommendation.fieldName}">${cdata(staticCopy.values.recommendation)}</user_defined_simplefield>
         </freitexte>
         <anhaenge>${imageXml(listing, images)}</anhaenge>
         <verwaltung_objekt>
@@ -415,6 +415,8 @@ function listingXml(
           <weitergabe_generell>false</weitergabe_generell>
           <sprache>de</sprache>
         </verwaltung_techn>
+        <user_defined_simplefield feldname="${IMMOPROFESSIONAL_IMPORT_FIELDS.provision.fieldName}">${cdata(staticCopy.values.provision)}</user_defined_simplefield>
+        <user_defined_simplefield feldname="${IMMOPROFESSIONAL_IMPORT_FIELDS.recommendation.fieldName}">${cdata(staticCopy.values.recommendation)}</user_defined_simplefield>
       </immobilie>`;
 }
 

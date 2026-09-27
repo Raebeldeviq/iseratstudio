@@ -173,6 +173,7 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
   assert.match(geoXml, /<anzahl_etagen>2<\/anzahl_etagen>/u);
   assert.doesNotMatch(areasXml, /<anzahl_etagen>/u);
   assert.ok(xml.includes(`<courtage_hinweis><![CDATA[${FIXED_PROVISION_TEXT}]]></courtage_hinweis>`));
+  assert.doesNotMatch(xml, /5,8\s*%/u);
   assert.match(xml, /feldname="Projektierte Energieeffizienzklasse"/);
   assert.ok(xml.includes("Ausstattung"));
   assert.ok(xml.includes("Sonstiges"));
@@ -180,7 +181,11 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
   assert.ok(xml.includes(FIXED_ANNOTATION_TEXT));
   assert.ok(xml.includes(FIXED_TERMS_TEXT));
   assert.ok(xml.includes(FIXED_RECOMMENDATION_TEXT));
-  assert.ok(xml.includes(`feldname="allgemein2"><![CDATA[${FIXED_RECOMMENDATION_TEXT}]]>`));
+  const propertyExtensions = xml.match(/<\/verwaltung_techn>\s*([\s\S]*?)<\/immobilie>/u)?.[1] || "";
+  assert.ok(propertyExtensions.includes(`feldname="anklickbar"><![CDATA[${FIXED_PROVISION_TEXT}]]>`));
+  assert.ok(propertyExtensions.includes(`feldname="allgemein2"><![CDATA[${FIXED_RECOMMENDATION_TEXT}]]>`));
+  const freeTextXml = xml.match(/<freitexte>[\s\S]*?<\/freitexte>/u)?.[0] || "";
+  assert.doesNotMatch(freeTextXml, /feldname="(?:anklickbar|allgemein2)"/u);
   assert.doesNotMatch(xml, /AUF WUNSCH empfehlen/u);
   assert.ok(xml.indexOf("<kaufpreis>") < xml.indexOf("<provisionspflichtig>"));
   assert.ok(xml.indexOf("<provisionspflichtig>") < xml.indexOf("<waehrung "));
