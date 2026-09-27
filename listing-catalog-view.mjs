@@ -1,4 +1,5 @@
 import { normalizeWorkflowStatus, WORKFLOW_STATUS } from './workflow-status.mjs';
+import { isHvObjectNumber } from './object-number-sequence.mjs';
 
 export function isDraftListing(listing) {
   return normalizeWorkflowStatus(listing?.status) === WORKFLOW_STATUS.DRAFT;
@@ -10,8 +11,29 @@ function conflict(id) {
   return error;
 }
 
+const LIFECYCLE_EVIDENCE_FIELDS = Object.freeze([
+  'lastUploadedAt',
+  'transferredAt',
+  'importConfirmedAt',
+  'importReportId',
+  'rotationArchivedAt',
+  'deletedAt',
+  'legacyProviderVerifiedAt',
+  'legacyReconciliationId',
+]);
+
+function canMigrateDraftObjectNumber(previous, listing, options) {
+  if (options?.allowDraftObjectNumberMigration !== true) return false;
+  if (!isDraftListing(previous) || !isDraftListing(listing)) return false;
+  if (!/^FPI-/u.test(String(previous.externalId || '')) || !isHvObjectNumber(listing.externalId)) return false;
+  if (previous.id !== listing.id || previous.templateId !== listing.templateId) return false;
+  if (previous.listingOrigin !== listing.listingOrigin) return false;
+  if (LIFECYCLE_EVIDENCE_FIELDS.some((field) => Boolean(previous[field]) || Boolean(listing[field]))) return false;
+  return !(options.uploadHistory || []).some((entry) => entry?.listingId === previous.id);
+}
+
 // A UI projection must never replace lifecycle state with a reduced variant copy.
-export function mergeListingCollection(existing = [], updates = []) {
+export function mergeListingCollection(existing = [], updates = [], options = {}) {
   const byId = new Map();
   for (const listing of existing) {
     if (!listing?.id) throw conflict('ohne ID');
@@ -22,10 +44,26 @@ export function mergeListingCollection(existing = [], updates = []) {
   for (const listing of updates) {
     if (!listing?.id) throw conflict('ohne ID');
     const previous = byId.get(listing.id);
-    if (previous && previous.externalId !== listing.externalId) throw conflict(listing.id);
+    const migratesDraftObjectNumber = previous
+      && previous.externalId !== listing.externalId
+      && canMigrateDraftObjectNumber(previous, listing, options);
+    if (previous
+      && previous.externalId !== listing.externalId
+      && !migratesDraftObjectNumber) throw conflict(listing.id);
     byId.set(listing.id, previous && !isDraftListing(previous)
       ? previous
-      : { ...previous, ...listing });
+      : {
+          ...previous,
+          ...listing,
+          ...(migratesDraftObjectNumber ? {
+            objectNumberMigration: {
+              kind: 'legacy-draft-object-number-migration-v1',
+              previousExternalId: previous.externalId,
+              externalId: listing.externalId,
+              evidence: 'draft-without-lifecycle-or-upload-history',
+            },
+          } : {}),
+        });
   }
   return [...byId.values()];
 }
@@ -35,7 +73,8 @@ export function assertBrowserCatalogTransition(current, next) {
   const protectedFields = ['externalId','listingOrigin','status','version','rotationSourceListingId',
     'lastUploadedAt','transferredAt','importConfirmedAt','importReportId','supersededByListingId',
     'replacementConfirmedAt','externalDeletionPending','productionDeleteState','deletedAt',
-    'confirmationSource','legacyProviderVerifiedAt','legacyReconciliationId','manualReconciliation'];
+    'confirmationSource','legacyProviderVerifiedAt','legacyReconciliationId','manualReconciliation',
+    'objectNumberMigration'];
   const archivedListing = (projectId, listingId) => (next?.listingResetHistory || [])
     .filter(archive => archive?.kind === 'plot-listing-reset' && archive.projectId === projectId)
     .flatMap(archive => archive.listings || [])

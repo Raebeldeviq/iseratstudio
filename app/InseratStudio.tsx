@@ -407,7 +407,10 @@ function normalizeMandatoryListingStandards(inputState: StudioState): StudioStat
         .filter((variant) => variant.active && variant.listing)
         .slice(0, HOUSES_PER_PROJECT)
         .map((variant) => variant.listing as GeneratedListing);
-      const mergedListings = mergeListingCollection(listings, sourceListings);
+      const mergedListings = mergeListingCollection(listings, sourceListings, {
+        allowDraftObjectNumberMigration: true,
+        uploadHistory: state.uploadHistory,
+      });
       const canonicalById = new Map(mergedListings.map((listing: GeneratedListing) => [listing.id, listing]));
       listingGroup = { ...listingGroup, variants: listingGroup.variants.map((variant) => ({
         ...variant,

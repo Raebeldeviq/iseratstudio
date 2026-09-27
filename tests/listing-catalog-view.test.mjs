@@ -42,6 +42,42 @@ test('identical stored duplicates are collapsed and external identity cannot cha
   assert.throws(()=>mergeListingCollection([listing],[{...listing,externalId:'OTHER'}]),{code:'CATALOG_LISTING_CONFLICT'});
 });
 
+test('legacy object number is migrated only for an untransferred draft with explicit reconciliation evidence',()=>{
+  const legacyDraft={...listing,status:'draft',externalId:'FPI-PROJECT-V1-LEGACY',listingOrigin:'group-source',importConfirmedAt:'',
+    templateId:'house-1',listingFacts:[{key:'energy_class',value:'A+',verified:true,evidenceKind:'energy_certificate'}],
+    texts:{title:'Freigegebener Text'},promotionImageId:'image-1'};
+  const migrated={...legacyDraft,externalId:'30460-70'};
+  const result=mergeListingCollection([legacyDraft],[migrated],{
+    allowDraftObjectNumberMigration:true,
+    uploadHistory:[],
+  });
+  assert.equal(result[0].externalId,'30460-70');
+  assert.deepEqual(result[0].objectNumberMigration,{
+    kind:'legacy-draft-object-number-migration-v1',
+    previousExternalId:'FPI-PROJECT-V1-LEGACY',
+    externalId:'30460-70',
+    evidence:'draft-without-lifecycle-or-upload-history',
+  });
+  assert.deepEqual(result[0].listingFacts,legacyDraft.listingFacts);
+  assert.deepEqual(result[0].texts,legacyDraft.texts);
+  assert.equal(result[0].promotionImageId,'image-1');
+});
+
+test('draft object number migration remains fail closed with lifecycle or upload evidence',()=>{
+  const legacyDraft={...listing,status:'draft',externalId:'FPI-PROJECT-V1-LEGACY',listingOrigin:'group-source',templateId:'house-1',importConfirmedAt:''};
+  const migrated={...legacyDraft,externalId:'30460-70'};
+  const options={allowDraftObjectNumberMigration:true,uploadHistory:[{listingId:legacyDraft.id,status:'draft'}]};
+  assert.throws(()=>mergeListingCollection([legacyDraft],[migrated],options),{code:'CATALOG_LISTING_CONFLICT'});
+  assert.throws(()=>mergeListingCollection([{...legacyDraft,transferredAt:'2026-09-27T12:00:00Z'}],[migrated],{
+    allowDraftObjectNumberMigration:true,
+    uploadHistory:[],
+  }),{code:'CATALOG_LISTING_CONFLICT'});
+  assert.throws(()=>mergeListingCollection([legacyDraft],[{...migrated,templateId:'other-house'}],{
+    allowDraftObjectNumberMigration:true,
+    uploadHistory:[],
+  }),{code:'CATALOG_LISTING_CONFLICT'});
+});
+
 test('stale browser saves cannot erase a lifecycle or resurrect a deleted listing',()=>{
  const current={projects:[{id:'project',listings:[{...listing,status:'deleted'}]}]};
  assert.throws(()=>assertBrowserCatalogTransition(current,{projects:[]}),{code:'CATALOG_LISTING_CONFLICT'});

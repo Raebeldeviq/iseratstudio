@@ -2794,3 +2794,9 @@ damit keine Bestätigung zwischen zwei Ordnern verloren geht.
 - Inseratsmanager zeigt den gesamten persistenten Katalog statt nur der Arbeitsauswahl. So bleiben bei leerer Auswahl veröffentlichte Inserate und terminale Historie sichtbar.
 - Zeitplan-Konfiguration wird nicht mehr als tatsächliche Produktionsfreigabe dargestellt; irreführende Aussagen zu Fehlerisolation und dauerhaft deaktiviertem DELETE entfernt.
 - Reine Anzeigeänderung: keine Scheduler-, Upload- oder DELETE-Freigabe geändert. Integrationstest schützt die Auswahlunabhängigkeit. Die historische Katalogprüfung bleibt eine notwendige Produktionssperre.
+
+# 2026-09-27 – Startkonflikt bei historischer Entwurfsnummer behoben
+
+- Implementiert: Die Startnormalisierung darf eine historische `FPI-…`-Kennung genau dann auf die reservierte `30460-N`-Objektnummer umstellen, wenn beide Datensätze derselbe unveröffentlichte Entwurf sind und weder Upload- noch Lifecycle-Evidenz vorliegt. Texte, Bilderreferenzen und belegte Fakten bleiben dabei erhalten; die frühere Kennung wird als geschützter Migrationsnachweis am Inserat dokumentiert.
+- Begründung: Die Objektnummer wird weiterhin zentral aus der bestehenden Sequenz vergeben; der allgemeine Konflikt-Guard bleibt fail-closed und erhält nur für diesen belegbaren Migrationsfall eine eng begrenzte Freigabe.
+- Hürden/Risiken: Browser- und Gerätekatalog enthielten denselben alten Entwurf konsistent, die Pflichtnormalisierung erzeugte jedoch während des Starts eine zweite Identität. Datensätze mit Transfer-, Import-, Archiv- oder Uploadnachweis werden deshalb weiterhin blockiert. Resetarchive bleiben unveränderte Evidenz und werden nicht als aktive Inserate eingespielt.

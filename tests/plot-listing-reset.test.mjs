@@ -103,6 +103,17 @@ test("allows terminal listings to leave the active catalog only through the immu
   assert.throws(() => assertBrowserCatalogTransition(result.state, tampered), { code: "CATALOG_LISTING_CONFLICT" });
 });
 
+test("keeps reset archives as evidence without feeding archived listings back into the active catalog", () => {
+  const state = fixture();
+  const result = resetPlotListings(state, "plot-target", { now: NOW, idFactory: () => "archive-1" });
+  const archived = result.state.listingResetHistory[0].listings;
+
+  assert.equal(result.state.projects[0].listings.length, 0);
+  assert.equal(archived.length, 10);
+  assert.deepEqual(latestResetListingFacts(result.state, "project-target", "house-1"), ENERGY_FACTS);
+  assert.doesNotThrow(() => assertBrowserCatalogTransition(state, result.state));
+});
+
 test("performs no network operation", () => {
   const previousFetch = globalThis.fetch;
   let calls = 0;
