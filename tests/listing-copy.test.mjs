@@ -172,9 +172,9 @@ test("fills empty existing text fields without overwriting usable dynamic copy",
 });
 
 test("keeps planning language out of the sales location and exposes the separate factual note", () => {
-  const location = cleanSalesLocationText("Potsdam verbindet Natur und Alltag. Die Bebaubarkeit wird im weiteren Planungsverlauf geprüft. Schulen und Einkaufsmöglichkeiten sind nach geprüfter Angabe erreichbar.");
+  const location = cleanSalesLocationText("Potsdam verbindet Natur und Alltag. Die Bebaubarkeit wird im weiteren Planungsverlauf geprüft. Konkrete Aussagen zu Versorgung werden ausschließlich aus geprüften Ortsinformationen ergänzt. Das Grundstück befindet sich in Potsdam. Schulen und Einkaufsmöglichkeiten sind nach geprüfter Angabe erreichbar.");
   assert.equal(location, "Potsdam verbindet Natur und Alltag. Schulen und Einkaufsmöglichkeiten sind nach geprüfter Angabe erreichbar.");
-  assert.doesNotMatch(location, /Bebaubarkeit|Planungsverlauf/u);
+  assert.doesNotMatch(location, /Bebaubarkeit|Planungsverlauf|Konkrete Aussagen|Grundstück befindet/u);
   assert.match(FACTUAL_BUILDABILITY_NOTE, /öffentlich-rechtlichen Vorgaben geprüft und abgestimmt/u);
 });
 

@@ -411,7 +411,7 @@ function clean(value) {
   return String(value ?? "").trim();
 }
 
-const LOCATION_PLANNING_PHRASE = /(?:Bebaubarkeit|Positionierung\s+(?:des\s+Hauses\s+)?(?:wird|werden)|im\s+weiteren\s+(?:Planungs)?verlauf|im\s+(?:persönlichen\s+)?Beratungsgespräch\s+(?:betrachtet|abgestimmt)|später\s+abgestimmt)/iu;
+const LOCATION_PLANNING_PHRASE = /(?:Bebaubarkeit|Positionierung\s+(?:des\s+Hauses\s+)?(?:wird|werden)|im\s+weiteren\s+(?:Planungs)?verlauf|im\s+(?:persönlichen\s+)?Beratungsgespräch\s+(?:betrachtet|abgestimmt)|später\s+abgestimmt|Konkrete\s+Aussagen\s+zu|ausschließlich\s+aus\s+geprüften\s+Ortsinformationen|Das\s+Grundstück\s+befindet\s+sich|Hier\s+treffen\s+der\s+Wunsch[^.!?]*Anforderungen)/iu;
 
 export function cleanSalesLocationText(value) {
   return clean(value)

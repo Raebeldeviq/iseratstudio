@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildImportPackage, buildOpenImmoXml, validateImportPackage } from "../app/lib/openimmo.ts";
+import { buildImportPackage, buildOpenImmoXml, OPENIMMO_STRUCTURED_FIELDS, validateImportPackage } from "../app/lib/openimmo.ts";
 import { APP_VERSION } from "../app/lib/app-version.mjs";
 import {
   FIXED_ANNOTATION_TEXT,
@@ -40,11 +40,11 @@ test("exports planned energy values as planning data and prioritizes a later ene
   assert.match(projectedXml, /feldname="Projektierte Energieeffizienzklasse"><!\[CDATA\[A\+\+ – Planungswert, kein individueller Energieausweis\]\]><\/user_defined_simplefield>/u);
 
   const certificateFacts = [
-    { key: "energy_demand", value: "42", source: "project", scope: "house", status: "verified", verified: true, evidenceKind: "energy_certificate", evidenceReference: "Energieausweis EA-2026-17" },
+    { key: "energy_demand", value: "18", source: "project", scope: "house", status: "verified", verified: true, evidenceKind: "energy_certificate", evidenceReference: "Energieausweis EA-2026-17" },
     { key: "energy_class", value: "A+", source: "project", scope: "house", status: "verified", verified: true, evidenceKind: "energy_certificate", evidenceReference: "Energieausweis EA-2026-17" },
   ];
   const certificateXml = buildOpenImmoXml(energyScenarioInput({ listingFacts: certificateFacts }));
-  assert.match(certificateXml, /<energiepass>[\s\S]*<endenergiebedarf>42<\/endenergiebedarf>[\s\S]*<wertklasse>A\+<\/wertklasse>[\s\S]*<\/energiepass>/u);
+  assert.match(certificateXml, /<energiepass>[\s\S]*<epart>BEDARF<\/epart>[\s\S]*<endenergiebedarf>18<\/endenergiebedarf>[\s\S]*<wertklasse>A\+<\/wertklasse>[\s\S]*<\/energiepass>/u);
   assert.match(certificateXml, /feldname="Energieklasse gemäß Energieausweis"><!\[CDATA\[A\+\]\]><\/user_defined_simplefield>/u);
   assert.doesNotMatch(certificateXml, /Projektierter Endenergiebedarf/);
 
@@ -163,6 +163,12 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
   assert.match(xml, /<dachboden>true<\/dachboden>/);
   assert.match(xml, /<gaestewc>true<\/gaestewc>/);
   assert.match(xml, /<zustand zustand_art="PROJEKTIERT" \/>/);
+  assert.match(xml, /<verkaufstatus stand="NEU" \/>/u);
+  assert.deepEqual(OPENIMMO_STRUCTURED_FIELDS.objectStatus, {
+    elementName: "verkaufstatus",
+    attributeName: "stand",
+    newValue: "NEU",
+  });
   assert.match(xml, /<user_defined_simplefield feldname="data104"><!\[CDATA\[HausInPlanung\]\]><\/user_defined_simplefield>/u);
   assert.match(xml, /<baujahr>2027<\/baujahr>/);
   assert.match(xml, /<verfuegbar_ab>2027<\/verfuegbar_ab>/);

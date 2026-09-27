@@ -71,6 +71,11 @@ export const IMMOPROFESSIONAL_IMPORT_FIELDS = Object.freeze({
   recommendation: Object.freeze({ fieldName: "allgemein2" }),
 });
 
+export const OPENIMMO_STRUCTURED_FIELDS = Object.freeze({
+  energyCertificateType: Object.freeze({ elementName: "epart", demandValue: "BEDARF" }),
+  objectStatus: Object.freeze({ elementName: "verkaufstatus", attributeName: "stand", newValue: "NEU" }),
+});
+
 function listingImages(input: PackageInput, house: HouseTemplate, listing?: GeneratedListing): HouseImage[] {
   const orderedImages = orderHouseImages(house.images);
   const assignedHeroId = listing ? input.heroImageIdsByListingId?.[listing.id] : undefined;
@@ -315,7 +320,7 @@ function listingXml(
   const energyDemand = energyDemandFact ? decimalFactValue(energyDemandFact.value) : null;
   const energyCertificatePass = energyDemand !== null
     ? `<energiepass>
-            <epart>BEDARF</epart>
+            <${OPENIMMO_STRUCTURED_FIELDS.energyCertificateType.elementName}>${OPENIMMO_STRUCTURED_FIELDS.energyCertificateType.demandValue}</${OPENIMMO_STRUCTURED_FIELDS.energyCertificateType.elementName}>
             <endenergiebedarf>${decimal.format(energyDemand)}</endenergiebedarf>
             ${energyClassFact ? `<wertklasse>${xml(energyClassFact.value)}</wertklasse>` : ""}
             <baujahr>${xml(house.constructionYear)}</baujahr>
@@ -384,6 +389,7 @@ function listingXml(
           <baujahr>${xml(projecting.constructionYear)}</baujahr>
           <zustand zustand_art="${xml(projecting.constructionPhase)}" />
           ${energyCertificatePass}
+          <${OPENIMMO_STRUCTURED_FIELDS.objectStatus.elementName} ${OPENIMMO_STRUCTURED_FIELDS.objectStatus.attributeName}="${OPENIMMO_STRUCTURED_FIELDS.objectStatus.newValue}" />
           <user_defined_simplefield feldname="${IMMOPROFESSIONAL_IMPORT_FIELDS.constructionPhase.fieldName}">${cdata(IMMOPROFESSIONAL_IMPORT_FIELDS.constructionPhase.projectedValue)}</user_defined_simplefield>
         </zustand_angaben>
         ${infrastructureXml}

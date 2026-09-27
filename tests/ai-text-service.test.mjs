@@ -34,11 +34,12 @@ const testHouse = {
   rooms: 5,
 };
 const testProject = { city: "Schulzendorf", district: "" };
+const validLocation = "In Schulzendorf kann ein Lebensmittelpunkt entstehen, der sich an deinem persönlichen Alltag orientiert. Gemeinsame Zeit mit der Familie, konzentrierte Stunden für den Beruf, freie Momente und erholsamer Rückzug dürfen hier ihren eigenen Rhythmus finden. Das neue Zuhause eröffnet Raum für vertraute Routinen und für Ideen, die mit den kommenden Lebensphasen wachsen. So wird Schulzendorf zum Ausgangspunkt für ein Wohngefühl, das Nähe und Eigenständigkeit miteinander verbindet. Du gestaltest den Tagesablauf nach deinen Bedürfnissen und schaffst einen Ort für Begegnungen, Ruhe und neue Erinnerungen. Aus dem Wunsch nach den eigenen vier Wänden kann auf diese Weise Schritt für Schritt ein Zuhause werden, das wirklich zu dir passt.";
 const validTexts = enforceListingCopy({
   title: buildListingHeadline(testHouse, testProject),
   description: longText("Der projektierte Entwurf verbindet klare Architektur mit flexibel nutzbaren Räumen und einer sorgfältig abgestimmten Planung für den Familienalltag.", 1800),
   equipment: "",
-  location: longText("Das Grundstück liegt in Schulzendorf und bietet einen stimmigen Rahmen für das geplante Zuhause; alle weiteren Details werden anhand bestätigter Standortdaten beurteilt.", 550),
+  location: validLocation,
   other: "",
 }, { house: testHouse, project: testProject, generated: true });
 
@@ -131,7 +132,10 @@ test("uses the Responses API quality settings and a strict text schema", () => {
   assert.match(request.input[0].content[0].text, /keine internen Hausvarianten/);
   assert.match(request.input[0].content[0].text, /DGNB, QDF oder QNG/);
   assert.match(request.input[0].content[0].text, /keine allgemeinen Umwelt-, Klima-, Nachhaltigkeits- oder Energieversprechen/);
+  assert.match(request.input[0].content[0].text, /80 bis 150 Wörtern/);
+  assert.match(request.input[0].content[0].text, /keine sichtbaren Prüf-, Compliance- oder Metaformulierungen/);
   assert.match(request.text.format.schema.properties.description.description, /160 bis 215 Wörtern/);
+  assert.match(request.text.format.schema.properties.location.description, /80 bis 150 Wörtern/);
 });
 
 test("uses GPT-5.6 Luna as the economical default", () => {
@@ -167,6 +171,17 @@ test("accepts complete texts and rejects short or Markdown-formatted output", ()
   const errors = validateListingTexts({ ...validTexts, description: "## Zu kurz" }, testHouse, testProject);
   assert.ok(errors.some((value) => value.includes("zu kurz")));
   assert.ok(errors.some((value) => value.includes("Markdown")));
+});
+
+test("enforces an emotional 80-to-150-word location without visible meta language", () => {
+  assert.deepEqual(validateListingTexts(validTexts, testHouse, testProject), []);
+  const metaErrors = validateListingTexts({
+    ...validTexts,
+    location: `${validLocation} Konkrete Aussagen zu Versorgung werden ausschließlich aus geprüften Ortsinformationen ergänzt.`,
+  }, testHouse, testProject);
+  assert.ok(metaErrors.some((value) => value.includes("Meta-, Prüf- oder Planungsformulierung")));
+  const shortErrors = validateListingTexts({ ...validTexts, location: "Schulzendorf bietet Raum für einen neuen Anfang." }, testHouse, testProject);
+  assert.ok(shortErrors.some((value) => value.includes("80 Wörter")));
 });
 
 test("rejects prices and internal variants in the generated object description", () => {

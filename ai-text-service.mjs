@@ -22,12 +22,13 @@ const FIELD_RULES = {
   title: { min: 55, max: 220, label: "Überschrift" },
   description: { min: 900, max: 3500, minWords: 220, maxWords: 350, label: "Objektbeschreibung" },
   equipment: { min: 550, max: 7000, label: "Ausstattung" },
-  location: { min: 350, max: 3500, label: "Lage" },
+  location: { min: 350, max: 1400, minWords: 80, maxWords: 150, label: "Lage" },
   other: { min: 350, max: 3500, label: "Sonstiges" },
 };
 
 const PRICE_REFERENCE_PATTERN = /\b(?:gesamtpreis|hauspreis|grundstückspreis|kaufpreis|angebotspreis|preisaufschlüsselung|quadratmeterpreis|m²[-\s]?preis|euro|eur)\b|€|\b\d{1,3}(?:[.\s]\d{3})+(?:,\d{2})?\b/iu;
 const INTERNAL_VARIANT_PATTERN = /\bV\d+\b|\bV\d+\s+(?:Tag|Nacht)\b|\b(?:Tag|Nacht)\s+V\d+\b/iu;
+const LOCATION_META_PATTERN = /(?:Das\s+Grundstück\s+befindet\s+sich|Konkrete\s+Aussagen\s+zu|ausschließlich\s+aus\s+geprüften\s+Ortsinformationen|Hier\s+treffen\s+der\s+Wunsch[^.!?]*Anforderungen|Bebaubarkeit|im\s+weiteren\s+(?:Planungs)?verlauf)/iu;
 
 const SYSTEM_PROMPT = `Du bist ein sehr erfahrener deutscher Immobilienredakteur für hochwertige, verkaufsstarke und zugleich sachlich saubere Neubau-Exposés von Living Haus.
 
@@ -44,8 +45,8 @@ Verbindliche Qualitätsregeln:
 8. Verzichte auf Leistungslisten und ausführliche Technik. Nenne keine Küchenpakete, Bodenbeläge, Türen, Sanitärdetails, Bau-Cockpit, Bemusterungstage, Bauantragsplanung, Bodengutachten, DIY-Coachings, Versicherungen, Festpreisgarantien, Energieklassen, Energiebedarfswerte, DGNB, QDF oder QNG im Marketingtext.
 9. Eine Komfortlüftung mit Wärmerückgewinnung darf nur dann kurz und verständlich beschrieben werden, wenn sie als strukturierter, freigegebener Fakt für dieses Haus oder sein passendes Technikpaket vorliegt. Stelle keine Kosten-, Energie-, Klima- oder Umweltwirkung in Aussicht. Wenn der Fakt geplant ist, muss auch die Planung sprachlich erkennbar bleiben.
 10. Erzeuge selbst keinen Finanzierungshinweis. Die Anwendung ergänzt nach der dynamischen Beschreibung einen zentral freigegebenen Absatz zu möglichen Fördermöglichkeiten und zum Zuhause-Darlehen. Nenne deshalb insbesondere keine Darlehenshöhe, Rate, Finanzierungs- oder Förderzusage und keine pauschale Eignung für Kunden.
-11. Wenn Lagefakten fehlen, beschreibe Ort und Wohnumfeld attraktiv, aber neutral. Als konkreter Ortsbezug dürfen ausschließlich Ort und Ortsteil vorkommen. Nenne niemals Straßennamen, Hausnummern, Postleitzahlen oder konkrete Straßen- und Verkehrsachsen.
-12. Die Lage ist ein eigenständiger Orts- oder Ortsteiltext. Schreibe dort nichts über Bebaubarkeit, Hauspositionierung, spätere Abstimmungen, weitere Planungsverläufe oder Beratungsgespräche.
+11. Schreibe die Lage als emotionalen, natürlichen Verkaufsauftakt mit 80 bis 150 Wörtern. Nenne den Ort oder Ortsteil und greife zwei bis vier positive Aspekte aus Familie, Alltag, Natur, Freizeit, Stadt oder Region nur dann konkret auf, wenn die gelieferten Lagefakten sie tragen. Wenn Lagefakten fehlen, formuliere attraktiv, aber allgemein und erfinde keine örtlichen Eigenschaften. Als konkreter Ortsbezug dürfen ausschließlich Ort und Ortsteil vorkommen. Nenne niemals Straßennamen, Hausnummern, Postleitzahlen oder konkrete Straßen- und Verkehrsachsen.
+12. Die Lage ist ein eigenständiger Orts- oder Ortsteiltext. Schreibe dort nichts über Bebaubarkeit, Hauspositionierung, spätere Abstimmungen, weitere Planungsverläufe oder Beratungsgespräche. Verwende keine sichtbaren Prüf-, Compliance- oder Metaformulierungen und keinen mechanischen Einstieg wie „Das Grundstück befindet sich …“.
 13. Weiche deutlich von eventuell gelieferten bisherigen Texten ab: neuer Einstieg, andere Satzstruktur, andere Reihenfolge und frische Formulierungen. Zahlen, Eigennamen und verbindliche Fachbegriffe bleiben unverändert.
 14. Erzeuge keine allgemeinen Umwelt-, Klima-, Nachhaltigkeits- oder Energieversprechen. Leite aus technischen Einzelmerkmalen niemals selbstständig eine positive Umwelt-, Nachhaltigkeits-, Klima-, Energie- oder Kostenwirkung ab.
 15. Technische Eigenschaften dürfen ausschließlich verwendet werden, wenn sie als strukturierte, freigegebene Fakten geliefert sind. Beachte stets Scope und Status: Ein Bauteil oder eine Anlage ist kein Merkmal des gesamten Hauses oder Projekts.
@@ -202,7 +203,7 @@ export function createOpenAiRequest(input, retryFeedback = []) {
           required: AI_TEXT_FIELDS,
           properties: {
             description: { type: "string", description: "Emotionale, hausbezogene Objektbeschreibung mit 160 bis 215 Wörtern, ohne Finanzierungshinweis und abschließenden Kontaktaufruf." },
-            location: { type: "string", description: "Faktengebundene, natürliche Lagebeschreibung mit 350 bis 3.500 Zeichen." },
+            location: { type: "string", description: "Emotionaler, faktengebundener Lage-Verkaufsauftakt mit 80 bis 150 Wörtern, Ort oder Ortsteil und zwei bis vier belegbaren positiven Aspekten." },
           },
         },
       },
@@ -332,6 +333,9 @@ export function validateListingTexts(texts, house = {}, project = {}, factContex
     }
     if (field === "description" && /\b(?:Finanzierung|Darlehen|Förder\w*)\b/iu.test(generatedDescriptionBody)) {
       errors.push("Die dynamische Objektbeschreibung enthält einen nicht zentral freigegebenen Finanzierungshinweis.");
+    }
+    if (field === "location" && LOCATION_META_PATTERN.test(value)) {
+      errors.push("Die Lage enthält eine sichtbare Meta-, Prüf- oder Planungsformulierung.");
     }
   }
 

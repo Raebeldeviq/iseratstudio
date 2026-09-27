@@ -149,6 +149,10 @@ test("creates five compliant, price-free object descriptions with the new editor
       listingFacts: entry.house.listingFacts,
       houseSeries: LIVING_HAUS_SERIES_ID,
     }).ok, true, entry.sample.id);
+    assert.ok(wordCount(entry.texts.location) >= 80, entry.sample.id);
+    assert.ok(wordCount(entry.texts.location) <= 150, entry.sample.id);
+    assert.match(entry.texts.location, new RegExp(entry.sample.district, "u"), entry.sample.id);
+    assert.doesNotMatch(entry.texts.location, /Das Grundstück befindet sich|Konkrete Aussagen|geprüften Ortsinformationen|Hier treffen der Wunsch|Bebaubarkeit|Planungsverlauf/iu, entry.sample.id);
 
     if (entry.sample.technicalPackage) {
       assert.match(descriptionBody, /Komfortlüftung mit Wärmerückgewinnung/u, entry.sample.id);
@@ -157,6 +161,8 @@ test("creates five compliant, price-free object descriptions with the new editor
       assert.doesNotMatch(descriptionBody, /Komfortlüftung|Wärmerückgewinnung/u, entry.sample.id);
     }
   }
+
+  assert.ok(new Set(samples.map((entry) => entry.texts.location)).size >= 3);
 
   const report = scanPhase2BClaims({
     houses: samples.map((entry) => entry.house),

@@ -166,31 +166,15 @@ export function generateListingTexts(
     5,
   );
 
-  const locationOpening = pick(
+  const location = pick(
     [
-      `Das geplante Zuhause befindet sich in ${place}. Der Standort bildet den passenden Rahmen für einen neuen Lebensmittelpunkt und verbindet das Grundstück mit den Wegen des täglichen Lebens.`,
-      `Das Grundstück liegt in ${place}. Hier treffen der Wunsch nach einem eigenen Zuhause und die Anforderungen an Alltag, Familie und Freizeit aufeinander.`,
-      `${place} bildet den Standort für dieses Hausprojekt und schafft eine gute Ausgangsbasis für die individuelle Planung des neuen Zuhauses.`,
+      `Ankommen, durchatmen und den eigenen Alltag gestalten: ${place} gibt diesem neuen Zuhause seinen persönlichen Rahmen. Hier kannst du einen Lebensmittelpunkt schaffen, der gemeinsame Familienzeit, vertraute Routinen und ruhige Momente miteinander verbindet. Morgens startet der Tag im eigenen Rhythmus, später bleibt Raum für Arbeit, Freizeit und Begegnungen. Gerade diese Mischung macht den Gedanken an das eigene Haus so besonders: Du entscheidest, wie Nähe und Rückzug, Aktivität und Erholung zusammenfinden. ${place} wird dabei mehr als eine Ortsangabe – es wird zum Ausgangspunkt für neue Erinnerungen und für ein Zuhause, das zu deinem Leben passt.`,
+      `${place} kann der Ort werden, an dem aus Plänen echte Lieblingsmomente entstehen. Ein gemeinsames Frühstück, konzentrierte Stunden im Homeoffice, Zeit mit der Familie und ein ruhiger Abend bekommen hier ihren eigenen Platz. Der neue Lebensmittelpunkt lässt sich an den persönlichen Alltag anpassen und eröffnet Freiraum für Gewohnheiten, die heute wichtig sind und morgen wachsen dürfen. So verbindet die Lage das gute Gefühl des Ankommens mit der Freiheit, Wohnen, Arbeit, Freizeit und Rückzug auf die eigene Weise zu gestalten. Wer sein Zuhause bewusst entwickeln möchte, findet in ${place} einen stimmigen Rahmen für den nächsten Lebensabschnitt.`,
+      `Ein Zuhause beginnt mit dem Gefühl, am richtigen Ort anzukommen. In ${place} entsteht der Rahmen für einen Alltag, der gemeinsame Zeit und persönliche Freiräume selbstverständlich zusammenbringt. Hier dürfen Familienleben, Beruf und Freizeit ihren eigenen Rhythmus finden – vom lebendigen Morgen bis zum entspannten Ausklang des Tages. Das eigene Haus schafft dabei Raum für Nähe, Rückzug und viele kleine Augenblicke, an die man sich gern erinnert. ${place} wird so zum Mittelpunkt eines neuen Kapitels: persönlich, vielseitig und offen für alles, was sich im Leben verändert. Genau daraus wächst ein Wohngefühl, das nicht nur heute, sondern auch in Zukunft zu dir passt.`,
     ],
     seed,
     7,
   );
-
-  const locationClosing = pick(
-    [
-      `Insgesamt bietet ${place} eine interessante Grundlage für alle, die ihren Lebensmittelpunkt passend zu Familie, Beruf und Freizeit gestalten möchten.`,
-      `Damit verbindet der Standort in ${place} das geplante Eigenheim mit den persönlichen Anforderungen an den neuen Wohnort.`,
-      `So entsteht in ${place} ein Hausprojekt, bei dem Grundstück, Alltag und Zukunftsplanung sinnvoll zusammengedacht werden können.`,
-    ],
-    seed,
-    8,
-  );
-
-  const location = joinParagraphs([
-    locationOpening,
-    `Das Grundstück befindet sich in ${place}. Konkrete Aussagen zu Versorgung, Bildung, Freizeit und Verkehr werden ausschließlich aus geprüften Ortsinformationen ergänzt.`,
-    locationClosing,
-  ].flat());
 
   return enforceListingCopy({
     // The dedicated headline planner owns title rotation and its evidence

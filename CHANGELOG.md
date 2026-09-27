@@ -2800,3 +2800,35 @@ damit keine Bestätigung zwischen zwei Ordnern verloren geht.
 - Implementiert: Die Startnormalisierung darf eine historische `FPI-…`-Kennung genau dann auf die reservierte `30460-N`-Objektnummer umstellen, wenn beide Datensätze derselbe unveröffentlichte Entwurf sind und weder Upload- noch Lifecycle-Evidenz vorliegt. Texte, Bilderreferenzen und belegte Fakten bleiben dabei erhalten; die frühere Kennung wird als geschützter Migrationsnachweis am Inserat dokumentiert.
 - Begründung: Die Objektnummer wird weiterhin zentral aus der bestehenden Sequenz vergeben; der allgemeine Konflikt-Guard bleibt fail-closed und erhält nur für diesen belegbaren Migrationsfall eine eng begrenzte Freigabe.
 - Hürden/Risiken: Browser- und Gerätekatalog enthielten denselben alten Entwurf konsistent, die Pflichtnormalisierung erzeugte jedoch während des Starts eine zweite Identität. Datensätze mit Transfer-, Import-, Archiv- oder Uploadnachweis werden deshalb weiterhin blockiert. Resetarchive bleiben unveränderte Evidenz und werden nicht als aktive Inserate eingespielt.
+
+# 2026-09-27 – Energieausweistyp, Lagetext und Objektstatus abgesichert
+
+## Report
+
+- Den nachgewiesenen Bedarfsausweis im strukturierten OpenImmo-Export explizit
+  und zentral als `epart=BEDARF` abgesichert; Endenergiebedarf und Wertklasse
+  bleiben an verifizierte Energieausweis-Evidenz gebunden.
+- Den globalen Objektstatus über das OpenImmo-Standardfeld
+  `verkaufstatus stand=NEU` ergänzt.
+- Deterministische und KI-gestützte Lagetexte auf einen emotionalen,
+  ortsbezogenen Verkaufsauftakt mit 80 bis 150 Wörtern umgestellt. Sichtbare
+  Prüf-, Compliance- und Planungsformulierungen werden bei generierten Texten
+  entfernt beziehungsweise abgewiesen.
+- End-to-End-Regressionstests für Bedarfsausweis, Objektstatus und Lagetext
+  ergänzt.
+
+## Begründung
+
+Die Portalwerte werden über die dafür vorgesehenen OpenImmo-Strukturelemente
+transportiert. Dadurch entsteht kein paralleles proprietäres Mapping. Die
+Lagetextregeln greifen ausschließlich in der Generierung; bestehende manuelle
+Texte bleiben unverändert.
+
+## Hürden und Risiken
+
+- Das Zielportal kann Standardfelder erst nach einem späteren, ausdrücklich
+  freigegebenen Import anzeigen; dieser Auftrag führt keinen Upload aus.
+- Ohne verifizierte Energieausweis-Fakten bleibt der Energiepass weiterhin
+  fail-closed und wird nicht aus bloßen Planungswerten abgeleitet.
+- Konkrete Lagevorteile dürfen nur aus gelieferten Ortsfakten stammen. Fehlen
+  diese, bleibt der Text bewusst emotional, aber allgemein.
