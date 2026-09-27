@@ -73,6 +73,7 @@ import PlotManagement from "./components/PlotManagement";
 import { APP_VERSION } from "./lib/app-version.mjs";
 import { buildImportPackage } from "./lib/openimmo";
 import {
+  BATCH_UPLOAD_LOG_LIMIT,
   createBatchUploadPlan,
   runSequentialBatchUpload,
 } from "../batch-upload.mjs";
