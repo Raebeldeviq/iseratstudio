@@ -51,8 +51,9 @@ test("exports planned energy values as planning data and a verified certificate 
   const packagedXml = await archive.file(packageResult.xmlFilename)?.async("string");
   assert.equal(packagedXml, packageResult.xmlText);
   assert.match(packagedXml, /<zustand_angaben>[\s\S]*<energiepass>[\s\S]*<epart>BEDARF<\/epart>[\s\S]*<endenergiebedarf>18<\/endenergiebedarf>[\s\S]*<wertklasse>A\+<\/wertklasse>[\s\S]*<\/energiepass>[\s\S]*<\/zustand_angaben>/u);
-  assert.match(packagedXml, /<verkaufstatus stand="OFFEN" \/>\s*<user_defined_simplefield feldname="status"><!\[CDATA\[NEU\]\]><\/user_defined_simplefield>/u);
+  assert.match(packagedXml, /<verkaufstatus stand="OFFEN" \/>/u);
   assert.doesNotMatch(packagedXml, /<verkaufstatus stand="NEU"/u);
+  assert.doesNotMatch(packagedXml, /<user_defined_simplefield feldname="status"/u);
   assert.match(certificateXml, /feldname="Energieklasse gemäß Energieausweis"><!\[CDATA\[A\+\]\]><\/user_defined_simplefield>/u);
   assert.doesNotMatch(certificateXml, /Projektierter Endenergiebedarf/);
 
@@ -206,7 +207,7 @@ test("exports listings with the OpenImmo CHANGE upsert action", async () => {
   assert.match(xml, /<gaestewc>true<\/gaestewc>/);
   assert.match(xml, /<zustand zustand_art="PROJEKTIERT" \/>/);
   assert.match(xml, /<verkaufstatus stand="OFFEN" \/>/u);
-  assert.match(xml, /<user_defined_simplefield feldname="status"><!\[CDATA\[NEU\]\]><\/user_defined_simplefield>/u);
+  assert.doesNotMatch(xml, /<user_defined_simplefield feldname="status"/u);
   assert.deepEqual(OPENIMMO_STRUCTURED_FIELDS.objectStatus, {
     elementName: "verkaufstatus",
     attributeName: "stand",

@@ -68,7 +68,6 @@ const SUPPORTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"])
 const MAX_EXPORTED_IMAGES = 14;
 export const IMMOPROFESSIONAL_IMPORT_FIELDS = Object.freeze({
   constructionPhase: Object.freeze({ fieldName: "data104", projectedValue: "HausInPlanung" }),
-  objectStatus: Object.freeze({ fieldName: "status", newValue: "NEU" }),
   provision: Object.freeze({ fieldName: "anklickbar" }),
   recommendation: Object.freeze({ fieldName: "allgemein2" }),
 });
@@ -393,7 +392,6 @@ function listingXml(
           <zustand zustand_art="${xml(projecting.constructionPhase)}" />
           ${energyCertificatePass}
           <${OPENIMMO_STRUCTURED_FIELDS.objectStatus.elementName} ${OPENIMMO_STRUCTURED_FIELDS.objectStatus.attributeName}="${OPENIMMO_STRUCTURED_FIELDS.objectStatus.openValue}" />
-          <user_defined_simplefield feldname="${IMMOPROFESSIONAL_IMPORT_FIELDS.objectStatus.fieldName}">${cdata(IMMOPROFESSIONAL_IMPORT_FIELDS.objectStatus.newValue)}</user_defined_simplefield>
           <user_defined_simplefield feldname="${IMMOPROFESSIONAL_IMPORT_FIELDS.constructionPhase.fieldName}">${cdata(IMMOPROFESSIONAL_IMPORT_FIELDS.constructionPhase.projectedValue)}</user_defined_simplefield>
         </zustand_angaben>
         ${infrastructureXml}
