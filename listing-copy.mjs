@@ -2,6 +2,7 @@ import {
   releasedTitleUsps,
 } from "./listing-claim-policy.mjs";
 import { parseHouseVariant } from "./image-sequence.mjs";
+import { listingLocationLabel } from "./project-location.mjs";
 
 const DESCRIPTION_CTA_START =
   "Du möchtest wissen, ob dieses Haus zu deinen Vorstellungen und deinem Budget passt?";
@@ -390,12 +391,12 @@ const HEADLINE_OPENINGS = Object.freeze([
 ]);
 
 const USP_BENEFIT_OPENINGS = Object.freeze({
-  fixed_price_guarantee: ["Planbar ins eigene Zuhause", "Mehr Planbarkeit für eure Hauspläne"],
-  building_insurance: ["Mit Rückhalt ins eigene Zuhause", "Gut vorbereitet in die Bauzeit"],
-  bau_cockpit: ["Den Hausbau im Blick", "Euer Bauvorhaben im Blick"],
-  structural_guarantee: ["Ein Zuhause für viele Jahre", "Heute planen, an morgen denken"],
-  dgnb_series_certification: ["Qualität für euer Zuhause", "Mit geprüfter Serie ins neue Zuhause"],
-  ikon_technical_package: ["Technik für euren Alltag", "Ein Zuhause mit durchdachter Technik"],
+  fixed_price_guarantee: ["Planbarer bauen", "Entspannter ins eigene Zuhause"],
+  building_insurance: ["Gut abgesichert bauen", "Mit mehr Sicherheit ins eigene Zuhause"],
+  bau_cockpit: ["Gut organisiert bauen", "Den Hausbau im Blick behalten"],
+  structural_guarantee: ["Mehr Sicherheit für eure Zukunft", "Langfristig gut abgesichert bauen"],
+  dgnb_series_certification: ["Mit gutem Gefühl ins neue Zuhause", "Auf geprüfte Qualität setzen"],
+  ikon_technical_package: ["Technik für euren Alltag mitdenken", "Entspannter ins technisch vorbereitete Zuhause"],
 });
 
 function hash(value) {
@@ -435,7 +436,7 @@ function germanNumber(value, maximumFractionDigits = 0) {
 }
 
 export function listingPlace(project = {}) {
-  return clean(project.district) || clean(project.city) || "deinem Wunschort";
+  return listingLocationLabel(project);
 }
 
 function listingFactContext(house = {}, project = {}, context = {}) {
@@ -469,12 +470,12 @@ function selectTitleUsps(context, seed) {
 }
 
 const TITLE_USP_PAIR_PHRASE = Object.freeze({
-  fixed_price_guarantee: "18 Monaten Festpreisgarantie",
-  building_insurance: "Bauversicherungen",
-  bau_cockpit: "der Bau-Cockpit-App",
-  structural_guarantee: "30 Jahren Garantie auf die tragende Holzkonstruktion",
+  fixed_price_guarantee: "18 Monate Festpreisgarantie",
+  building_insurance: "Bauversicherungen inklusive",
+  bau_cockpit: "Bau-Cockpit-App",
+  structural_guarantee: "30 Jahre Garantie",
   dgnb_series_certification: "DGNB-Serienzertifizierung",
-  ikon_technical_package: "dem I-KON-Technikpaket",
+  ikon_technical_package: "I-KON-Technikpaket",
 });
 
 function titleFrom(opening, house, project, usps, style) {
@@ -483,20 +484,17 @@ function titleFrom(opening, house, project, usps, style) {
   const place = listingPlace(project);
   const details = area !== "0" ? `${area} m²` : "Wohnfläche auf Anfrage";
   const roomDetails = rooms !== "0" ? `${rooms} Zimmer` : "Zimmerzahl auf Anfrage";
-  const roomDative = rooms !== "0" ? `${rooms} Zimmern` : "Zimmerzahl auf Anfrage";
   const candidates = [
-    `${opening} in ${place}: ${details}, ${roomDetails}`,
+    `${opening} in ${place} – ${details}, ${roomDetails}`,
     `${opening}: ${details}, ${roomDetails} in ${place}`,
-    `${details}, ${roomDetails} für große Pläne in ${place}: ${opening}`,
-    `${place} ruft: ${opening} auf ${details} mit ${roomDative}`,
-    `${roomDetails} für euer Leben in ${place}: ${opening} auf ${details}`,
-    `Ankommen in ${place}: ${details}, ${roomDetails} für euren nächsten Schritt`,
+    `${place}: ${opening} – ${details}, ${roomDetails}`,
+    `${opening} – ${details}, ${roomDetails} in ${place}`,
   ];
   const base = candidates[style % candidates.length];
   if (usps.length === 2) {
-    return `${base} – mit ${TITLE_USP_PAIR_PHRASE[usps[0].id]} und ${TITLE_USP_PAIR_PHRASE[usps[1].id]}`;
+    return `${base} – ${TITLE_USP_PAIR_PHRASE[usps[0].id]} & ${TITLE_USP_PAIR_PHRASE[usps[1].id]}`;
   }
-  return usps.length ? `${base} – ${usps[0].label}` : base;
+  return usps.length ? `${base} – ${TITLE_USP_PAIR_PHRASE[usps[0].id]}` : base;
 }
 
 /**
@@ -507,13 +505,13 @@ export function planListingHeadline(house = {}, project = {}, context = {}) {
   const factContext = listingFactContext(house, project, context);
   const seed = headlineSeed(house, project, context);
   const usps = selectTitleUsps(factContext, seed);
-  const style = hash(`${seed}:style`) % 6;
+  const style = hash(`${seed}:style`) % 4;
   const benefitOpenings = usps.length ? USP_BENEFIT_OPENINGS[usps[0].id] : HEADLINE_OPENINGS;
   const openings = benefitOpenings.map((_, index) => benefitOpenings[(hash(`${seed}:opening`) + index) % benefitOpenings.length]);
   const variants = openings.flatMap((candidate) =>
-    Array.from({ length: 6 }, (_, index) => ({
+    Array.from({ length: 4 }, (_, index) => ({
       opening: candidate,
-      title: titleFrom(candidate, house, project, usps, (style + index) % 6),
+      title: titleFrom(candidate, house, project, usps, (style + index) % 4),
     })));
   const selected = variants.find((variant) =>
     variant.title.length >= LISTING_TITLE_MIN_LENGTH

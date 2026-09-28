@@ -59,6 +59,40 @@ test("exports planned energy values as planning data and a verified certificate 
   assert.match(unknownXml, /Projektierte Energieeffizienzklasse/);
 });
 
+test("exports verified districts in geo without breaking official town names", async () => {
+  const cases = [
+    ["Potsdam- Stern", "14480", "Potsdam", "Stern"],
+    ["Potsdam- Bornstedt", "14469", "Potsdam", "Bornstedt"],
+    ["Potsdam- Drewitz", "14480", "Potsdam", "Drewitz"],
+    ["Berlin-Rudow", "12355", "Berlin", "Rudow"],
+    ["Berlin-Zehlendorf", "14165", "Berlin", "Zehlendorf"],
+    ["Kloster Lehnin-Damsdorf", "14797", "Kloster Lehnin", "Damsdorf"],
+    ["Dallgow-Döberitz", "14624", "Dallgow-Döberitz", ""],
+    ["Werder (Havel)", "14542", "Werder (Havel)", ""],
+  ];
+  for (const [rawCity, zip, city, district] of cases) {
+    const input = energyScenarioInput();
+    input.project.city = rawCity;
+    input.project.zip = zip;
+    const packageResult = await buildImportPackage(input);
+    const archive = await JSZip.loadAsync(await packageResult.blob.arrayBuffer());
+    const packagedXml = await archive.file(packageResult.xmlFilename)?.async("string");
+    const geo = packagedXml?.match(/<geo>[\s\S]*?<\/geo>/u)?.[0] || "";
+    assert.match(geo, new RegExp(`<ort>${city.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}<\\/ort>`, "u"));
+    if (district) assert.match(geo, new RegExp(`<regionaler_zusatz>${district}<\\/regionaler_zusatz>`, "u"));
+    else assert.doesNotMatch(geo, /<regionaler_zusatz>/u);
+  }
+  const structured = energyScenarioInput();
+  structured.project.city = "Potsdam Groß Glienicke";
+  structured.project.zip = "14476";
+  structured.project.district = "Groß Glienicke";
+  assert.match(buildOpenImmoXml(structured), /<ort>Potsdam<\/ort>[\s\S]*<regionaler_zusatz>Groß Glienicke<\/regionaler_zusatz>/u);
+  structured.project.city = "Werder";
+  structured.project.zip = "14542";
+  structured.project.district = "Glindow";
+  assert.match(buildOpenImmoXml(structured), /<ort>Werder \(Havel\)<\/ort>[\s\S]*<regionaler_zusatz>Glindow<\/regionaler_zusatz>/u);
+});
+
 test("exports a QNG guarantee only as status-accurate free text, never as an individual certificate field", () => {
   const input = energyScenarioInput();
   input.listings[0].texts.description = QNG_GUARANTEE_SENTENCE;

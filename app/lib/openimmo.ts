@@ -1,6 +1,7 @@
 import JSZip from "jszip";
 import { APP_VERSION } from "./app-version.mjs";
 import { isHvObjectNumber } from "../../object-number-sequence.mjs";
+import { resolveProjectLocation } from "../../project-location.mjs";
 import { imageSequenceIssues, orderHouseImages, parseHouseVariant } from "../../image-sequence.mjs";
 import {
   fillMissingProjectingDefaults,
@@ -290,6 +291,7 @@ function listingXml(
     other: staticCopy.values.other,
   };
   const projecting = fillMissingProjectingDefaults(listing.projectingSettings);
+  const location = resolveProjectLocation(project);
   const portalStructure = portalHouseStructure(house);
   const technicalFacts = releasedTechnicalFacts({
     house,
@@ -342,13 +344,13 @@ function listingXml(
         </objektkategorie>
         <geo>
           <plz>${xml(project.zip)}</plz>
-          <ort>${xml(project.city)}</ort>
+          <ort>${xml(location.city)}</ort>
           <strasse>${xml(project.street)}</strasse>
           <hausnummer>${xml(project.houseNumber)}</hausnummer>
           <land iso_land="DEU" />
           <anzahl_etagen>${portalStructure.floors}</anzahl_etagen>
           <lage_gebiet gebiete="WOHN" />
-          ${project.district ? `<regionaler_zusatz>${xml(project.district)}</regionaler_zusatz>` : ""}
+          ${location.district ? `<regionaler_zusatz>${xml(location.district)}</regionaler_zusatz>` : ""}
         </geo>
         <kontaktperson>
           <email_zentrale>${xml(provider.email)}</email_zentrale>

@@ -77,6 +77,28 @@ test("selects at most two evidence-backed USPs deterministically", () => {
   assert.ok(combinations.size > 1);
 });
 
+test("shortens only an evidence-backed structural guarantee in new benefit titles", () => {
+  const plans = Array.from({ length: 40 }, (_, index) => planListingHeadline(house, {
+    city: "Potsdam- Stern", zip: "14480",
+  }, {
+    houseSeries: LIVING_HAUS_SERIES_ID,
+    titleSeed: `benefit-${index}`,
+  }));
+  const guaranteePlan = plans.find((plan) => plan.usps.some((usp) => usp.id === "structural_guarantee"));
+  assert.ok(guaranteePlan);
+  assert.match(guaranteePlan.title, /Potsdam-Stern/u);
+  assert.match(guaranteePlan.title, /30 Jahre Garantie/u);
+  assert.doesNotMatch(guaranteePlan.title, /maximale Sicherheit/iu);
+  const guarantee = guaranteePlan.usps.find((usp) => usp.id === "structural_guarantee");
+  assert.match(guarantee.fact.value, /tragende Holzkonstruktion/u);
+  assert.ok(guarantee.fact.evidenceReference);
+  assert.equal(validateListingClaims({
+    texts: { title: guaranteePlan.title }, house,
+    project: { city: "Potsdam- Stern", zip: "14480" },
+    houseSeries: LIVING_HAUS_SERIES_ID,
+  }).ok, true);
+});
+
 test("keeps normal headline candidates within the maximum without truncating claims", () => {
   const packageHouse = { ...house, technicalPackage: LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID };
   const longProject = { city: "Brandenburg an der Havel", district: "Neustadt" };
@@ -92,10 +114,10 @@ test("keeps normal headline candidates within the maximum without truncating cla
   assert.match(plan.title, /5 Zimmer/u);
   assert.ok(plan.usps.every((usp) => plan.title.includes(usp.label)
     || plan.title.includes({
-      fixed_price_guarantee: "18 Monaten Festpreisgarantie",
-      building_insurance: "Bauversicherungen",
+      fixed_price_guarantee: "18 Monate Festpreisgarantie",
+      building_insurance: "Bauversicherungen inklusive",
       bau_cockpit: "Bau-Cockpit-App",
-      structural_guarantee: "30 Jahren Garantie auf die tragende Holzkonstruktion",
+      structural_guarantee: "30 Jahre Garantie",
       dgnb_series_certification: "DGNB-Serienzertifizierung",
       ikon_technical_package: "I-KON-Technikpaket",
     }[usp.id])));

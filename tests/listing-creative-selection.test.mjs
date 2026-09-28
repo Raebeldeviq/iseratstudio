@@ -351,7 +351,8 @@ test("prepared copy persists one coherent house, text, price, image and OpenImmo
   assert.deepEqual(copy.staticTexts, source.staticTexts);
   assert.deepEqual(copy.staticCopySources, source.staticCopySources);
   assert.doesNotMatch(copy.texts.title, /QNG.*garantiert/iu);
-  assert.match(copy.texts.title, /18 Monate(?:n)? Festpreisgarantie/u);
+  assert.match(copy.texts.title, /Werder \(Havel\)/u);
+  assert.match(copy.texts.title, /\d+ m², \d+ Zimmer/u);
   assert.doesNotMatch(copy.texts.description, /QNG/u);
   assert.equal(copy.creativeSelection.houseId, copy.templateId);
   assert.equal(copy.creativeSelection.houseName, copy.templateName);
