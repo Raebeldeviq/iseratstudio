@@ -99,6 +99,21 @@ test("shortens only an evidence-backed structural guarantee in new benefit title
   }).ok, true);
 });
 
+test("varies benefit hooks while keeping technical names subordinate to evidenced customer benefits", () => {
+  const packageHouse = { ...house, technicalPackage: LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID };
+  const plans = Array.from({ length: 60 }, (_, index) => planListingHeadline(packageHouse, project, {
+    houseSeries: LIVING_HAUS_SERIES_ID,
+    titleSeed: `benefit-variation-${index}`,
+  }));
+  assert.ok(new Set(plans.map((plan) => plan.opening)).size >= 4);
+  assert.ok(plans.every((plan) => plan.usps.some((usp) => [
+    "fixed_price_guarantee", "building_insurance", "structural_guarantee",
+  ].includes(usp.id))));
+  assert.ok(plans.every((plan) => !plan.usps.some((usp) => usp.id === "dgnb_series_certification")));
+  assert.ok(plans.filter((plan) => /Bau-Cockpit-App|I-KON-Technikpaket/u.test(plan.title)).length <= 20);
+  assert.ok(plans.every((plan) => !/maximale Sicherheit|Rundum-Garantie|garantiert sorgenfrei/iu.test(plan.title)));
+});
+
 test("keeps normal headline candidates within the maximum without truncating claims", () => {
   const packageHouse = { ...house, technicalPackage: LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID };
   const longProject = { city: "Brandenburg an der Havel", district: "Neustadt" };

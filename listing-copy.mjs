@@ -391,12 +391,12 @@ const HEADLINE_OPENINGS = Object.freeze([
 ]);
 
 const USP_BENEFIT_OPENINGS = Object.freeze({
-  fixed_price_guarantee: ["Planbarer bauen", "Entspannter ins eigene Zuhause"],
-  building_insurance: ["Gut abgesichert bauen", "Mit mehr Sicherheit ins eigene Zuhause"],
-  bau_cockpit: ["Gut organisiert bauen", "Den Hausbau im Blick behalten"],
-  structural_guarantee: ["Mehr Sicherheit für eure Zukunft", "Langfristig gut abgesichert bauen"],
+  fixed_price_guarantee: ["Planbarer ins eigene Zuhause", "Mit gutem Gefühl ins neue Zuhause"],
+  building_insurance: ["Gut abgesichert bauen", "Mehr Sicherheit beim Hausbau"],
+  bau_cockpit: ["Gut organisiert zum eigenen Zuhause", "Weniger Baustress auf dem Weg ins Eigenheim"],
+  structural_guarantee: ["Mehr Sicherheit beim Hausbau", "Heute planen, langfristig abgesichert bauen"],
   dgnb_series_certification: ["Mit gutem Gefühl ins neue Zuhause", "Auf geprüfte Qualität setzen"],
-  ikon_technical_package: ["Technik für euren Alltag mitdenken", "Entspannter ins technisch vorbereitete Zuhause"],
+  ikon_technical_package: ["Technik schon mitgedacht", "Technik für euren Alltag mitdenken"],
 });
 
 function hash(value) {
@@ -463,10 +463,19 @@ function headlineSeed(house, project, context) {
 function selectTitleUsps(context, seed) {
   const available = releasedTitleUsps(context);
   if (!available.length) return [];
-  const firstIndex = hash(`${seed}:usp`) % available.length;
-  if (available.length === 1) return [available[firstIndex]];
-  const secondOffset = 1 + hash(`${seed}:second-usp`) % (available.length - 1);
-  return [available[firstIndex], available[(firstIndex + secondOffset) % available.length]];
+  const customerBenefits = available.filter((usp) => [
+    "fixed_price_guarantee", "building_insurance", "structural_guarantee",
+  ].includes(usp.id));
+  const supportingTools = available.filter((usp) => [
+    "bau_cockpit", "ikon_technical_package",
+  ].includes(usp.id));
+  const firstPool = supportingTools.length && hash(`${seed}:tool`) % 5 === 0
+    ? supportingTools : customerBenefits.length ? customerBenefits : available;
+  const first = firstPool[hash(`${seed}:usp`) % firstPool.length];
+  const secondPool = (customerBenefits.length ? customerBenefits : available)
+    .filter((usp) => usp.id !== first.id);
+  if (!secondPool.length) return [first];
+  return [first, secondPool[hash(`${seed}:second-usp`) % secondPool.length]];
 }
 
 const TITLE_USP_PAIR_PHRASE = Object.freeze({
