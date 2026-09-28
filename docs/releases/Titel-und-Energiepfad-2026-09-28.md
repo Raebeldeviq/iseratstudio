@@ -12,11 +12,22 @@ Die Titelwahl nutzt die vorhandenen ListingFacts und die zentrale Freigabe, soda
 
 ## Energieausweistyp: Befund und offene Grenze
 
-Der Serializer schreibt bei verifiziertem Bedarf den Standardpfad `immobilie/zustand_angaben/energiepass/epart` mit dem Wert `BEDARF`, daneben `endenergiebedarf` und `wertklasse`. Das endgültige ZIP enthält dieselben Felder. OpenImmo selbst dokumentiert `BEDARF` als gültigen `epart`-Wert. Ein abweichendes, öffentlich dokumentiertes Importmapping von Immoprofessional wurde nicht gefunden.
+Der Serializer schreibt bei verifiziertem Bedarf den Standardpfad `immobilie/zustand_angaben/energiepass/epart` mit dem Wert `BEDARF`, daneben `endenergiebedarf` und `wertklasse`. Ein mit dem aktuellen Code erzeugtes Test-ZIP enthält dieselben Felder. OpenImmo selbst dokumentiert `BEDARF` als gültigen `epart`-Wert. Ein abweichendes, öffentlich dokumentiertes Importmapping von Immoprofessional wurde nicht gefunden.
 
 Quelle zum Standardpfad: https://www.openimmo.de/go.php/p/44/openimmo-blog.htm
 
-Im aktuell geladenen Katalog stehen 76 aktive Inserate auf `transferred_pending_import`. Keines davon hat einen `energy_certificate`-Fakt; die zwei verifizierten Canary-Fakten (`18`, `A+`) liegen in einem Resetarchiv eines nicht aktiven FPI-Inserats. Die Live-App zeigt für 17 ausgewählte Adressen 0 uploadbereite Inserate. Daher ist weder ein neues Energie-Mapping noch ein weiterer Upload anhand des vorliegenden Bestands belegbar. Ein Portaltest mit konkreter Objektnummer und Importbericht ist für die Ursachenisolierung erforderlich.
+### Konkreter Canary 9218
+
+- `FPI-E0B464-V1-A4810212` liegt nur im Resetarchiv `47a8f6d7-9205-4d48-93a1-6f90ec477133`. Dort sind `energy_demand=18` und `energy_class=A+` als verifizierte `energy_certificate`-Fakten abgelegt. Diese Fakten gehören ausschließlich zu diesem Canary.
+- Das Transferprotokoll nennt als letzte Übertragung am 27.09.2026 um 11:49:28 UTC die Datei `gertraudstra-e1-14165-berlin-zehlendorf-sun-113-v6-fpi-e0b464-v1-a4810212-2026-09-27.zip` mit 19.026.418 Bytes, Job-Endung `energy-pass-recommendation-17b50c4`, Status `transferred_pending_import`. Frühere Transfers desselben Dateinamens hatten andere Größen (19.026.370 und 19.026.405 Bytes). Der Dateiname allein identifiziert deshalb keine bestimmte XML-Version.
+- Die übertragenen ZIP-Bytes und ein passender Hash sind lokal nicht archiviert. Der Upload-Helfer entfernt seine temporäre ZIP-Datei nach dem Transfer. Deshalb lassen sich `epart`, `endenergiebedarf`, `wertklasse`, die Zahl der `energiepass`-Blöcke und mögliche konkurrierende Felder **in genau der importierten Datei nicht beweisen**. Der aktuelle Serializer- und ZIP-Test ist dafür kein Ersatz.
+- Der lokale Importbericht-Scan meldete rund um den letzten Transfer `MAIL_IMPORT_REPORT_SCAN_LIMIT_EXCEEDED`: Der dedizierte Ordner hatte mehr als 500 Nachrichten. Ein objektspezifischer Importhinweis oder Feldfehler zu 9218 liegt im lokalen Protokoll nicht vor. Damit ist nicht belegt, ob die letzte Übertragung überhaupt die Version ist, aus der das Portalobjekt 9218 seinen aktuellen Feldwert bezogen hat.
+
+Die konkrete Ursache für `Energieausweistyp = keine Angabe` ist damit offen. Es wurde kein Energie-Mapping auf Verdacht geändert und keine Portaländerung vorgenommen.
+
+### Uploadbereitschaft
+
+Im aktuell geladenen Katalog stehen 76 aktive Inserate auf `transferred_pending_import`. Diese Status sind für einen neuen Upload nicht zulässig; deshalb zeigt die App für 17 ausgewählte Adressen 0 uploadbereite Inserate. Die Nummern `30460-46`, `30460-47` und `30460-48` liegen nur im Resetarchiv und sind nicht aktiv. Das dauerhafte Jobprotokoll belegt für alle drei bereits eine Übertragung am 23.09.2026 zwischen 11:31:09 und 11:31:20 UTC mit Status `transferred_pending_import`. Ein erneuter Upload würde den bereits verarbeiteten Bestand duplizieren. Es liegt kein belegter Fehler der Auswahl- oder Uploadbereitschaftslogik vor.
 
 ## Zehn read-only Titelproben
 
