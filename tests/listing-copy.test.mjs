@@ -39,12 +39,13 @@ const project = { city: "Potsdam", district: "Roskow" };
 test("builds a factual, varied headline with place and house data", () => {
   const title = buildListingHeadline(house, project);
   assert.match(title, /Roskow/u);
-  assert.match(title, /113 m²|5 Zimmer/u);
+  assert.match(title, /113 m²/u);
+  assert.match(title, /5 Zimmer/u);
   assert.doesNotMatch(title, /113[,.]\d/u);
   assert.doesNotMatch(title, /QNG|DGNB|energieeffizient|nachhaltig/iu);
 });
 
-test("selects at most one evidence-backed USP deterministically", () => {
+test("selects at most two evidence-backed USPs deterministically", () => {
   const packageHouse = { ...house, technicalPackage: LIVING_HAUS_IKON_TECHNICAL_PACKAGE_ID };
   const first = planListingHeadline(packageHouse, project, {
     houseSeries: LIVING_HAUS_SERIES_ID,
@@ -55,8 +56,11 @@ test("selects at most one evidence-backed USP deterministically", () => {
     titleSeed: "stable-listing-1",
   });
   assert.deepEqual(repeated, first);
-  assert.equal(first.usps.length, 1);
+  assert.equal(first.usps.length, 2);
   assert.ok(first.usps.every((usp) => usp.fact?.verified));
+  assert.match(first.title, /113 m²/u);
+  assert.match(first.title, /5 Zimmer/u);
+  assert.equal(new Set(first.usps.map((usp) => usp.id)).size, first.usps.length);
   assert.doesNotMatch(first.title, /QNG-Siegel garantiert|\bV\d+\b|€|Kaufpreis/iu);
   assert.equal(validateListingClaims({
     texts: { title: first.title },
@@ -82,9 +86,19 @@ test("keeps normal headline candidates within the maximum without truncating cla
   });
   assert.equal(plan.withinLengthLimit, true);
   assert.ok(plan.length <= plan.maxLength);
-  assert.ok(plan.usps.length <= 1);
+  assert.ok(plan.usps.length <= 2);
   assert.equal(plan.title.endsWith("…"), false);
-  assert.ok(plan.title.endsWith(plan.usps[0].label));
+  assert.match(plan.title, /113 m²/u);
+  assert.match(plan.title, /5 Zimmer/u);
+  assert.ok(plan.usps.every((usp) => plan.title.includes(usp.label)
+    || plan.title.includes({
+      fixed_price_guarantee: "18 Monaten Festpreisgarantie",
+      building_insurance: "Bauversicherungen",
+      bau_cockpit: "Bau-Cockpit-App",
+      structural_guarantee: "30 Jahren Garantie auf die tragende Holzkonstruktion",
+      dgnb_series_certification: "DGNB-Serienzertifizierung",
+      ikon_technical_package: "I-KON-Technikpaket",
+    }[usp.id])));
 });
 
 test("preserves all existing static copy even when dynamic copy is regenerated", () => {

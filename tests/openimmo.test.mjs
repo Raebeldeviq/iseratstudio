@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import JSZip from "jszip";
 
 import { buildImportPackage, buildOpenImmoXml, OPENIMMO_STRUCTURED_FIELDS, validateImportPackage } from "../app/lib/openimmo.ts";
 import { APP_VERSION } from "../app/lib/app-version.mjs";
@@ -33,7 +34,7 @@ function energyScenarioInput({ energyDemand = 18, listingFacts = [] } = {}) {
   };
 }
 
-test("exports planned energy values as planning data and prioritizes a later energy certificate", () => {
+test("exports planned energy values as planning data and a verified certificate through the final ZIP", async () => {
   const projectedXml = buildOpenImmoXml(energyScenarioInput());
   assert.doesNotMatch(projectedXml, /<energiepass>/);
   assert.match(projectedXml, /feldname="Projektierter Endenergiebedarf"><!\[CDATA\[18 kWh\/\(m²·a\) – Planungswert, kein individueller Energieausweis\]\]><\/user_defined_simplefield>/u);
@@ -45,6 +46,11 @@ test("exports planned energy values as planning data and prioritizes a later ene
   ];
   const certificateXml = buildOpenImmoXml(energyScenarioInput({ listingFacts: certificateFacts }));
   assert.match(certificateXml, /<energiepass>[\s\S]*<epart>BEDARF<\/epart>[\s\S]*<endenergiebedarf>18<\/endenergiebedarf>[\s\S]*<wertklasse>A\+<\/wertklasse>[\s\S]*<\/energiepass>/u);
+  const packageResult = await buildImportPackage(energyScenarioInput({ listingFacts: certificateFacts }));
+  const archive = await JSZip.loadAsync(await packageResult.blob.arrayBuffer());
+  const packagedXml = await archive.file(packageResult.xmlFilename)?.async("string");
+  assert.equal(packagedXml, packageResult.xmlText);
+  assert.match(packagedXml, /<zustand_angaben>[\s\S]*<energiepass>[\s\S]*<epart>BEDARF<\/epart>[\s\S]*<endenergiebedarf>18<\/endenergiebedarf>[\s\S]*<wertklasse>A\+<\/wertklasse>[\s\S]*<\/energiepass>[\s\S]*<\/zustand_angaben>/u);
   assert.match(certificateXml, /feldname="Energieklasse gemäß Energieausweis"><!\[CDATA\[A\+\]\]><\/user_defined_simplefield>/u);
   assert.doesNotMatch(certificateXml, /Projektierter Endenergiebedarf/);
 

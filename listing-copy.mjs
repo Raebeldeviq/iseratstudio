@@ -382,13 +382,21 @@ export const LISTING_TITLE_MAX_LENGTH = 220;
 export const LISTING_TITLE_MIN_LENGTH = 55;
 
 const HEADLINE_OPENINGS = Object.freeze([
-  "Mehr Zuhause. Mehr Möglichkeiten",
-  "Platz für euer Familienleben",
+  "Mehr Raum für euer Familienleben",
   "Hier beginnt euer nächstes Kapitel",
   "Ein Zuhause für große Pläne",
   "Wohnen nach euren Vorstellungen",
   "Raum für das, was zählt",
 ]);
+
+const USP_BENEFIT_OPENINGS = Object.freeze({
+  fixed_price_guarantee: ["Planbar ins eigene Zuhause", "Mehr Planbarkeit für eure Hauspläne"],
+  building_insurance: ["Mit Rückhalt ins eigene Zuhause", "Gut vorbereitet in die Bauzeit"],
+  bau_cockpit: ["Den Hausbau im Blick", "Euer Bauvorhaben im Blick"],
+  structural_guarantee: ["Ein Zuhause für viele Jahre", "Heute planen, an morgen denken"],
+  dgnb_series_certification: ["Qualität für euer Zuhause", "Mit geprüfter Serie ins neue Zuhause"],
+  ikon_technical_package: ["Technik für euren Alltag", "Ein Zuhause mit durchdachter Technik"],
+});
 
 function hash(value) {
   let result = 2166136261;
@@ -453,29 +461,46 @@ function headlineSeed(house, project, context) {
 
 function selectTitleUsps(context, seed) {
   const available = releasedTitleUsps(context);
-  return available.length ? [available[hash(`${seed}:usp`) % available.length]] : [];
+  if (!available.length) return [];
+  const firstIndex = hash(`${seed}:usp`) % available.length;
+  if (available.length === 1) return [available[firstIndex]];
+  const secondOffset = 1 + hash(`${seed}:second-usp`) % (available.length - 1);
+  return [available[firstIndex], available[(firstIndex + secondOffset) % available.length]];
 }
+
+const TITLE_USP_PAIR_PHRASE = Object.freeze({
+  fixed_price_guarantee: "18 Monaten Festpreisgarantie",
+  building_insurance: "Bauversicherungen",
+  bau_cockpit: "der Bau-Cockpit-App",
+  structural_guarantee: "30 Jahren Garantie auf die tragende Holzkonstruktion",
+  dgnb_series_certification: "DGNB-Serienzertifizierung",
+  ikon_technical_package: "dem I-KON-Technikpaket",
+});
 
 function titleFrom(opening, house, project, usps, style) {
   const area = germanNumber(Math.round(finiteNumber(house.livingArea)));
   const rooms = germanNumber(house.rooms, 1);
   const place = listingPlace(project);
-  const details = area !== "0" ? `${area} m²` : "dein neues Zuhause";
-  const roomDetails = rooms !== "0" ? `${rooms} Zimmer` : "Raum für euch";
+  const details = area !== "0" ? `${area} m²` : "Wohnfläche auf Anfrage";
+  const roomDetails = rooms !== "0" ? `${rooms} Zimmer` : "Zimmerzahl auf Anfrage";
+  const roomDative = rooms !== "0" ? `${rooms} Zimmern` : "Zimmerzahl auf Anfrage";
   const candidates = [
     `${opening} in ${place}: ${details}, ${roomDetails}`,
-    `${opening}: ${details} in ${place}`,
-    `${details} für große Pläne: ${roomDetails} in ${place}`,
-    `${place} ruft: ${opening} mit ${details}`,
-    `${roomDetails} für euer Leben in ${place}: ${opening}`,
-    `Ankommen in ${place}: ${details} für euren nächsten Schritt`,
+    `${opening}: ${details}, ${roomDetails} in ${place}`,
+    `${details}, ${roomDetails} für große Pläne in ${place}: ${opening}`,
+    `${place} ruft: ${opening} auf ${details} mit ${roomDative}`,
+    `${roomDetails} für euer Leben in ${place}: ${opening} auf ${details}`,
+    `Ankommen in ${place}: ${details}, ${roomDetails} für euren nächsten Schritt`,
   ];
   const base = candidates[style % candidates.length];
+  if (usps.length === 2) {
+    return `${base} – mit ${TITLE_USP_PAIR_PHRASE[usps[0].id]} und ${TITLE_USP_PAIR_PHRASE[usps[1].id]}`;
+  }
   return usps.length ? `${base} – ${usps[0].label}` : base;
 }
 
 /**
- * Selects a stable, evidence-backed single-USP title. `titleSeed` is optional
+ * Selects a stable, evidence-backed title with at most two USPs. `titleSeed` is optional
  * but lets rotations keep their variation stable per generated version.
  */
 export function planListingHeadline(house = {}, project = {}, context = {}) {
@@ -483,7 +508,8 @@ export function planListingHeadline(house = {}, project = {}, context = {}) {
   const seed = headlineSeed(house, project, context);
   const usps = selectTitleUsps(factContext, seed);
   const style = hash(`${seed}:style`) % 6;
-  const openings = HEADLINE_OPENINGS.map((_, index) => HEADLINE_OPENINGS[(hash(`${seed}:opening`) + index) % HEADLINE_OPENINGS.length]);
+  const benefitOpenings = usps.length ? USP_BENEFIT_OPENINGS[usps[0].id] : HEADLINE_OPENINGS;
+  const openings = benefitOpenings.map((_, index) => benefitOpenings[(hash(`${seed}:opening`) + index) % benefitOpenings.length]);
   const variants = openings.flatMap((candidate) =>
     Array.from({ length: 6 }, (_, index) => ({
       opening: candidate,
