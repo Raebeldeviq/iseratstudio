@@ -437,6 +437,7 @@ export type ListingAutomationControl = {
   automaticUpdateEnabled: boolean;
   automaticDeletionEnabled: boolean;
   premiumPlacement: boolean;
+  premiumUntil?: string;
   manualLock: boolean;
   lockedUntil: string;
   lockReason: string;
@@ -669,7 +670,8 @@ export type StudioState = {
       housePosition: number;
       uploadDate: string;
       plannedDeletionDate: string;
-      status: "planned" | "active" | "deleted" | "void";
+      status: "planned" | "active" | "paused" | "deleted" | "void";
+      pausedFrom?: "planned" | "active";
       deletedAt: string;
     }>;
   }>;

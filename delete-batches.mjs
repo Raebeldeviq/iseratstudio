@@ -21,6 +21,43 @@ function batches(state) {
   return Array.isArray(state?.deleteBatches) ? state.deleteBatches : [];
 }
 
+function protectedListingKeys(state) {
+  return new Set((state?.projects || []).flatMap((project) =>
+    (project.listingGroup?.listingControls || [])
+      .filter((control) => control.premiumPlacement === true || control.manualLock === true)
+      .map((control) => `${project.id}:${control.listingId}`)));
+}
+
+export function reconcileDeleteBatchProtections(state) {
+  if (!Array.isArray(state?.deleteBatches)) return state;
+  const protectedKeys = protectedListingKeys(state);
+  let changed = false;
+  const deleteBatches = batches(state).map((batch) => {
+    let reopened = false;
+    let entriesChanged = false;
+    const entries = (batch.entries || []).map((entry) => {
+      const isProtected = protectedKeys.has(`${entry.projectId}:${entry.listingId}`);
+      if (isProtected && (entry.status === "planned" || entry.status === "active")) {
+        changed = true;
+        entriesChanged = true;
+        return { ...entry, status: "paused", pausedFrom: entry.status };
+      }
+      if (!isProtected && entry.status === "paused") {
+        changed = true;
+        entriesChanged = true;
+        reopened = true;
+        const { pausedFrom, ...rest } = entry;
+        return { ...rest, status: pausedFrom === "active" ? "active" : "planned" };
+      }
+      return entry;
+    });
+    return reopened && batch.completedAt
+      ? { ...batch, entries, completedAt: "" }
+      : entriesChanged ? { ...batch, entries } : batch;
+  });
+  return changed ? { ...state, deleteBatches } : state;
+}
+
 function activeExternalIds(state) {
   const listings = [
     ...(state?.projects || []).flatMap((project) => project.listings || []),
@@ -66,7 +103,8 @@ export function allocateDeleteBatchNumber(state, input) {
       if (occupied.has(index)) continue;
       const externalId = `${PREFIX}-${String(target.number).padStart(3, "0")}${String(index).padStart(3, "0")}`;
       if (used.has(externalId)) continue;
-      target.entries.push({ batchId: target.id, listingId: String(input.listingId || ""), projectId: String(input.projectId || ""), externalId, index, housePosition: position, uploadDate, plannedDeletionDate, status: "planned", deletedAt: "" });
+      const isProtected = protectedListingKeys(state).has(`${input.projectId}:${input.listingId}`);
+      target.entries.push({ batchId: target.id, listingId: String(input.listingId || ""), projectId: String(input.projectId || ""), externalId, index, housePosition: position, uploadDate, plannedDeletionDate, status: isProtected ? "paused" : "planned", ...(isProtected ? { pausedFrom: "planned" } : {}), deletedAt: "" });
       return { state: { ...state, deleteBatches: updated }, externalId, batchId: target.id, cycle: target.cycle, batchNumber: target.number };
     }
     target = null;
@@ -77,22 +115,23 @@ export function allocateDeleteBatchNumber(state, input) {
 export function linkDeleteBatchListings(state) {
   if (!Array.isArray(state?.deleteBatches)) return state;
   const listings = new Map((state.projects || []).flatMap((project) => (project.listings || []).map((listing) => [listing.externalId, { listing, projectId: project.id }])));
-  return { ...state, deleteBatches: batches(state).map((batch) => ({ ...batch, entries: (batch.entries || []).map((entry) => {
+  const linked = { ...state, deleteBatches: batches(state).map((batch) => ({ ...batch, entries: (batch.entries || []).map((entry) => {
     const match = listings.get(entry.externalId);
     if (!match) return entry;
     const uploadedAt = match.listing.transferredAt || match.listing.lastUploadedAt || "";
     return { ...entry, listingId: match.listing.id, projectId: match.projectId, status: entry.status === "planned" && uploadedAt ? "active" : entry.status, uploadDate: uploadedAt ? calendarDate(uploadedAt) : entry.uploadDate };
   }) })) };
+  return reconcileDeleteBatchProtections(linked);
 }
 
 export function replanDeleteBatchesForUpload(state, listingIds, uploadDate = calendarDate()) {
-  let next = state;
+  let next = linkDeleteBatchListings(state);
   const ids = new Set(listingIds);
   for (const project of state.projects || []) {
     for (const listing of project.listings || []) {
       if (!ids.has(listing.id)) continue;
       const entry = batches(next).flatMap((batch) => batch.entries || []).find((item) => item.listingId === listing.id && item.externalId === listing.externalId);
-      if (!entry || entry.status === "active" || entry.status === "deleted") continue;
+      if (!entry || entry.status === "active" || entry.status === "paused" || entry.status === "deleted") continue;
       if (entry.status === "planned" && entry.uploadDate === uploadDate) continue;
       next = { ...next, deleteBatches: batches(next).map((batch) => ({ ...batch, entries: batch.entries.map((item) => item === entry ? { ...item, status: "void" } : item) })) };
       const allocated = allocateDeleteBatchNumber(next, { listingId: listing.id, projectId: project.id, housePosition: entry.housePosition, uploadDate });
@@ -107,8 +146,9 @@ export function replanDeleteBatchesForUpload(state, listingIds, uploadDate = cal
 }
 
 export function assertDeleteBatchUploadReady(state, listing, uploadDate = calendarDate()) {
-  const entry = batches(state).flatMap((batch) => batch.entries || []).find((item) => item.listingId === listing?.id && item.externalId === listing?.externalId);
+  const entry = batches(linkDeleteBatchListings(state)).flatMap((batch) => batch.entries || []).find((item) => item.listingId === listing?.id && item.externalId === listing?.externalId);
   if (!entry) return;
+  if (entry.status === "paused") return;
   if (entry.status !== "planned" || entry.uploadDate !== uploadDate) {
     throw new Error("Der Lösch-Batch passt nicht zum heutigen Uploadtag. Bitte das Inserat in der App neu vorbereiten und den Upload erneut starten.");
   }
@@ -117,10 +157,11 @@ export function assertDeleteBatchUploadReady(state, listing, uploadDate = calend
 export function deleteBatchTrafficLight(state, today = calendarDate()) {
   return batches(linkDeleteBatchListings(state)).map((batch) => {
     const active = batch.entries.filter((entry) => entry.status === "active");
+    const paused = batch.entries.filter((entry) => entry.status === "paused");
     const deleted = batch.entries.filter((entry) => entry.status === "deleted");
     if (!active.length && !deleted.length) return null;
     const days = Math.round((Date.parse(`${batch.plannedDeletionDate}T12:00:00Z`) - Date.parse(`${today}T12:00:00Z`)) / 86400000);
-    return { ...batch, active, deleted, signal: active.length ? days <= 0 ? "red" : days === 1 ? "yellow" : "green" : "gray", days };
+    return { ...batch, active, paused, deleted, signal: active.length ? days <= 0 ? "red" : days === 1 ? "yellow" : "green" : "gray", days };
   }).filter(Boolean).sort((a, b) => Number(a.signal === "gray") - Number(b.signal === "gray") || a.plannedDeletionDate.localeCompare(b.plannedDeletionDate) || a.cycle - b.cycle || a.number - b.number);
 }
 
@@ -130,8 +171,9 @@ export function confirmDeleteBatch(state, batchId, deletedAt = new Date().toISOS
   const active = batch.entries.filter((entry) => entry.status === "active");
   if (!active.length) throw new Error("Dieser Batch enthält keine übertragenen, offenen Inserate.");
   const activeIds = new Set(active.map((entry) => entry.listingId));
-  const next = { ...state,
-    deleteBatches: batches(state).map((item) => item.id !== batchId ? item : { ...item, completedAt: deletedAt, entries: item.entries.map((entry) => activeIds.has(entry.listingId) ? { ...entry, status: "deleted", deletedAt } : entry.status === "planned" ? { ...entry, status: "void" } : entry) }),
+  const reconciled = linkDeleteBatchListings(state);
+  const next = { ...reconciled,
+    deleteBatches: batches(reconciled).map((item) => item.id !== batchId ? item : { ...item, completedAt: deletedAt, entries: item.entries.map((entry) => entry.status === "active" && activeIds.has(entry.listingId) ? { ...entry, status: "deleted", deletedAt } : entry.status === "planned" ? { ...entry, status: "void" } : entry) }),
     projects: state.projects.map((project) => ({ ...project,
       listings: project.listings.map((listing) => activeIds.has(listing.id) ? { ...listing, status: WORKFLOW_STATUS.DELETED, statusMessage: "Manuell in Immoprofessional gelöscht", externalDeletionPending: false, deletedAt } : listing),
       listingGroup: project.listingGroup ? { ...project.listingGroup,

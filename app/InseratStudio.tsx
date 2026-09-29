@@ -109,7 +109,7 @@ import {
 } from "../plot-records.mjs";
 import { latestResetListingFacts, resetPlotListings } from "../plot-listing-reset.mjs";
 import { isHvObjectNumber } from "../object-number-sequence.mjs";
-import { allocateDeleteBatchNumber, calendarDate, deleteBatchTrafficLight, linkDeleteBatchListings, replanDeleteBatchesForUpload } from "../delete-batches.mjs";
+import { allocateDeleteBatchNumber, calendarDate, deleteBatchTrafficLight, linkDeleteBatchListings, reconcileDeleteBatchProtections, replanDeleteBatchesForUpload } from "../delete-batches.mjs";
 import { normalizeWorkflowStatus, workflowStatusLabel, WORKFLOW_STATUS } from "../workflow-status.mjs";
 import {
   formatClaimIssue,
@@ -164,6 +164,7 @@ type DeleteBatchRecord = NonNullable<StudioState["deleteBatches"]>[number];
 type DeleteBatchEntry = DeleteBatchRecord["entries"][number];
 type DeleteBatchView = DeleteBatchRecord & {
   active: DeleteBatchEntry[];
+  paused: DeleteBatchEntry[];
   deleted: DeleteBatchEntry[];
   signal: "red" | "yellow" | "green" | "gray";
   days: number;
@@ -2323,7 +2324,7 @@ export default function InseratStudio() {
     listingId: string,
     patch: Partial<ListingGroup["listingControls"][number]>,
   ) => {
-    setState((current) => ({
+    setState((current) => reconcileDeleteBatchProtections({
       ...current,
       projects: current.projects.map((project) => {
         if (project.id !== projectId) return project;
@@ -2332,7 +2333,7 @@ export default function InseratStudio() {
         const group = normalizeListingGroup(project.listingGroup, project.id) as ListingGroup;
         return { ...project, listingGroup: updateListingControl(group, listing, patch) as ListingGroup };
       }),
-    }));
+    }) as StudioState);
   };
 
   const prepareManagedCopyInState = (
@@ -3099,7 +3100,7 @@ export default function InseratStudio() {
     const batch = deletionBatches.find((item) => item.id === batchId);
     if (!batch?.active.length) return;
     if (!helperOnline) { setNotice("Der lokale Helfer ist nicht erreichbar. Bitte die Anwendung über den Startknopf öffnen."); return; }
-    if (!window.confirm(`Batch ${String(batch.number).padStart(3, "0")} mit ${batch.active.length} Inseraten als gelöscht markieren?`)) return;
+    if (!window.confirm(`Batch ${String(batch.number).padStart(3, "0")} mit ${batch.active.length} löschbaren Inseraten als gelöscht markieren?${batch.paused.length ? ` ${batch.paused.length} geschützte Inserate dürfen im Portal nicht gelöscht werden.` : ""}`)) return;
     try {
       const response = await helperFetch("/delete-batches/confirm", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ batchId, expectedCount: batch.active.length }) });
       const result = await response.json() as { ok?: boolean; message?: string; savedAt?: string; deletedCount?: number };
@@ -3908,8 +3909,8 @@ export default function InseratStudio() {
                   </div>
                   <div className="manager-controls">
                     <label><input type="checkbox" checked={control.automaticUpdateEnabled} onChange={(event) => updateManagedListingControl(project.id, listing.id, { automaticUpdateEnabled: event.target.checked })} /> Automatik</label>
-                    <label><input type="checkbox" checked={control.premiumPlacement} onChange={(event) => updateManagedListingControl(project.id, listing.id, { premiumPlacement: event.target.checked })} /> Premium</label>
-                    <label><input type="checkbox" checked={control.manualLock} onChange={(event) => updateManagedListingControl(project.id, listing.id, { manualLock: event.target.checked })} /> Löschen sperren</label>
+                    <label><input type="checkbox" checked={control.premiumPlacement} onChange={(event) => updateManagedListingControl(project.id, listing.id, { premiumPlacement: event.target.checked })} /> Premium{control.premiumPlacement ? <small> aktiv · Rotation und Löschung geschützt</small> : null}</label>
+                    <label><input type="checkbox" checked={control.manualLock} onChange={(event) => updateManagedListingControl(project.id, listing.id, { manualLock: event.target.checked })} /> Löschen sperren{control.manualLock ? <small> · Rotation und Löschung gesperrt</small> : null}</label>
                     <label className="compact-field">Priorität<input type="number" min={-100} max={100} value={control.userPriority} onChange={(event) => updateManagedListingControl(project.id, listing.id, { userPriority: Number(event.target.value) })} /></label>
                     <label className="compact-field">Modus<select value={control.updateMode} onChange={(event) => updateManagedListingControl(project.id, listing.id, { updateMode: event.target.value as typeof control.updateMode })}><option value="prepare-only">Vorbereiten</option><option value="copy-without-delete">Kopieren</option><option value="full-auto">Vollautomatisch</option><option value="blocked">Gesperrt</option></select></label>
                     <label className="compact-field variant-choice">Nächstes Haus<select value={managerVariantOverrides[listing.id] || nextHouse?.id || ""} onChange={(event) => setManagerVariantOverrides((current) => ({ ...current, [listing.id]: event.target.value }))}>
@@ -3950,10 +3951,11 @@ export default function InseratStudio() {
                 const timing = batch.signal === "gray" ? "Gelöscht bestätigt" : batch.days < 0 ? `${Math.abs(batch.days)} Tag${batch.days === -1 ? "" : "e"} überfällig` : batch.days === 0 ? "Heute löschen" : batch.days === 1 ? "Morgen" : `In ${batch.days} Tagen`;
                 return <article className={`deletion-batch-card ${batch.signal}`} key={batch.id}>
                   <div className="deletion-batch-header"><div><span className="deletion-signal" aria-hidden="true">{batch.signal === "red" ? "🔴" : batch.signal === "yellow" ? "🟡" : batch.signal === "green" ? "🟢" : "⚪"}</span><div><h3>Batch {label}</h3><span>{count} Inserat{count === 1 ? "" : "e"} · {timing} · {batch.plannedDeletionDate}</span></div></div><strong>Suche: 30460-{label}</strong></div>
-                  <details><summary>Inserate anzeigen</summary><div className="deletion-batch-entries">{batch.entries.filter((entry) => entry.status === "active" || entry.status === "deleted").map((entry) => {
+                  {batch.paused.length ? <p role="note">{batch.paused.length} geschützte Inserat{batch.paused.length === 1 ? "" : "e"} mit dieser Suchnummer: im Portal auslassen. Nur die unten als löschbar aufgeführten Inserate löschen.</p> : null}
+                  <details><summary>Inserate anzeigen</summary><div className="deletion-batch-entries">{batch.entries.filter((entry) => entry.status === "active" || entry.status === "deleted" || entry.status === "paused").map((entry) => {
                     const project = deletionProjects.get(entry.projectId);
                     const listing = project?.listings.find((item) => item.id === entry.listingId);
-                    return <div key={`${batch.id}-${entry.externalId}`}><b>{entry.externalId}</b><span>{project ? projectSelectionLabel(project) : "Adresse nicht mehr im Arbeitskatalog"}</span><span>{listing?.templateName || `Haus ${entry.housePosition}`}</span><span>Upload: {entry.uploadDate}</span><span>Löschung: {entry.plannedDeletionDate}</span></div>;
+                    return <div key={`${batch.id}-${entry.externalId}`}><b>{entry.externalId}</b><span>{entry.status === "paused" ? "Geschützt · nicht löschen" : entry.status === "deleted" ? "Gelöscht bestätigt" : "Löschbar"}</span><span>{project ? projectSelectionLabel(project) : "Adresse nicht mehr im Arbeitskatalog"}</span><span>{listing?.templateName || `Haus ${entry.housePosition}`}</span><span>Upload: {entry.uploadDate}</span><span>Löschung: {entry.plannedDeletionDate}</span></div>;
                   })}</div></details>
                   {batch.active.length ? <button className="secondary" onClick={() => markDeletionBatch(batch.id)}>Batch als gelöscht markieren</button> : null}
                 </article>;

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { allocateDeleteBatchNumber, addCalendarDays, assertDeleteBatchUploadReady, confirmDeleteBatch, deleteBatchTrafficLight, linkDeleteBatchListings, replanDeleteBatchesForUpload } from "../delete-batches.mjs";
+import { allocateDeleteBatchNumber, addCalendarDays, assertDeleteBatchUploadReady, confirmDeleteBatch, deleteBatchTrafficLight, linkDeleteBatchListings, reconcileDeleteBatchProtections, replanDeleteBatchesForUpload } from "../delete-batches.mjs";
 import { isHvObjectNumber } from "../object-number-sequence.mjs";
 
 function empty() { return { projects: [], deleteBatches: [] }; }
@@ -77,4 +77,72 @@ test("untransferred draft can be re-planned for actual upload date without chang
   assert.throws(() => assertDeleteBatchUploadReady(state, draft, "2026-09-30"), /passt nicht zum heutigen Uploadtag/u);
   assert.doesNotThrow(() => assertDeleteBatchUploadReady(revised, revised.projects[0].listings[0], "2026-09-30"));
   assert.doesNotThrow(() => assertDeleteBatchUploadReady(state, old, "2026-09-30"));
+});
+
+function protectedFixture(protection = {}) {
+  const listing = { id: "protected", externalId: "", status: "published", transferredAt: "2026-09-29T10:00:00Z" };
+  let state = { ...empty(), projects: [{ id: "address", listings: [listing], listingGroup: { variants: [{ listing }], listingControls: [{ listingId: listing.id, ...protection }] } }] };
+  const allocated = allocate(state, "address", 1, "2026-09-29", listing.id);
+  listing.externalId = allocated.externalId;
+  state = linkDeleteBatchListings(allocated.state);
+  return state;
+}
+
+test("normal listing enters the batch; Premium and manual lock never enter the active traffic light", () => {
+  const normal = protectedFixture();
+  assert.equal(normal.deleteBatches[0].entries[0].status, "active");
+  assert.equal(deleteBatchTrafficLight(normal, "2026-10-08")[0].active.length, 1);
+  for (const protection of [{ premiumPlacement: true }, { manualLock: true }]) {
+    const state = protectedFixture(protection);
+    assert.equal(state.deleteBatches[0].entries[0].status, "paused");
+    assert.equal(deleteBatchTrafficLight(state, "2026-10-08").length, 0);
+    assert.equal(replanDeleteBatchesForUpload(state, ["protected"], "2026-09-30").projects[0].listings[0].externalId, state.projects[0].listings[0].externalId);
+    assert.doesNotThrow(() => assertDeleteBatchUploadReady(state, state.projects[0].listings[0], "2026-09-30"));
+    assert.throws(() => confirmDeleteBatch(state, state.deleteBatches[0].id), /keine übertragenen/u);
+  }
+});
+
+test("late Premium pauses a future batch without changing number or history; switching it off resumes it", () => {
+  const state = protectedFixture();
+  const originalNumber = state.projects[0].listings[0].externalId;
+  const originalBatchId = state.deleteBatches[0].id;
+  const historyEntry = { ...state.deleteBatches[0].entries[0] };
+  state.projects[0].listingGroup.listingControls[0].premiumPlacement = true;
+  const paused = reconcileDeleteBatchProtections(state);
+  assert.equal(paused.deleteBatches[0].entries[0].status, "paused");
+  assert.equal(paused.deleteBatches[0].entries[0].pausedFrom, "active");
+  assert.equal(paused.projects[0].listings[0].externalId, originalNumber);
+  assert.equal(paused.deleteBatches[0].id, originalBatchId);
+  assert.equal(paused.deleteBatches[0].entries[0].externalId, historyEntry.externalId);
+  assert.equal(deleteBatchTrafficLight(paused, "2026-10-08").length, 0);
+  paused.projects[0].listingGroup.listingControls[0].premiumPlacement = false;
+  const resumed = reconcileDeleteBatchProtections(paused);
+  assert.equal(resumed.deleteBatches[0].entries[0].status, "active");
+  assert.equal(resumed.projects[0].listings[0].externalId, originalNumber);
+  assert.equal(deleteBatchTrafficLight(resumed, "2026-10-08")[0].active.length, 1);
+});
+
+test("mixed batch confirms only unprotected listings and retains protected entries", () => {
+  let state = protectedFixture();
+  const second = allocate(state, "second-address", 1, "2026-09-29", "normal");
+  state = second.state;
+  const listing = { id: "normal", externalId: second.externalId, status: "published", transferredAt: "2026-09-29T11:00:00Z" };
+  state.projects.push({ id: "second-address", listings: [listing], listingGroup: { variants: [{ listing }], listingControls: [{ listingId: listing.id }] } });
+  state.projects[0].listingGroup.listingControls[0].manualLock = true;
+  state = linkDeleteBatchListings(state);
+  const batch = deleteBatchTrafficLight(state, "2026-10-08")[0];
+  assert.equal(batch.active.length, 1);
+  assert.equal(batch.paused.length, 1);
+  assert.equal(batch.active[0].listingId, "normal");
+  const confirmed = confirmDeleteBatch(state, batch.id, "2026-10-08T12:00:00Z");
+  assert.equal(confirmed.deletedCount, 1);
+  assert.equal(confirmed.state.projects[0].listings[0].status, "published");
+  assert.equal(confirmed.state.projects[1].listings[0].status, "deleted");
+  assert.equal(confirmed.state.deleteBatches[0].entries.find((entry) => entry.listingId === "protected").status, "paused");
+  assert.equal(confirmed.state.deleteBatches[0].entries.find((entry) => entry.listingId === "normal").status, "deleted");
+  confirmed.state.projects[0].listingGroup.listingControls[0].manualLock = false;
+  const resumed = reconcileDeleteBatchProtections(confirmed.state);
+  assert.equal(resumed.deleteBatches[0].completedAt, "");
+  assert.equal(deleteBatchTrafficLight(resumed, "2026-10-08")[0].active.length, 1);
+  assert.equal(resumed.deleteBatches[0].entries.find((entry) => entry.listingId === "normal").status, "deleted");
 });
