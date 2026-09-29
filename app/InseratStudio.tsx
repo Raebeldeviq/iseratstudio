@@ -4,6 +4,7 @@
 import { ChangeEvent, useEffect, useState } from "react";
 import { AI_MODEL_OPTIONS, DEFAULT_AI_MODEL } from "../ai-models.mjs";
 import { isDraftListing, mergeListingCollection } from "../listing-catalog-view.mjs";
+import { filterManagedListingsByObjectNumber } from "../listing-manager-view.mjs";
 import { activeWorkingListingCount } from "../active-listings.mjs";
 import { plotAddressSelection, selectablePlotIds, selectablePlotProjects } from "../plot-selection.mjs";
 import {
@@ -874,6 +875,9 @@ export default function InseratStudio() {
   const [managerSortKey, setManagerSortKey] = useState<ManagerSortKey>("health");
   const [managerSortDirection, setManagerSortDirection] = useState<"asc" | "desc">("desc");
   const [groupManagerByPlot, setGroupManagerByPlot] = useState(false);
+  const [managerObjectNumberQuery, setManagerObjectNumberQuery] = useState("");
+  const [expandedManagerListingKey, setExpandedManagerListingKey] = useState<string | null>(null);
+  const [collapsedSingleManagerResultKey, setCollapsedSingleManagerResultKey] = useState<string | null>(null);
   const [plotSyncStatus, setPlotSyncStatus] = useState<PlotSyncStatus | null>(null);
   const [plotSyncBusy, setPlotSyncBusy] = useState(false);
   const [postalRegionIndex, setPostalRegionIndex] = useState<PostalRegionIndex>({});
@@ -1257,10 +1261,12 @@ export default function InseratStudio() {
     const stable = compared || collator.compare(projectSelectionLabel(left.project), projectSelectionLabel(right.project)) || collator.compare(left.listing.id, right.listing.id);
     return managerSortDirection === "asc" ? stable : -stable;
   });
+  const visibleManagedListings = filterManagedListingsByObjectNumber(sortedManagedListings, managerObjectNumberQuery) as typeof sortedManagedListings;
+  const singleManagerSearchResult = Boolean(managerObjectNumberQuery.trim()) && visibleManagedListings.length === 1;
   const managerListingGroups = groupManagerByPlot
-    ? [...new Map(sortedManagedListings.map((entry) => [entry.project.id, entry.project])).values()]
-      .map((project) => ({ id: project.id, label: projectSelectionLabel(project), items: sortedManagedListings.filter((entry) => entry.project.id === project.id) }))
-    : [{ id: "all", label: "Alle Inserate", items: sortedManagedListings }];
+    ? [...new Map(visibleManagedListings.map((entry) => [entry.project.id, entry.project])).values()]
+      .map((project) => ({ id: project.id, label: projectSelectionLabel(project), items: visibleManagedListings.filter((entry) => entry.project.id === project.id) }))
+    : [{ id: "all", label: "Alle Inserate", items: visibleManagedListings }];
 
   const saveHousesNow = async () => {
     const savedAt = new Date().toISOString();
@@ -3892,13 +3898,28 @@ export default function InseratStudio() {
           <div className="content-card manager-list-card">
             <div className="section-heading compact"><div><span className="eyebrow">Alle Adressen</span><h3>{managedListings.length} verwaltete{managedListings.length === 1 ? "s" : ""} Inserat{managedListings.length === 1 ? "" : "e"}</h3></div></div>
             <div className="manager-view-controls">
+              <label className="field manager-search"><span>Objektnummer suchen</span><input type="search" placeholder="Objektnummer suchen …" value={managerObjectNumberQuery} onChange={(event) => { setManagerObjectNumberQuery(event.target.value); setExpandedManagerListingKey(null); setCollapsedSingleManagerResultKey(null); }} /></label>
               <label className="field"><span>Sortieren nach</span><select value={managerSortKey} onChange={(event) => setManagerSortKey(event.target.value as ManagerSortKey)}><option value="city">Ort</option><option value="uploadDate">Upload-Datum</option><option value="lastUpdate">Letzte Aktualisierung</option><option value="nextUpdate">Nächste Aktualisierung</option><option value="health">Health Score</option><option value="status">Status</option></select></label>
               <button className="secondary" onClick={() => setManagerSortDirection((direction) => direction === "asc" ? "desc" : "asc")}>{managerSortDirection === "asc" ? "↑ Aufsteigend" : "↓ Absteigend"}</button>
               <label className="standard-package manager-group-toggle"><input type="checkbox" checked={groupManagerByPlot} onChange={(event) => setGroupManagerByPlot(event.target.checked)} /><span><b>Nach Grundstück gruppieren</b><small>Alle Inserate einer Adresse zusammen anzeigen.</small></span></label>
             </div>
+            {managerObjectNumberQuery.trim() ? <p className="manager-search-count" role="status">{visibleManagedListings.length} Treffer für „{managerObjectNumberQuery.trim()}“</p> : null}
             <div className="manager-table" role="table" aria-label="Verwaltete Inserate">
-              {managerListingGroups.map((managerGroup) => <section className="manager-property-group" key={managerGroup.id}>{groupManagerByPlot ? <header><b>{managerGroup.label}</b><span>{managerGroup.items.length} Inserate</span></header> : null}{managerGroup.items.map(({ project, listing, control, health, rotationPlan, nextHouse }) => (
+              {managerListingGroups.map((managerGroup) => <section className="manager-property-group" key={managerGroup.id}>{groupManagerByPlot ? <header><b>{managerGroup.label}</b><span>{managerGroup.items.length} Inserate</span></header> : null}{managerGroup.items.map(({ project, listing, control, health, rotationPlan, nextHouse }) => {
+                const listingKey = `${project.id}:${listing.id}`;
+                const expanded = (singleManagerSearchResult && collapsedSingleManagerResultKey !== listingKey) || expandedManagerListingKey === listingKey;
+                return (
                 <article className={`manager-row${control.premiumPlacement || control.manualLock || listing.rotationArchivedAt ? " locked" : ""}`} key={`${project.id}-${listing.id}`}>
+                  <button type="button" className="manager-row-summary" aria-expanded={expanded} aria-controls={expanded ? `manager-details-${project.id}-${listing.id}` : undefined} onClick={() => singleManagerSearchResult ? setCollapsedSingleManagerResultKey(expanded ? listingKey : null) : setExpandedManagerListingKey(expanded ? null : listingKey)}>
+                    <b className="manager-summary-number">{listing.externalId || "Noch nicht hochgeladen"}</b>
+                    <span className="manager-summary-house">{listing.templateName}</span>
+                    <span className="manager-summary-address">{projectSelectionLabel(project)}</span>
+                    <span className="manager-summary-status">{control.statusMessage || workflowStatusLabel(control.status)} · Health {health.score}</span>
+                    {control.premiumPlacement ? <span className="manager-summary-protection">Premium aktiv</span> : null}
+                    {control.manualLock ? <span className="manager-summary-protection">Löschung gesperrt</span> : null}
+                    <span className="manager-summary-chevron" aria-hidden="true">{expanded ? "▲" : "▼"}</span>
+                  </button>
+                  {expanded ? <div id={`manager-details-${project.id}-${listing.id}`} className="manager-row-details">
                   <div className="manager-row-main">
                     <div><span>Adresse</span><b>{projectSelectionLabel(project)}</b></div>
                     <div><span>Objektnummer</span><b>{listing.externalId || "Noch nicht hochgeladen"}</b>{listing.importConfirmedAt ? <small>Immoprofessional: erfolgreich importiert · {localDateTime(listing.importConfirmedAt)}</small> : null}{listing.supersededByListingId ? <small>Ersetzt durch {project.listings.find((candidate) => candidate.id === listing.supersededByListingId)?.externalId || listing.supersededByListingId}</small> : null}</div>
@@ -3926,9 +3947,12 @@ export default function InseratStudio() {
                     <button className="primary" disabled={Boolean(listing.rotationArchivedAt)} onClick={() => prepareManagedListing(project.id, listing.id, control.updateMode === "full-auto" ? "full-auto" : control.updateMode === "copy-without-delete" ? "copy-without-delete" : "prepare-only")}>Jetzt aktualisieren</button>
                     <button className="secondary" disabled={Boolean(listing.rotationArchivedAt)} onClick={() => prepareManagedListing(project.id, listing.id, "copy-without-delete")}>Nur kopieren</button>
                   </div>
+                  </div> : null}
                 </article>
-              ))}</section>)}
+                );
+              })}</section>)}
               {!managedListings.length ? <div className="empty-state large"><b>Noch keine verwalteten Inserate</b><span>Im gespeicherten Katalog sind noch keine Inserate vorhanden.</span></div> : null}
+              {managedListings.length > 0 && visibleManagedListings.length === 0 ? <div className="empty-state large"><b>Keine passende Objektnummer</b><span>Bitte Suchbegriff prüfen oder die Suche löschen.</span></div> : null}
             </div>
           </div>
         </section>

@@ -560,15 +560,30 @@ input:focus, textarea:focus, select:focus { border-color: #91bc47; box-shadow: 0
 .scheduler-weekdays > div label { display: flex; align-items: center; gap: 0.25rem; color: var(--muted); font-size: 0.65rem; font-weight: 750; }
 .scheduler-weekdays input { width: auto; accent-color: var(--accent); }
 .manager-table { display: grid; gap: 0.75rem; }
-.manager-view-controls { display: grid; grid-template-columns: minmax(180px, 0.7fr) auto minmax(300px, 1.2fr); gap: 0.7rem; align-items: end; margin-bottom: 1rem; padding: 0.8rem; border: 1px solid var(--line); border-radius: 12px; background: #f6f8f3; }
+.manager-view-controls { display: grid; grid-template-columns: minmax(190px, 1.2fr) minmax(170px, 0.8fr) auto minmax(245px, 1.15fr); gap: 0.7rem; align-items: end; margin-bottom: 1rem; padding: 0.8rem; border: 1px solid var(--line); border-radius: 12px; background: #f6f8f3; }
 .manager-view-controls .field, .manager-view-controls .standard-package { margin: 0; }
 .manager-view-controls > button { min-height: 42px; }
+.manager-search input { width: 100%; min-height: 42px; }
+.manager-search-count { margin: -0.35rem 0 0.8rem; color: var(--muted); font-size: 0.74rem; }
 .manager-property-group { display: grid; gap: 0.7rem; }
 .manager-property-group > header { display: flex; justify-content: space-between; gap: 1rem; padding: 0.65rem 0.8rem; border-radius: 10px; color: var(--ink); background: #eaf2e2; }
 .manager-property-group > header b { font-size: 0.72rem; }
 .manager-property-group > header span { color: var(--muted); font-size: 0.63rem; }
 .manager-row { overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: #fff; }
 .manager-row.locked { border-color: #d8c9b8; background: #fffaf4; }
+.manager-row-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem 0.8rem; width: 100%; min-height: 52px; padding: 0.7rem 0.85rem; border: 0; background: #f7f9f5; color: var(--ink); text-align: left; cursor: pointer; }
+.manager-row-summary:hover { background: #eef4e9; }
+.manager-row-summary:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: -3px; }
+.manager-row.locked .manager-row-summary { background: #fff7ed; }
+.manager-row.locked .manager-row-summary:hover { background: #fdf0de; }
+.manager-row-summary > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.manager-summary-number { flex: 0 0 115px; font-size: 0.75rem; }
+.manager-summary-house { flex: 0 0 135px; font-size: 0.72rem; font-weight: 700; }
+.manager-summary-address { flex: 1 1 190px; font-size: 0.71rem; }
+.manager-summary-status { flex: 1 1 170px; color: var(--muted); font-size: 0.68rem; }
+.manager-summary-protection { flex: 0 0 auto; padding: 0.2rem 0.45rem; border-radius: 999px; background: #f3e2cd; color: #745235; font-size: 0.61rem; font-weight: 750; }
+.manager-summary-chevron { margin-left: auto; color: var(--muted); font-size: 0.7rem; }
+.manager-row-details { border-top: 1px solid var(--line); }
 .manager-row-main { display: grid; grid-template-columns: 1.4fr repeat(5, minmax(0, 1fr)); gap: 0.7rem; padding: 0.85rem; background: #f7f9f5; }
 .manager-row-main > div { min-width: 0; display: flex; flex-direction: column; gap: 0.18rem; }
 .manager-row-main span { color: var(--muted); font-size: 0.58rem; text-transform: uppercase; letter-spacing: 0.04em; }
@@ -686,6 +701,8 @@ input:focus, textarea:focus, select:focus { border-color: #91bc47; box-shadow: 0
 .duplicate-tab-screen p { max-width: 520px; line-height: 1.65; }
 
 @media (max-width: 900px) {
+  .manager-view-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .manager-group-toggle { grid-column: 1 / -1; }
   .plot-sync-card { grid-template-columns: 1fr; }
   .plot-sync-log { grid-column: auto; }
   .plot-region-groups > section > div { grid-template-columns: 1fr; }
@@ -711,6 +728,10 @@ input:focus, textarea:focus, select:focus { border-color: #91bc47; box-shadow: 0
 }
 
 @media (max-width: 620px) {
+  .manager-view-controls { grid-template-columns: 1fr; }
+  .manager-group-toggle { grid-column: auto; }
+  .manager-summary-number, .manager-summary-house { flex-basis: auto; }
+  .manager-summary-address, .manager-summary-status { flex-basis: 100%; }
   .app-version-badge { right: 7px; bottom: 7px; font-size: 0.58rem; }
   .topbar { padding: 0 1rem; }
   .storage-pill { max-width: 150px; overflow: hidden; white-space: nowrap; }
