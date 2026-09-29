@@ -100,6 +100,24 @@ test("audit marks conflicting productive duplicates for review instead of deleti
   assert.equal(cleaned.state.projects.length, 2);
 });
 
+test("a deleted number may be reused in a later cycle but two active copies are flagged", () => {
+  const state = fixture();
+  state.projects[0].listings = [
+    { id: "historical", externalId: "30460-001001", templateId: "house-1", status: WORKFLOW_STATUS.DELETED },
+    { id: "current", externalId: "30460-001001", templateId: "house-1", status: WORKFLOW_STATUS.PUBLISHED },
+  ];
+  assert.equal(auditStudioState(state).findings.some((item) => item.code === "duplicate-external-id"), false);
+  state.projects[0].listings[0].status = WORKFLOW_STATUS.PUBLISHED;
+  assert.equal(auditStudioState(state).findings.some((item) => item.code === "duplicate-external-id"), true);
+});
+
+test("a manually deleted rotation listing stays deleted during catalog cleanup", () => {
+  const state = fixture();
+  state.projects[0].listings = [{ id: "old-rotation", externalId: "30460-001001", templateId: "house-1", status: WORKFLOW_STATUS.DELETED, rotationArchivedAt: "2026-09-28T00:00:00Z" }];
+  const cleaned = cleanupStudioState(state, { apply: true });
+  assert.equal(cleaned.state.projects[0].listings[0].status, WORKFLOW_STATUS.DELETED);
+});
+
 test("cleanup preserves referenced variant controls and removes only truly stale controls", () => {
   const state = fixture();
   const project = state.projects[0];

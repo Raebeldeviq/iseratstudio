@@ -108,7 +108,8 @@ import {
   plotFromProject,
 } from "../plot-records.mjs";
 import { latestResetListingFacts, resetPlotListings } from "../plot-listing-reset.mjs";
-import { allocateObjectNumbers, isHvObjectNumber } from "../object-number-sequence.mjs";
+import { isHvObjectNumber } from "../object-number-sequence.mjs";
+import { allocateDeleteBatchNumber, calendarDate, deleteBatchTrafficLight, linkDeleteBatchListings, replanDeleteBatchesForUpload } from "../delete-batches.mjs";
 import { normalizeWorkflowStatus, workflowStatusLabel, WORKFLOW_STATUS } from "../workflow-status.mjs";
 import {
   formatClaimIssue,
@@ -158,7 +159,15 @@ function normalizePromotionLibrary(value: StudioState): PromotionLibraryState {
   return normalizePromotionLibraryValue(value) as PromotionLibraryState;
 }
 
-type Tab = "plots" | "houses" | "preview" | "manager" | "settings";
+type Tab = "plots" | "houses" | "preview" | "manager" | "deletion" | "settings";
+type DeleteBatchRecord = NonNullable<StudioState["deleteBatches"]>[number];
+type DeleteBatchEntry = DeleteBatchRecord["entries"][number];
+type DeleteBatchView = DeleteBatchRecord & {
+  active: DeleteBatchEntry[];
+  deleted: DeleteBatchEntry[];
+  signal: "red" | "yellow" | "green" | "gray";
+  days: number;
+};
 type AiModel = "gpt-6-luna" | "gpt-5.6-terra" | "gpt-5.6-sol";
 type FtpSecurity = "explicit" | "implicit" | "none";
 type MediaLibraryKind = "house" | "floorplan" | "interior" | "location" | "marketing";
@@ -321,20 +330,22 @@ function createVariantListing(
 
 function existingOrAllocatedExternalId(
   previous: GeneratedListing | null | undefined,
-  allocate: () => string,
+  allocate: (position: number, projectId: string) => string,
+  position: number,
+  projectId: string,
 ): string {
   const existing = String(previous?.externalId || "").trim();
   if (previous && !isDraftListing(previous)) return existing;
-  return isHvObjectNumber(existing) ? existing : allocate();
+  return isHvObjectNumber(existing) ? existing : allocate(position, projectId);
 }
 
 function normalizeMandatoryListingStandards(inputState: StudioState): StudioState {
   const state = cleanupStudioState(inputState, { apply: true }).state as StudioState;
   let stateWithObjectNumbers = state;
-  const allocateExternalId = () => {
-    const allocation = allocateObjectNumbers(stateWithObjectNumbers, 1);
+  const allocateExternalId = (position: number, projectId: string) => {
+    const allocation = allocateDeleteBatchNumber(stateWithObjectNumbers, { housePosition: position, projectId });
     stateWithObjectNumbers = allocation.state as StudioState;
-    return allocation.objectNumbers[0];
+    return allocation.externalId;
   };
   const promotion = normalizePromotionLibrary(state);
   const houses = state.houses.map((storedHouse) => {
@@ -375,7 +386,7 @@ function normalizeMandatoryListingStandards(inputState: StudioState): StudioStat
             variant.id,
             index + 1,
             previous,
-            existingOrAllocatedExternalId(previous, allocateExternalId),
+            existingOrAllocatedExternalId(previous, allocateExternalId, index + 1, project.id),
             latestResetListingFacts(state, project.id, house.id),
           ),
         );
@@ -397,7 +408,7 @@ function normalizeMandatoryListingStandards(inputState: StudioState): StudioStat
             variant.id,
             variant.order,
             variant.listing,
-            existingOrAllocatedExternalId(variant.listing, allocateExternalId),
+            existingOrAllocatedExternalId(variant.listing, allocateExternalId, variant.order, project.id),
             latestResetListingFacts(state, project.id, house.id),
           ),
           { active: variant.order <= HOUSES_PER_PROJECT },
@@ -427,7 +438,7 @@ function normalizeMandatoryListingStandards(inputState: StudioState): StudioStat
         listingGroup: listingGroup as ListingGroup,
       };
     });
-  return {
+  return linkDeleteBatchListings({
     ...stateWithObjectNumbers,
     ...promotion,
     uploadHistory: Array.isArray(state.uploadHistory) ? state.uploadHistory.slice(-BATCH_UPLOAD_LOG_LIMIT) : [],
@@ -435,7 +446,7 @@ function normalizeMandatoryListingStandards(inputState: StudioState): StudioStat
     scheduler: normalizeListingScheduler(state.scheduler),
     projects,
     houseDistribution: normalizeHouseDistribution(state.houseDistribution, houses, projects) as HouseDistributionState,
-  };
+  });
 }
 
 function effectiveHouseImages(state: StudioState, house: HouseTemplate): HouseImage[] {
@@ -797,6 +808,7 @@ async function loadDeviceCatalogSnapshot(): Promise<{
 
 export default function InseratStudio() {
   const [tab, setTab] = useState<Tab>("plots");
+  const [today, setToday] = useState(() => calendarDate());
   const [state, setState] = useState<StudioState>(initialState);
   const [ready, setReady] = useState(false);
   const [catalogLoadError, setCatalogLoadError] = useState("");
@@ -864,6 +876,11 @@ export default function InseratStudio() {
   const [plotSyncStatus, setPlotSyncStatus] = useState<PlotSyncStatus | null>(null);
   const [plotSyncBusy, setPlotSyncBusy] = useState(false);
   const [postalRegionIndex, setPostalRegionIndex] = useState<PostalRegionIndex>({});
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setToday(calendarDate()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     let releaseLock: (() => void) | undefined;
@@ -1103,6 +1120,12 @@ export default function InseratStudio() {
     if (project.plotId) counts[project.plotId] = (counts[project.plotId] || 0) + 1;
     return counts;
   }, {});
+  const deletionBatches = deleteBatchTrafficLight(state, today) as DeleteBatchView[];
+  const deletionProjects = new Map(state.projects.map((project) => [project.id, project]));
+  const deletionActive = deletionBatches.reduce((sum, batch) => sum + batch.active.length, 0);
+  const deletionToday = deletionBatches.filter((batch) => batch.days === 0).reduce((sum, batch) => sum + batch.active.length, 0);
+  const deletionTomorrow = deletionBatches.filter((batch) => batch.days === 1).reduce((sum, batch) => sum + batch.active.length, 0);
+  const deletionOverdue = deletionBatches.filter((batch) => batch.days < 0).reduce((sum, batch) => sum + batch.active.length, 0);
   const eligibleProjects = selectablePlotProjects(plotRecords, state.projects) as ProjectInput[];
   const activePlotProjects = eligibleProjects.filter((project) => Boolean(project.plotId));
   const selectedWorkflowProjects = activePlotProjects.filter((project) => selectedPlotIds.includes(project.plotId || ""));
@@ -2212,10 +2235,10 @@ export default function InseratStudio() {
       return;
     }
     let stateWithObjectNumbers = state;
-    const allocateExternalId = () => {
-      const allocation = allocateObjectNumbers(stateWithObjectNumbers, 1);
+    const allocateExternalId = (position: number, projectId: string) => {
+      const allocation = allocateDeleteBatchNumber(stateWithObjectNumbers, { housePosition: position, projectId });
       stateWithObjectNumbers = allocation.state as StudioState;
-      return allocation.objectNumbers[0];
+      return allocation.externalId;
     };
     const issues: string[] = [];
     let preparedListings = 0;
@@ -2257,7 +2280,7 @@ export default function InseratStudio() {
             variant.id,
             index + 1,
             previous,
-            existingOrAllocatedExternalId(previous, allocateExternalId),
+            existingOrAllocatedExternalId(previous, allocateExternalId, index + 1, project.id),
             latestResetListingFacts(state, project.id, house.id),
           ),
         ) as ListingGroup;
@@ -2278,11 +2301,11 @@ export default function InseratStudio() {
         listingGroup: group,
       };
     });
-    setState({
+    setState(linkDeleteBatchListings({
       ...stateWithObjectNumbers,
       projects,
       houseDistribution: committed.distribution as HouseDistributionState,
-    });
+    }));
     setBatchItemStatuses({});
     setTab("preview");
     setNotice(`${projectIds.length} Adresse${projectIds.length === 1 ? " wurde" : "n wurden"} mit gewichteter Vierer-Verteilung vorbereitet · ${preparedListings} Inserate mit Standardwerten und Bildern.${issues.length ? ` ${issues.length} Adresse(n) benötigen Nacharbeit: ${issues.slice(0, 2).join(" · ")}` : " Die Texte und Vorschauen sind bereit."}`);
@@ -2333,8 +2356,8 @@ export default function InseratStudio() {
     if (!house || !sourceVariant) {
       return { state: current, message: "Das gewichtete Ersatzhaus oder der Ausgangsplatz ist nicht mehr vorhanden.", ok: false };
     }
-    const allocation = allocateObjectNumbers(current, 1);
-    const copyExternalId = allocation.objectNumbers[0];
+    const allocation = allocateDeleteBatchNumber(current, { housePosition: sourceVariant.order, projectId: project.id });
+    const copyExternalId = allocation.externalId;
     const targetSeed = createVariantListing(
       house,
       project,
@@ -2417,12 +2440,12 @@ export default function InseratStudio() {
     }).group as ListingGroup;
     group = releaseListingOperation(group, sourceListing, token) as ListingGroup;
     return {
-      state: {
+      state: linkDeleteBatchListings({
         ...allocation.state,
         projects: current.projects.map((item) => item.id === project.id
           ? { ...item, listingGroup: group, listings: [...item.listings, copy] }
           : item),
-      },
+      }),
       message: `${copy.externalId} mit „${variant.templateName}“ wurde vorbereitet. Keine Veröffentlichung und keine Löschung.`,
       ok: true,
     };
@@ -2623,16 +2646,16 @@ export default function InseratStudio() {
       );
 
       let stateWithObjectNumbers = state;
-      const allocateExternalId = () => {
-        const allocation = allocateObjectNumbers(stateWithObjectNumbers, 1);
+      const allocateExternalId = (position: number, projectId: string) => {
+        const allocation = allocateDeleteBatchNumber(stateWithObjectNumbers, { housePosition: position, projectId });
         stateWithObjectNumbers = allocation.state as StudioState;
-        return allocation.objectNumbers[0];
+        return allocation.externalId;
       };
-      const sourceListings: GeneratedListing[] = generated.map(({ house, variant, previous, preservedListingFacts, texts, version }) => {
+      const sourceListings: GeneratedListing[] = generated.map(({ house, index, variant, previous, preservedListingFacts, texts, version }) => {
         const nextListing: GeneratedListing = {
         ...previous,
         id: previous?.id ?? uid(),
-        externalId: existingOrAllocatedExternalId(previous, allocateExternalId),
+        externalId: existingOrAllocatedExternalId(previous, allocateExternalId, index + 1, projectSnapshot.id),
         templateId: house.id,
         templateName: house.name,
         price: totalPrice(house, projectSnapshot),
@@ -2658,9 +2681,10 @@ export default function InseratStudio() {
       }
       const listings = mergeListingCollection(projectSnapshot.listings, sourceListings);
 
-      setState((current) => ({
+      setState((current) => linkDeleteBatchListings({
         ...current,
         objectNumberSequence: stateWithObjectNumbers.objectNumberSequence,
+        deleteBatches: stateWithObjectNumbers.deleteBatches,
         projects: current.projects.map((project) =>
           project.id === projectSnapshot.id ? { ...project, listings, listingGroup } : project,
         ),
@@ -2869,6 +2893,24 @@ export default function InseratStudio() {
       setNotice("Der lokale Upload-Helfer ist nicht erreichbar. Bitte die Anwendung über den Startknopf öffnen.");
       return;
     }
+    const uploadListingIds = (batchPlan.addresses as Array<{ items: Array<{ listingId: string }> }>)
+      .flatMap((address) => address.items.map((item) => item.listingId));
+    const uploadDay = calendarDate();
+    const needsReplan = (state.deleteBatches || []).some((batch) => batch.entries.some((entry) =>
+      uploadListingIds.includes(entry.listingId) && (entry.status === "void" || (entry.status === "planned" && entry.uploadDate !== uploadDay))));
+    if (needsReplan) {
+      try {
+        const updated = replanDeleteBatchesForUpload(state, uploadListingIds, uploadDay) as StudioState;
+        const savedAt = new Date().toISOString();
+        await saveStudioState(updated, savedAt);
+        await queueDeviceCatalogSnapshot(updated, savedAt);
+        setState(updated);
+        setNotice("Die Batchnummern wurden an den heutigen Uploadtag angepasst und gespeichert. Bitte den Upload erneut starten und die Nummern prüfen.");
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Batchnummern konnten nicht sicher gespeichert werden.");
+      }
+      return;
+    }
     let runPlan = batchPlan;
     let protectedListingIds: string[] = [];
     try {
@@ -3050,6 +3092,26 @@ export default function InseratStudio() {
     } finally {
       setUploading(false);
       setUploadStatus("");
+    }
+  };
+
+  const markDeletionBatch = async (batchId: string) => {
+    const batch = deletionBatches.find((item) => item.id === batchId);
+    if (!batch?.active.length) return;
+    if (!helperOnline) { setNotice("Der lokale Helfer ist nicht erreichbar. Bitte die Anwendung über den Startknopf öffnen."); return; }
+    if (!window.confirm(`Batch ${String(batch.number).padStart(3, "0")} mit ${batch.active.length} Inseraten als gelöscht markieren?`)) return;
+    try {
+      const response = await helperFetch("/delete-batches/confirm", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ batchId, expectedCount: batch.active.length }) });
+      const result = await response.json() as { ok?: boolean; message?: string; savedAt?: string; deletedCount?: number };
+      if (!response.ok || !result.ok) throw new Error(result.message || "Der Batch konnte nicht gespeichert werden.");
+      const snapshot = await loadDeviceCatalogSnapshot();
+      if (!snapshot || snapshot.savedAt !== result.savedAt) throw new Error("Der Batch wurde bestätigt, aber der aktuelle Katalog konnte nicht geladen werden. Bitte die App neu öffnen.");
+      acceptKnownDeviceCatalogSavedAt(snapshot.savedAt);
+      const updated = normalizeMandatoryListingStandards(normalizeProjectOwners(snapshot.state));
+      setState(updated);
+      setNotice(`Batch ${String(batch.number).padStart(3, "0")} mit ${result.deletedCount} Inseraten intern als gelöscht bestätigt. Es wurde keine Portalaktion ausgeführt.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Der Lösch-Batch konnte nicht bestätigt werden.");
     }
   };
 
@@ -3309,7 +3371,8 @@ export default function InseratStudio() {
           ["houses", "02", "Haustypen"],
           ["preview", "03", "Texte & Vorschau"],
           ["manager", "04", "Inseratsmanager"],
-          ["settings", "05", "Export & Upload"],
+          ["deletion", "05", "Lösch-Ampel"],
+          ["settings", "06", "Export & Upload"],
         ] as Array<[Tab, string, string]>).map(([id, number, label]) => (
           <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>
             <span>{number}</span>{label}
@@ -3865,6 +3928,37 @@ export default function InseratStudio() {
                 </article>
               ))}</section>)}
               {!managedListings.length ? <div className="empty-state large"><b>Noch keine verwalteten Inserate</b><span>Im gespeicherten Katalog sind noch keine Inserate vorhanden.</span></div> : null}
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      {tab === "deletion" ? (
+        <section className="workspace deletion-workspace">
+          <div className="content-card">
+            <div className="section-heading"><div><span className="eyebrow">Manuelle Löschung in Immoprofessional</span><h2>Lösch-Ampel</h2><small className="section-note">Suche die angezeigte Batchnummer in Immoprofessional. Bestätige hier erst nach der manuellen Löschung.</small></div></div>
+            <div className="deletion-summary">
+              <div><b>{deletionActive}</b><span>Aktiv im Batchsystem</span></div>
+              <div><b>{deletionToday}</b><span>Heute löschen</span></div>
+              <div><b>{deletionTomorrow}</b><span>Morgen</span></div>
+              <div><b>{deletionOverdue}</b><span>Überfällig</span></div>
+            </div>
+            <div className="deletion-batch-list">
+              {deletionBatches.map((batch) => {
+                const label = String(batch.number).padStart(3, "0");
+                const count = batch.active.length || batch.deleted.length;
+                const timing = batch.signal === "gray" ? "Gelöscht bestätigt" : batch.days < 0 ? `${Math.abs(batch.days)} Tag${batch.days === -1 ? "" : "e"} überfällig` : batch.days === 0 ? "Heute löschen" : batch.days === 1 ? "Morgen" : `In ${batch.days} Tagen`;
+                return <article className={`deletion-batch-card ${batch.signal}`} key={batch.id}>
+                  <div className="deletion-batch-header"><div><span className="deletion-signal" aria-hidden="true">{batch.signal === "red" ? "🔴" : batch.signal === "yellow" ? "🟡" : batch.signal === "green" ? "🟢" : "⚪"}</span><div><h3>Batch {label}</h3><span>{count} Inserat{count === 1 ? "" : "e"} · {timing} · {batch.plannedDeletionDate}</span></div></div><strong>Suche: 30460-{label}</strong></div>
+                  <details><summary>Inserate anzeigen</summary><div className="deletion-batch-entries">{batch.entries.filter((entry) => entry.status === "active" || entry.status === "deleted").map((entry) => {
+                    const project = deletionProjects.get(entry.projectId);
+                    const listing = project?.listings.find((item) => item.id === entry.listingId);
+                    return <div key={`${batch.id}-${entry.externalId}`}><b>{entry.externalId}</b><span>{project ? projectSelectionLabel(project) : "Adresse nicht mehr im Arbeitskatalog"}</span><span>{listing?.templateName || `Haus ${entry.housePosition}`}</span><span>Upload: {entry.uploadDate}</span><span>Löschung: {entry.plannedDeletionDate}</span></div>;
+                  })}</div></details>
+                  {batch.active.length ? <button className="secondary" onClick={() => markDeletionBatch(batch.id)}>Batch als gelöscht markieren</button> : null}
+                </article>;
+              })}
+              {!deletionBatches.length ? <div className="empty-state"><b>Noch keine aktiven Lösch-Batches</b><span>Neu erzeugte Inserate erscheinen nach erfolgreichem Upload hier. Bestehende Objektnummern werden nicht umgedeutet.</span></div> : null}
             </div>
           </div>
         </section>

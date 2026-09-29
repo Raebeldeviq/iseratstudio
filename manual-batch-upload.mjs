@@ -3,6 +3,7 @@ import { batchEligibleListings } from "./active-listings.mjs";
 import { listingControl } from "./listing-groups.mjs";
 import { updatePreparedCopyAfterUpload } from "./listing-transfer-state.mjs";
 import { WORKFLOW_STATUS } from "./workflow-status.mjs";
+import { linkDeleteBatchListings } from "./delete-batches.mjs";
 
 export const UPLOAD_ORIGIN = Object.freeze({
   AUTOMATIC_ROTATION: "automatic-rotation",
@@ -129,5 +130,5 @@ export function reconcileCompletedManualBatchTransferInState(state, input = {}) 
   )) {
     throw new Error("Die veröffentlichte Quelle würde vor der Importbestätigung verändert.");
   }
-  return nextState;
+  return linkDeleteBatchListings(nextState);
 }

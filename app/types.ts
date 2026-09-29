@@ -379,6 +379,7 @@ export type GeneratedListing = {
   supersededByListingId?: string;
   replacementConfirmedAt?: string;
   externalDeletionPending?: boolean;
+  deletedAt?: string;
 };
 
 export type ListingGroupVariantRole = "variant" | "primary" | "alternative";
@@ -653,6 +654,25 @@ export type StudioState = {
     prefix: "30460";
     next: number;
   };
+  deleteBatches?: Array<{
+    id: string;
+    cycle: number;
+    number: number;
+    plannedDeletionDate: string;
+    completedAt: string;
+    entries: Array<{
+      batchId: string;
+      listingId: string;
+      projectId: string;
+      externalId: string;
+      index: number;
+      housePosition: number;
+      uploadDate: string;
+      plannedDeletionDate: string;
+      status: "planned" | "active" | "deleted" | "void";
+      deletedAt: string;
+    }>;
+  }>;
   listingResetHistory?: ListingResetArchive[];
   importReports?: ImportReportRecord[];
   importReportReviews?: ImportReportReview[];

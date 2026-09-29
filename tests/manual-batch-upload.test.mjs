@@ -138,6 +138,23 @@ test("completed manual transfer persists only pending import and keeps the publi
   assert.equal(next.uploadHistory.at(-1).jobId, jobId);
 });
 
+test("completed transfer activates only an explicitly assigned deletion batch", () => {
+  const state = preparedRotationState();
+  state.projects[0].listings[1].externalId = "30460-001001";
+  state.deleteBatches = [{
+    id: "delete-batch:1:1", cycle: 1, number: 1, plannedDeletionDate: "2026-10-05", completedAt: "",
+    entries: [{ batchId: "delete-batch:1:1", listingId: "copy-listing", projectId: "project-1", externalId: "30460-001001", index: 1, housePosition: 1, uploadDate: "2026-09-26", plannedDeletionDate: "2026-10-05", status: "planned", deletedAt: "" }],
+  }];
+  const next = reconcileCompletedManualBatchTransferInState(state, {
+    projectId: "project-1", listingId: "copy-listing",
+    jobId: "upload:project-1:copy-listing:30460-001001:2:normal",
+    ledgerStatus: WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT,
+    transferredAt: "2026-09-26T16:01:04.099Z",
+  });
+  assert.equal(next.deleteBatches[0].entries[0].status, "active");
+  assert.equal(next.deleteBatches[0].entries[0].uploadDate, "2026-09-26");
+});
+
 test("completed manual transfer reconciliation is idempotent", () => {
   const input = {
     projectId: "project-1",

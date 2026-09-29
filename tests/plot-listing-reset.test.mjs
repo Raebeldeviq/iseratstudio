@@ -81,6 +81,14 @@ test("preserves audit state, object sequence, and verified energy evidence in th
   assert.deepEqual(allocateObjectNumbers(result.state, 1).objectNumbers, ["30460-81"]);
 });
 
+test("preserves deletion batch history when a plot is reset", () => {
+  const state = fixture();
+  state.deleteBatches = [{ id: "delete-batch:1:1", cycle: 1, number: 1, plannedDeletionDate: "2026-10-06", completedAt: "", entries: [{ batchId: "delete-batch:1:1", listingId: "old-1", projectId: "project-target", externalId: "30460-001001", index: 1, housePosition: 1, uploadDate: "2026-09-27", plannedDeletionDate: "2026-10-06", status: "active", deletedAt: "" }] }];
+  const result = resetPlotListings(state, "plot-target", { now: NOW, idFactory: () => "reset-batch" });
+  assert.deepEqual(result.state.deleteBatches, state.deleteBatches);
+  assert.equal(result.state.listingResetHistory[0].listings.length, 10);
+});
+
 test("plans only newly prepared listings after reset and excludes open historical transfers", () => {
   const state = fixture();
   const beforeResetPlan = createBatchUploadPlan(state, ["project-target"]);

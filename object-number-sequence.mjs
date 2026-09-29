@@ -1,5 +1,5 @@
 export const HV_OBJECT_NUMBER_PREFIX = "30460";
-export const HV_OBJECT_NUMBER_PATTERN = /^30460-[1-9][0-9]{0,5}$/u;
+export const HV_OBJECT_NUMBER_PATTERN = /^30460-(?:[1-9][0-9]{0,5}|0(?:0[1-9]|[1-9][0-9])(?:00[1-9]|0[1-9][0-9]|[1-9][0-9]{2}))$/u;
 export const HV_OBJECT_NUMBER_MAX = 999_999;
 
 function objectNumberValue(value) {

@@ -8,7 +8,7 @@ const stylesSource = await readFile(new URL("../app/globals.css", import.meta.ur
 const helperSource = await readFile(new URL("../local-upload-server.mjs", import.meta.url), "utf8");
 const schedulerServiceSource = await readFile(new URL("../listing-rotation-scheduler-service.mjs", import.meta.url), "utf8");
 
-test("uses the five-step workflow without a project tab", () => {
+test("uses the six-step workflow with a deletion traffic light and without a project tab", () => {
   const navigation = studioSource.slice(
     studioSource.indexOf('<nav className="step-nav"'),
     studioSource.indexOf("</nav>", studioSource.indexOf('<nav className="step-nav"')),
@@ -17,7 +17,8 @@ test("uses the five-step workflow without a project tab", () => {
   assert.match(navigation, /02.+Haustypen/s);
   assert.match(navigation, /03.+Texte & Vorschau/s);
   assert.match(navigation, /04.+Inseratsmanager/s);
-  assert.match(navigation, /05.+Export & Upload/s);
+  assert.match(navigation, /05.+Lösch-Ampel/s);
+  assert.match(navigation, /06.+Export & Upload/s);
   assert.doesNotMatch(navigation, /Projektierung/);
   assert.doesNotMatch(studioSource, /tab === "project"/);
 });

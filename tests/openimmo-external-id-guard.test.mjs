@@ -18,6 +18,11 @@ test("permits a final ZIP only when all three external OpenImmo IDs match 30460-
   assert.deepEqual(result.diagnostics.objectNumbers, ["30460-46"]);
 });
 
+test("permits the new batch number in all three external OpenImmo ID fields", async () => {
+  const result = await assertOpenImmoExternalIdsInArchive(await archive("30460-093001"));
+  assert.deepEqual(result.diagnostics.objectNumbers, ["30460-093001"]);
+});
+
 test("blocks FPI and mismatching external IDs before FTPS", async () => {
   await assert.rejects(
     () => assertOpenImmoExternalIdsInArchive(archive("FPI-TEST", "FPI-TEST", "FPI-TEST")),

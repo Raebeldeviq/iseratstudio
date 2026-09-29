@@ -53,6 +53,7 @@ import { createUploadJobId } from "./batch-upload.mjs";
 import { eligiblePromotionHeroImages } from "./listing-creative-selection.mjs";
 import { assertCreativePayload } from "./listing-creative-payload-guard.mjs";
 import { assertOpenImmoExternalIdsInArchive } from "./openimmo-external-id-guard.mjs";
+import { assertDeleteBatchUploadReady, confirmDeleteBatch, deleteBatchTrafficLight } from "./delete-batches.mjs";
 import {
   assertProductionRuntime,
   loadHelperRuntimeProvenance,
@@ -450,6 +451,7 @@ async function automaticRotationUpload({ state, project, listing, runId, batchOv
   let client;
   let dailyClaim;
   try {
+    assertDeleteBatchUploadReady(state, listing);
     dailyClaim = await claimPlotDailyUpload({ state, project, listing, uploadJob });
     const sourceHouse = state.houses.find((house) => house.id === listing.templateId);
     if (!sourceHouse) throw new Error("Der Haustyp der Rotationskopie ist nicht mehr vorhanden.");
@@ -708,6 +710,7 @@ const server = createServer(async (request, response) => {
   const isCatalogV2Commit = request.method === "POST" && pathname === "/catalog-v2/commit";
   const isCatalogV2ManifestLoad = request.method === "GET" && pathname === "/catalog-v2/manifest";
   const isCatalogV2ImageLoad = request.method === "GET" && pathname === "/catalog-v2/image";
+  const isDeleteBatchConfirm = request.method === "POST" && pathname === "/delete-batches/confirm";
   const isMediaLibraryList = request.method === "GET" && pathname === "/media-library";
   const isMediaLibrarySequence = request.method === "GET" && pathname === "/media-library/sequence";
   const isMediaLibraryImage = request.method === "GET" && pathname === "/media-library/image";
@@ -937,7 +940,8 @@ const server = createServer(async (request, response) => {
     }
 
     if (isBinaryUpload) {
-      assertCatalogProductionReady((await loadCatalogManifest()).state);
+      const uploadCatalog = (await loadCatalogManifest()).state;
+      assertCatalogProductionReady(uploadCatalog);
       const filename = safeFilename(decodedHeader(request, "x-fpi-filename"));
       uploadJob = {
         jobId: decodedHeader(request, "x-fpi-job-id") || `legacy:${randomUUID()}`,
@@ -959,6 +963,9 @@ const server = createServer(async (request, response) => {
         return;
       }
       uploadJobClaimed = true;
+      const catalogListing = uploadCatalog.projects?.find((project) => project.id === uploadJob.projectId)
+        ?.listings?.find((listing) => listing.id === uploadJob.listingId);
+      assertDeleteBatchUploadReady(uploadCatalog, catalogListing);
       if (requiresPlotDailyUploadClaim(uploadJob.uploadOrigin)) {
         const context = await persistedUploadContext(uploadJob.projectId, uploadJob.listingId);
         plotDailyUploadClaim = await claimPlotDailyUpload({ ...context, uploadJob });
@@ -1101,6 +1108,20 @@ const server = createServer(async (request, response) => {
     if (isCatalogSave) {
       const result = await saveCatalogSnapshot(body);
       send(response, 200, { ok: true, stored: true, ...result }, origin);
+      return;
+    }
+
+    if (isDeleteBatchConfirm) {
+      const batchId = String(body.batchId || "");
+      const expectedCount = Number(body.expectedCount);
+      if (!batchId || !Number.isInteger(expectedCount) || expectedCount < 1) throw new Error("Ungültige Batchbestätigung.");
+      const result = await catalogStateStore.update((state) => {
+        const batch = deleteBatchTrafficLight(state).find((item) => item.id === batchId);
+        if (!batch || batch.active.length !== expectedCount) throw new Error("Der Batch hat sich seit der Anzeige geändert. Bitte die Lösch-Ampel neu laden.");
+        const confirmed = confirmDeleteBatch(state, batchId);
+        return { state: confirmed.state, result: { deletedCount: confirmed.deletedCount } };
+      });
+      send(response, 200, { ok: true, savedAt: result.savedAt, deletedCount: result.result.deletedCount }, origin);
       return;
     }
 

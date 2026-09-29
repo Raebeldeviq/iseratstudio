@@ -77,9 +77,10 @@ function statusRecord(value, field, fallback) {
 
 function cleanListing(listing) {
   const { uploadStatus, ...source } = listing && typeof listing === "object" ? listing : {};
-  const status = source.rotationArchivedAt
-    ? WORKFLOW_STATUS.ARCHIVED
-    : normalizeWorkflowStatus(source.status ?? uploadStatus, WORKFLOW_STATUS.DRAFT);
+  const storedStatus = normalizeWorkflowStatus(source.status ?? uploadStatus, WORKFLOW_STATUS.DRAFT);
+  const status = storedStatus === WORKFLOW_STATUS.DELETED
+    ? WORKFLOW_STATUS.DELETED
+    : source.rotationArchivedAt ? WORKFLOW_STATUS.ARCHIVED : storedStatus;
   return {
     ...source,
     projectingSettings: fillMissingProjectingDefaults(source.projectingSettings),
@@ -223,7 +224,7 @@ export function auditStudioState(state, options = {}) {
   add("duplicate-house-id", "manual", duplicateGroups(houses, (house) => house.id).length, "review");
   add("duplicate-house-signature", "manual", duplicateGroups(houses, houseFingerprint).length, "review");
   add("duplicate-listing-id", "manual", duplicateGroups(listings, (listing) => listing.id).length, "review");
-  add("duplicate-external-id", "manual", duplicateGroups(listings.filter((listing) => listing.externalId), (listing) => listing.externalId).length, "review");
+  add("duplicate-external-id", "manual", duplicateGroups(listings.filter((listing) => listing.externalId && listing.status !== WORKFLOW_STATUS.DELETED && (listing.status !== WORKFLOW_STATUS.ARCHIVED || listing.externalDeletionPending)), (listing) => listing.externalId).length, "review");
   add("orphan-listing-house", "manual", listings.filter((listing) => !houseIds.has(listing.templateId)).length, "review");
   add("variant-only-control-listing", "manual", controlRecords.filter((record) => !record.inProjectListings && record.inVariantListings).length, "preserve-and-review");
   add("stale-control-listing", "safe", controlRecords.filter((record) => !record.inProjectListings && !record.inVariantListings).length, "remove");
