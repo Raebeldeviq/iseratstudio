@@ -74,6 +74,7 @@ export function normalizePlotRecord(value, options = {}) {
     createdAt: safeIsoDate(value?.createdAt ?? value?.created_at, now),
     updatedAt: safeIsoDate(value?.updatedAt ?? value?.updated_at, now),
     isActive: value?.isActive !== false && value?.is_active !== false,
+    addressRotation: value?.addressRotation || undefined,
   };
 }
 
@@ -115,10 +116,10 @@ export function applyPlotToProject(project, plot) {
   return {
     ...project,
     plotId: plot.id,
-    street: plot.street,
-    houseNumber: plot.houseNumber,
-    zip: plot.postalCode,
-    city: plot.city,
+    street: plot.addressRotation ? project.street : plot.street,
+    houseNumber: plot.addressRotation ? project.houseNumber : plot.houseNumber,
+    zip: plot.addressRotation ? project.zip : plot.postalCode,
+    city: plot.addressRotation ? project.city : plot.city,
     plotArea: plot.plotSizeSqm,
     plotPrice: plot.purchasePrice,
     isActive: plot.isActive !== false,
@@ -127,6 +128,7 @@ export function applyPlotToProject(project, plot) {
 }
 
 export function patchPlotFromProject(plot, project, now = new Date().toISOString()) {
+  if (plot?.addressRotation) return normalizePlotRecord({ ...plot, updatedAt: now }, { now, fallbackId: plot.id });
   return normalizePlotRecord({
     ...plot,
     street: project?.street,

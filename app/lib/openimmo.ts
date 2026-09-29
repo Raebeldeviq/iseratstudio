@@ -280,6 +280,11 @@ function listingXml(
   provider: ProviderSettings,
   timestamp: string,
 ): string {
+  if (listing.addressSnapshot) {
+    const address = listing.addressSnapshot.address;
+    project = { ...project, street: address.street, houseNumber: address.houseNumber,
+      zip: address.postalCode, city: address.city, district: "", federalState: "", county: "" };
+  }
   const decimal = new Intl.NumberFormat("en-US", {
     useGrouping: false,
     maximumFractionDigits: 2,

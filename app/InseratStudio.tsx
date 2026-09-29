@@ -111,6 +111,7 @@ import {
 import { latestResetListingFacts, resetPlotListings } from "../plot-listing-reset.mjs";
 import { isHvObjectNumber } from "../object-number-sequence.mjs";
 import { allocateDeleteBatchNumber, calendarDate, deleteBatchTrafficLight, linkDeleteBatchListings, reconcileDeleteBatchProtections, replanDeleteBatchesForUpload } from "../delete-batches.mjs";
+import { addressRotationStatus, snapshotAddressRotation } from "../address-rotation.mjs";
 import { normalizeWorkflowStatus, workflowStatusLabel, WORKFLOW_STATUS } from "../workflow-status.mjs";
 import {
   formatClaimIssue,
@@ -2231,6 +2232,19 @@ export default function InseratStudio() {
       setNotice("Bitte mindestens eine Grundstücksadresse auswählen.");
       return;
     }
+    for (const project of state.projects.filter((item) => projectIds.includes(item.id) && item.plotId)) {
+      const status = addressRotationStatus(state, project.plotId);
+      if (status.state === "unconfigured") continue;
+      if (status.state !== "ready") {
+        setNotice(`${project.name}: Adresspool noch nicht bereit. ${status.remaining}/4 Inserate des aktuellen Zyklus sind offen oder ein Pool fehlt.`);
+        return;
+      }
+      if (status.cycle === 0 && project.listings.some((listing) =>
+        (listing.lastUploadedAt || listing.transferredAt || listing.importConfirmedAt) && listing.status !== WORKFLOW_STATUS.DELETED)) {
+        setNotice(`${project.name}: bestehende produktive Inserate müssen zuerst abgeschlossen werden. Kein neuer Pool-Zyklus wurde erzeugt.`);
+        return;
+      }
+    }
     const committed = commitHouseDistributionPreviews(
       houseDistribution,
       state.houses,
@@ -2251,6 +2265,15 @@ export default function InseratStudio() {
     let preparedListings = 0;
     const projects = state.projects.map((project) => {
       if (!projectIds.includes(project.id)) return project;
+      const rotationStatus = project.plotId ? addressRotationStatus(state, project.plotId) : null;
+      const rotationPlot = rotationStatus && rotationStatus.state === "ready"
+        ? state.plots?.find((plot) => plot.id === project.plotId) : null;
+      const rotationAddress = rotationStatus?.nextPool === "B"
+        ? rotationPlot?.addressRotation?.poolB : rotationPlot?.addressRotation?.poolA;
+      const projectForCycle = rotationAddress
+        ? enrichProjectWithPostalRegion({ ...project, street: rotationAddress.street, houseNumber: rotationAddress.houseNumber,
+          zip: rotationAddress.postalCode, city: rotationAddress.city, district: "", federalState: "", county: "" }, postalRegionIndex)
+        : project;
       let group = normalizeListingGroup(project.listingGroup, project.id) as ListingGroup;
       const templateIds = committed.distribution.projects
         .find((record: { projectId: string }) => record.projectId === project.id)
@@ -2272,7 +2295,7 @@ export default function InseratStudio() {
           continue;
         }
         const variant = group.variants[index];
-        const previous = project.listings.find((listing) =>
+        const previous = rotationAddress ? null : project.listings.find((listing) =>
           listing.templateId === house.id && listing.listingOrigin !== "rotation-copy")
           || (variant.templateId === house.id ? variant.listing : null)
           || null;
@@ -2282,7 +2305,7 @@ export default function InseratStudio() {
           house,
           createVariantListing(
             house,
-            project,
+            projectForCycle,
             state.provider,
             variant.id,
             index + 1,
@@ -2299,7 +2322,7 @@ export default function InseratStudio() {
       const mergedListings = mergeListingCollection(project.listings, sourceListings);
       preparedListings += sourceListings.length;
       return {
-        ...project,
+        ...projectForCycle,
         selectedHouseIds: group.variants
           .filter((variant) => variant.active && variant.templateId)
           .slice(0, HOUSES_PER_PROJECT)
@@ -2308,11 +2331,31 @@ export default function InseratStudio() {
         listingGroup: group,
       };
     });
-    setState(linkDeleteBatchListings({
+    let preparedState = linkDeleteBatchListings({
       ...stateWithObjectNumbers,
       projects,
       houseDistribution: committed.distribution as HouseDistributionState,
-    }));
+    }) as StudioState;
+    for (const projectId of projectIds) {
+      const project = preparedState.projects.find((item) => item.id === projectId);
+      if (!project?.plotId || !preparedState.plots?.find((plot) => plot.id === project.plotId)?.addressRotation) continue;
+      const activeListings = project.listingGroup?.variants.filter((variant) => variant.active && variant.listing)
+        .slice(0, HOUSES_PER_PROJECT).map((variant) => variant.listing as GeneratedListing) || [];
+      const cycle = snapshotAddressRotation(preparedState, project.plotId, activeListings);
+      const byId = new Map<string, GeneratedListing>(cycle.listings.map((listing: GeneratedListing) => [listing.id, listing]));
+      preparedState = {
+        ...preparedState,
+        plots: preparedState.plots?.map((plot) => plot.id === project.plotId ? { ...plot, addressRotation: cycle.rotation } : plot),
+        projects: preparedState.projects.map((item) => item.id !== projectId ? item : {
+          ...item,
+          listings: item.listings.map((listing) => byId.get(listing.id) || listing),
+          listingGroup: item.listingGroup ? { ...item.listingGroup,
+            variants: item.listingGroup.variants.map((variant) => variant.listing && byId.has(variant.listing.id)
+              ? { ...variant, listing: byId.get(variant.listing.id) as GeneratedListing } : variant) } : item.listingGroup,
+        }),
+      };
+    }
+    setState(preparedState);
     setBatchItemStatuses({});
     setTab("preview");
     setNotice(`${projectIds.length} Adresse${projectIds.length === 1 ? " wurde" : "n wurden"} mit gewichteter Vierer-Verteilung vorbereitet · ${preparedListings} Inserate mit Standardwerten und Bildern.${issues.length ? ` ${issues.length} Adresse(n) benötigen Nacharbeit: ${issues.slice(0, 2).join(" · ")}` : " Die Texte und Vorschauen sind bereit."}`);
@@ -2349,6 +2392,10 @@ export default function InseratStudio() {
     mode: "full-auto" | "copy-without-delete" | "prepare-only",
     explicitVariantId = "",
   ): { state: StudioState; message: string; ok: boolean } => {
+    const managedProject = current.projects.find((item) => item.id === projectId);
+    if (managedProject?.plotId && current.plots?.find((plot) => plot.id === managedProject.plotId)?.addressRotation) {
+      return { state: current, message: "Adresspool-Zyklen bestehen aus genau vier Hausinseraten. Einzelkopien sind für dieses Grundstück gesperrt.", ok: false };
+    }
     const rotationPlan = planListingRotation(current, projectId, listingId, {
       explicitHouseId: explicitVariantId,
     });
@@ -2806,6 +2853,10 @@ export default function InseratStudio() {
   ) => {
     if (!project || listings.length === 0) {
       throw new Error("Es wurden noch keine Inserate erzeugt.");
+    }
+    if (project.plotId && sourceState.plots?.find((plot) => plot.id === project.plotId)?.addressRotation
+      && listings.some((listing) => !listing.addressSnapshot && !listing.lastUploadedAt && !listing.transferredAt && !listing.importConfirmedAt)) {
+      throw new Error("Neue Inserate dieses Grundstücks benötigen vor dem Export einen vorbereiteten Adresspool-Zyklus.");
     }
     const invalidImageCounts = listings
       .map((listing) => ({
@@ -3397,6 +3448,7 @@ export default function InseratStudio() {
       {tab === "plots" ? (
         <><PlotManagement
           plots={plotRecords}
+          rotationStatuses={Object.fromEntries(plotRecords.map((plot) => [plot.id, addressRotationStatus(state, plot.id)]))}
           selectedPlotIds={selectedPlotIds}
           defaultOwner={activeOwner}
           helperOnline={helperOnline}
@@ -3913,7 +3965,8 @@ export default function InseratStudio() {
                   <button type="button" className="manager-row-summary" aria-expanded={expanded} aria-controls={expanded ? `manager-details-${project.id}-${listing.id}` : undefined} onClick={() => singleManagerSearchResult ? setCollapsedSingleManagerResultKey(expanded ? listingKey : null) : setExpandedManagerListingKey(expanded ? null : listingKey)}>
                     <b className="manager-summary-number">{listing.externalId || "Noch nicht hochgeladen"}</b>
                     <span className="manager-summary-house">{listing.templateName}</span>
-                    <span className="manager-summary-address">{projectSelectionLabel(project)}</span>
+                    {listing.addressSnapshot ? <span className="manager-summary-protection">POOL {listing.addressSnapshot.pool}</span> : null}
+                    <span className="manager-summary-address">{listing.addressSnapshot ? `${listing.addressSnapshot.address.street} ${listing.addressSnapshot.address.houseNumber}, ${listing.addressSnapshot.address.postalCode} ${listing.addressSnapshot.address.city}` : projectSelectionLabel(project)}</span>
                     <span className="manager-summary-status">{control.statusMessage || workflowStatusLabel(control.status)} · Health {health.score}</span>
                     {control.premiumPlacement ? <span className="manager-summary-protection">Premium aktiv</span> : null}
                     {control.manualLock ? <span className="manager-summary-protection">Löschung gesperrt</span> : null}
@@ -3921,7 +3974,7 @@ export default function InseratStudio() {
                   </button>
                   {expanded ? <div id={`manager-details-${project.id}-${listing.id}`} className="manager-row-details">
                   <div className="manager-row-main">
-                    <div><span>Adresse</span><b>{projectSelectionLabel(project)}</b></div>
+                    <div><span>Adresse</span><b>{listing.addressSnapshot ? `${listing.addressSnapshot.address.street} ${listing.addressSnapshot.address.houseNumber}, ${listing.addressSnapshot.address.postalCode} ${listing.addressSnapshot.address.city}` : projectSelectionLabel(project)}</b></div>
                     <div><span>Objektnummer</span><b>{listing.externalId || "Noch nicht hochgeladen"}</b>{listing.importConfirmedAt ? <small>Immoprofessional: erfolgreich importiert · {localDateTime(listing.importConfirmedAt)}</small> : null}{listing.supersededByListingId ? <small>Ersetzt durch {project.listings.find((candidate) => candidate.id === listing.supersededByListingId)?.externalId || listing.supersededByListingId}</small> : null}</div>
                     <div><span>Hausvariante</span><b>{listing.templateName}</b><small>{euro(listing.price)}</small></div>
                     <div><span>Aktionsbild</span><b>{promotionLibrary.promotionImages.find((image) => image.id === listing.promotionImageId)?.name || "Normale Bildfolge"}</b><small>{listing.promotionAssignedAt ? localDateTime(listing.promotionAssignedAt) : "Noch nicht zugeordnet"}</small></div>
@@ -3979,7 +4032,7 @@ export default function InseratStudio() {
                   <details><summary>Inserate anzeigen</summary><div className="deletion-batch-entries">{batch.entries.filter((entry) => entry.status === "active" || entry.status === "deleted" || entry.status === "paused").map((entry) => {
                     const project = deletionProjects.get(entry.projectId);
                     const listing = project?.listings.find((item) => item.id === entry.listingId);
-                    return <div key={`${batch.id}-${entry.externalId}`}><b>{entry.externalId}</b><span>{entry.status === "paused" ? "Geschützt · nicht löschen" : entry.status === "deleted" ? "Gelöscht bestätigt" : "Löschbar"}</span><span>{project ? projectSelectionLabel(project) : "Adresse nicht mehr im Arbeitskatalog"}</span><span>{listing?.templateName || `Haus ${entry.housePosition}`}</span><span>Upload: {entry.uploadDate}</span><span>Löschung: {entry.plannedDeletionDate}</span></div>;
+                    return <div key={`${batch.id}-${entry.externalId}`}><b>{entry.externalId}</b><span>{entry.status === "paused" ? "Geschützt · nicht löschen" : entry.status === "deleted" ? "Gelöscht bestätigt" : "Löschbar"}</span><span>{listing?.addressSnapshot ? `Pool ${listing.addressSnapshot.pool} · Zyklus ${listing.addressSnapshot.cycle}` : project ? projectSelectionLabel(project) : "Adresse nicht mehr im Arbeitskatalog"}</span><span>{listing?.templateName || `Haus ${entry.housePosition}`}</span><span>Upload: {entry.uploadDate}</span><span>Löschung: {entry.plannedDeletionDate}</span></div>;
                   })}</div></details>
                   {batch.active.length ? <button className="secondary" onClick={() => markDeletionBatch(batch.id)}>Batch als gelöscht markieren</button> : null}
                 </article>;

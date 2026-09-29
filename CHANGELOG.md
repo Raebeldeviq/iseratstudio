@@ -1,5 +1,23 @@
 # Änderungsprotokoll
 
+## Unreleased · Adressrotation Pool A/B – 29. September 2026
+
+### Report
+
+- Eine Excel-Master-Datei mit den Blättern `Pool_A` und `Pool_B` kann im Grundstücksbereich geprüft und über die vorhandene `plotId` mit bestehenden Grundstücken verbunden werden. Unbekannte oder doppelte IDs werden abgelehnt.
+- Die Vermarktungsadressen bleiben getrennt von der realen Grundstücksadresse. Neue Vierer-Zyklen erhalten neue Inserat-IDs und Lösch-Batches; jedes Inserat speichert Pool, Zyklus, Veröffentlichungsadresse, Hausposition, Batch und geplanten Löschtag als Snapshot.
+- Der nächste Pool wird erst nach vier bestätigten Löschungen bereit. Die kompakte Poolanzeige erscheint am Grundstück, im Inseratsmanager und in den aufgeklappten Löschdetails. OpenImmo verwendet den Adress-Snapshot des jeweiligen Inserats.
+
+### Begründung
+
+Die bestehenden Grundstücks-IDs, Projekte, Lösch-Batches und die manuelle Löschbestätigung bleiben die einzigen fachlichen Quellen. Der Poolwechsel wird daraus berechnet; ein zusätzlicher Zeitplan oder eine neue Datenbank ist nicht nötig.
+
+### Hürden und Risiken
+
+- Die derzeitige produktive Excel-Datei besitzt noch keine Blätter `Pool_A` und `Pool_B`. Die neue Zuordnung greift erst nach einem ausdrücklich geprüften Import mit bestehenden `plotId`-Werten. Bestehende produktive Inserate werden beim Import nicht geändert.
+- Bereits laufende Inserate ohne Pool-Snapshot werden nicht rückwirkend einem Pool zugeordnet. Der Start eines neuen Pool-Zyklus ist gesperrt, solange solche produktiven Inserate noch offen sind.
+- Falls sich der tatsächliche Uploadtag gegenüber der Vorbereitung verschiebt, müssen Batchnummer und Löschtag im Snapshot gemeinsam mit der bestehenden Batch-Neuplanung aktualisiert werden.
+
 ## Unreleased · Luna 6, evidenzbasierte USPs und Ein-USP-Überschriften – 27. September 2026
 
 ### Report

@@ -135,10 +135,15 @@ export function replanDeleteBatchesForUpload(state, listingIds, uploadDate = cal
       if (entry.status === "planned" && entry.uploadDate === uploadDate) continue;
       next = { ...next, deleteBatches: batches(next).map((batch) => ({ ...batch, entries: batch.entries.map((item) => item === entry ? { ...item, status: "void" } : item) })) };
       const allocated = allocateDeleteBatchNumber(next, { listingId: listing.id, projectId: project.id, housePosition: entry.housePosition, uploadDate });
+      const allocatedEntry = allocated.state.deleteBatches.flatMap((batch) => batch.entries)
+        .find((item) => item.listingId === listing.id && item.externalId === allocated.externalId);
+      const updatedListing = (item) => ({ ...item, externalId: allocated.externalId,
+        ...(item.addressSnapshot && allocatedEntry ? { addressSnapshot: { ...item.addressSnapshot,
+          batchId: allocatedEntry.batchId, plannedDeletionDate: allocatedEntry.plannedDeletionDate } } : {}) });
       next = { ...allocated.state, projects: next.projects.map((candidate) => candidate.id !== project.id ? candidate : {
         ...candidate,
-        listings: candidate.listings.map((item) => item.id === listing.id ? { ...item, externalId: allocated.externalId } : item),
-        listingGroup: { ...candidate.listingGroup, variants: (candidate.listingGroup?.variants || []).map((variant) => variant.listing?.id === listing.id ? { ...variant, listing: { ...variant.listing, externalId: allocated.externalId } } : variant) },
+        listings: candidate.listings.map((item) => item.id === listing.id ? updatedListing(item) : item),
+        listingGroup: { ...candidate.listingGroup, variants: (candidate.listingGroup?.variants || []).map((variant) => variant.listing?.id === listing.id ? { ...variant, listing: updatedListing(variant.listing) } : variant) },
       }) };
     }
   }

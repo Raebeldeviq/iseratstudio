@@ -222,6 +222,15 @@ export type AddressOwner = "fabian" | "pascal";
 
 export type PlotRecord = {
   id: string;
+  addressRotation?: {
+    poolA: PublicationAddress | null;
+    poolB: PublicationAddress | null;
+    currentPool: "A" | "B" | "";
+    cycle: number;
+    listingIds: string[];
+    lastUsedA: string;
+    lastUsedB: string;
+  };
   street: string;
   houseNumber: string;
   postalCode: string;
@@ -272,6 +281,8 @@ export type ProjectInput = {
   listingGroup?: ListingGroup;
   createdAt: string;
 };
+
+export type PublicationAddress = { street: string; houseNumber: string; postalCode: string; city: string };
 
 export type ListingTexts = {
   title: string;
@@ -325,6 +336,15 @@ export type ProjectingSettings = {
 
 export type GeneratedListing = {
   id: string;
+  addressSnapshot?: {
+    plotId: string;
+    pool: "A" | "B";
+    cycle: number;
+    housePosition: number;
+    address: PublicationAddress;
+    batchId: string;
+    plannedDeletionDate: string;
+  };
   externalId: string;
   templateId: string;
   templateName: string;

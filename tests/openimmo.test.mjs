@@ -34,6 +34,20 @@ function energyScenarioInput({ energyDemand = 18, listingFacts = [] } = {}) {
   };
 }
 
+test("historical listing exports its captured pool address after the project changes", () => {
+  const input = energyScenarioInput();
+  input.listings[0].addressSnapshot = {
+    plotId: "GS-001", pool: "A", cycle: 1, housePosition: 1,
+    address: { street: "Alte Straße", houseNumber: "12", postalCode: "15732", city: "Schulzendorf" },
+    batchId: "delete-batch:1:1", plannedDeletionDate: "2026-10-01",
+  };
+  input.project.street = "Neue Straße";
+  input.project.houseNumber = "14";
+  const xml = buildOpenImmoXml(input);
+  assert.match(xml, /<strasse>Alte Straße<\/strasse>[\s\S]*<hausnummer>12<\/hausnummer>/u);
+  assert.doesNotMatch(xml, /<strasse>Neue Straße<\/strasse>/u);
+});
+
 test("exports planned energy values as planning data and a verified certificate through the final ZIP", async () => {
   const projectedXml = buildOpenImmoXml(energyScenarioInput());
   assert.doesNotMatch(projectedXml, /<energiepass>/);

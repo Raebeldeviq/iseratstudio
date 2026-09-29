@@ -17,6 +17,7 @@ import {
 import type { AddressOwner, PlotRecord } from "../types";
 import { plotAddressSelection, plotListingCountAppearance, selectablePlotIds } from "../../plot-selection.mjs";
 import { partitionPlotsByTerritory } from "../../plot-territory.mjs";
+import { mergeAddressPools, parseAddressPoolRows } from "../../address-rotation.mjs";
 
 const MAX_IMPORT_BYTES = 10 * 1024 * 1024;
 const MAX_PDF_BYTES = 30 * 1024 * 1024;
@@ -43,6 +44,7 @@ type PdfReview = {
 
 type Props = {
   plots: PlotRecord[];
+  rotationStatuses: Record<string, { state: string; currentPool: string; nextPool: string; remaining: number; cycle: number }>;
   selectedPlotIds: string[];
   defaultOwner: AddressOwner;
   helperOnline: boolean;
@@ -123,6 +125,7 @@ async function responseJson<T>(response: Response): Promise<T> {
 
 export default function PlotManagement({
   plots,
+  rotationStatuses,
   selectedPlotIds,
   defaultOwner,
   helperOnline,
@@ -151,6 +154,8 @@ export default function PlotManagement({
   const [importBusy, setImportBusy] = useState(false);
   const [importRows, setImportRows] = useState<PlotImportPreviewRow[]>([]);
   const [importErrors, setImportErrors] = useState<string[]>([]);
+  const [rotationPreview, setRotationPreview] = useState<PlotRecord[] | null>(null);
+  const [rotationPairCount, setRotationPairCount] = useState(0);
   const [message, setMessage] = useState("");
   const [resetTarget, setResetTarget] = useState<{ plot: PlotRecord; listingCount: number } | null>(null);
   const excelInput = useRef<HTMLInputElement>(null);
@@ -431,6 +436,29 @@ export default function PlotManagement({
     }
   };
 
+  const importRotationMaster = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (!file.size || file.size > MAX_IMPORT_BYTES) { setMessage("Die Master-Datei ist leer oder größer als 10 MB."); return; }
+    setImportBusy(true);
+    setRotationPreview(null);
+    try {
+      const [a, b] = await Promise.all([
+        readSheet(file, "Pool_A"), readSheet(file, "Pool_B"),
+      ]);
+      const poolA = parseAddressPoolRows(a, "A");
+      const poolB = parseAddressPoolRows(b, "B");
+      const merged = mergeAddressPools(plots, poolA, poolB) as PlotRecord[];
+      const paired = merged.filter((plot) => plot.addressRotation?.poolA && plot.addressRotation?.poolB).length;
+      setRotationPreview(merged);
+      setRotationPairCount(paired);
+      setMessage(`${poolA.length} Pool-A-Zeilen und ${poolB.length} Pool-B-Zeilen geprüft. ${paired} Grundstücke besitzen beide Varianten. Keine Änderung gespeichert.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Die Pool-Master-Datei konnte nicht geprüft werden.");
+    } finally { setImportBusy(false); }
+  };
+
   const updateImportRow = (id: string, patch: Partial<PlotImportPreviewRow>) => {
     setImportRows((current) => current.map((row) => row.id === id ? { ...row, ...patch } : row));
   };
@@ -492,6 +520,8 @@ export default function PlotManagement({
         </div>
 
         <p role="note">Gebietsabgleich: aktive PLZ im Excel-Blatt „Suchgebiet“. Grundstücke außerhalb bleiben erlaubt und bei gültiger Anschrift auswählbar. Bestehende Online-Inserate bleiben unverändert.</p>
+        <label className="field"><span>Pool-Master-Datei prüfen</span><input type="file" accept=".xlsx" disabled={importBusy} onChange={importRotationMaster} /></label>
+        {rotationPreview ? <div className="action-bar"><span>{rotationPairCount} Grundstücke mit Pool A und B; bestehende Inserate bleiben unverändert.</span><button className="primary" onClick={() => { onSave(rotationPreview, `${rotationPairCount} Adresspaare gespeichert.`); setRotationPreview(null); }}>Pool-Adressen speichern</button><button className="secondary" onClick={() => setRotationPreview(null)}>Abbrechen</button></div> : null}
         {(!helperOnline || !syncStatus?.territory?.available) ? <p role="status">{syncStatus?.territory?.message || "Gebietszuordnung nicht verfügbar – Verbindung und aktive PLZ-Liste werden geprüft."}</p> : null}
         <div className="plot-territory-sections">{territorySections.map((territory) => <section className={`plot-territory-section ${territory.id}`} key={territory.id} aria-label={territory.label}>
           <header className="plot-territory-heading"><h3>{territory.label}</h3><span>{territory.plots.length} Grundstücke</span></header>
@@ -502,7 +532,7 @@ export default function PlotManagement({
           const appearance = plotListingCountAppearance(listingCount);
           const address = plotAddressSelection(plot);
           return <article className={`plot-selection-card ${appearance.tone}${selectedPlotIds.includes(plot.id) ? " selected" : ""}`} key={plot.id}>
-            <label className="plot-selection-main"><input type="checkbox" disabled={!address.selectable} checked={address.selectable && selectedPlotIds.includes(plot.id)} onChange={() => togglePlot(plot.id)} aria-label={`${formatPlotStreet(plot) || 'Adresse offen'} auswählen`} /><span><b>{formatPlotStreet(plot) || "–"}</b><small>{plot.postalCode || "–"} {plot.city || "–"}</small>{!address.selectable ? <small>{address.reason}</small> : address.houseNumberUnconfirmed ? <small>Hausnummer unbestätigt – vor Veröffentlichung prüfen</small> : null}</span></label>
+            <label className="plot-selection-main"><input type="checkbox" disabled={!address.selectable} checked={address.selectable && selectedPlotIds.includes(plot.id)} onChange={() => togglePlot(plot.id)} aria-label={`${formatPlotStreet(plot) || 'Adresse offen'} auswählen`} /><span><b>{formatPlotStreet(plot) || "–"}</b><small>{plot.postalCode || "–"} {plot.city || "–"}</small><small>Grundstücks-ID: {plot.id}</small>{plot.addressRotation ? <small>{(() => { const status = rotationStatuses[plot.id]; return status?.state === "incomplete" ? "Adresspool unvollständig" : status?.state === "ready" ? `${status.currentPool ? `Pool ${status.currentPool} abgeschlossen · ` : ""}Pool ${status.nextPool} bereit` : `Pool ${status?.currentPool} · ${status?.remaining}/4 noch offen · nächster Pool ${status?.nextPool} · Zyklus ${status?.cycle}`; })()}</small> : null}{!address.selectable ? <small>{address.reason}</small> : address.houseNumberUnconfirmed ? <small>Hausnummer unbestätigt – vor Veröffentlichung prüfen</small> : null}</span></label>
             <div className="plot-selection-facts"><span><small>Grundstück</small><b>{plot.plotSizeSqm ? `${number(plot.plotSizeSqm)} m²` : "–"}</b></span><span><small>Kaufpreis</small><b>{plot.purchasePrice ? euro(plot.purchasePrice) : "–"}</b></span><span><small>Plattform-Upload</small><b>{uploadDate ? date(uploadDate) : "Noch nicht hochgeladen"}</b></span></div>
             <em>{listingCount} Inserate{appearance.detail ? <small>{appearance.detail}</small> : null}</em>
             <div className="plot-actions"><button onClick={() => beginEdit(plot)}>Bearbeiten</button><button className="secondary" disabled={resetDisabled || !listingCount} onClick={() => beginListingReset(plot)}>Inserate zurücksetzen</button>{plot.exposeFileReference ? <button onClick={() => openExpose(plot)}>Exposé öffnen</button> : null}{!showReview ? <button className="danger-link" onClick={() => removePlot(plot)}>Löschen</button> : null}</div>

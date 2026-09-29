@@ -1,5 +1,11 @@
 # Fabian&Pascal Inseratestudio für macOS
 
+## Adressrotation A/B
+
+Im Bereich „Grundstücke & Auswahl“ kann eine einzelne Excel-Master-Datei mit den Tabellenblättern `Pool_A` und `Pool_B` geprüft werden. Jedes Blatt benötigt `plotId`, `Straße`, `Hausnummer`, `PLZ` und `Ort`. Die `plotId` muss exakt einer bestehenden Grundstücks-ID im App-Katalog entsprechen; die Vorschau zeigt vor dem Speichern die Zahl vollständig gepaarter Grundstücke. Ein fehlender Pool bleibt sichtbar und löst keinen Adressvergleich aus.
+
+Nach der Vorbereitung von vier neuen Hausinseraten zeigt die App den aktiven Pool und den nächsten Pool an. Erst vier im Inseratestudio bestätigte Löschungen geben die Gegenseite frei. Premium und „Löschen sperren“ halten ihre bestehenden Lösch-Batches an. Die Veröffentlichung und die Löschung im Portal bleiben manuell. Historische Inserate exportieren weiterhin ihre beim Erstellen gespeicherte Adresse.
+
 Lokale macOS-Anwendung zum Verwalten von bis zu 22 Haustypen, Grundstücken und
 Inseratentwürfen sowie zum kontrollierten OpenImmo-Import in Immoprofessional.
 Die aktuell geöffnete Anwendungsversion steht dauerhaft dezent unten rechts.

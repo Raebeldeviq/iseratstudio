@@ -71,6 +71,7 @@ export function mergeListingCollection(existing = [], updates = [], options = {}
 export function assertBrowserCatalogTransition(current, next) {
   if (current?.catalogRepairReview && JSON.stringify(current.catalogRepairReview) !== JSON.stringify(next?.catalogRepairReview)) throw conflict('Produktionsfreigabe');
   const protectedFields = ['externalId','listingOrigin','status','version','rotationSourceListingId',
+    'addressSnapshot',
     'lastUploadedAt','transferredAt','importConfirmedAt','importReportId','supersededByListingId',
     'replacementConfirmedAt','externalDeletionPending','productionDeleteState','deletedAt',
     'confirmationSource','legacyProviderVerifiedAt','legacyReconciliationId','manualReconciliation',
