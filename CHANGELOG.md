@@ -1,5 +1,21 @@
 # Änderungsprotokoll
 
+## Unreleased · Einklappbare Grundstücksbereiche – 30. September 2026
+
+### Report
+
+- Die Hauptbereiche „Im eigenen PLZ-Gebiet“ und „Außerhalb des eigenen PLZ-Gebiets“ lassen sich unabhängig über ihre gesamte Überschrift öffnen und schließen. Ein Chevron zeigt den Zustand an; die aktuelle Grundstückszahl bleibt immer sichtbar.
+- Die letzte Ansicht wird im Browser gespeichert und beim nächsten Öffnen wiederhergestellt. Die vorhandenen regionalen Untergruppen bleiben unverändert.
+
+### Begründung
+
+Die Zustände liegen ausschließlich in der Oberfläche und im lokalen Browserspeicher. Dadurch bleiben Grundstücksdaten, Auswahl, Gebietszuordnung, Filter und Synchronisation unberührt.
+
+### Hürden und Risiken
+
+- Wenn der Browser lokalen Speicher sperrt oder löscht, starten beide Bereiche geöffnet. Die Bedienung funktioniert weiterhin für die laufende Sitzung.
+- Die gespeicherte Ansicht erscheint nach dem Laden der Oberfläche; bis dahin sind beide Bereiche kurz geöffnet.
+
 ## Unreleased · Bidirektionaler Grundstücks-Master – 30. September 2026
 
 ### Report

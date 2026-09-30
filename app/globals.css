@@ -208,6 +208,13 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
 .plot-territory-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; padding: 0.8rem 0; border-bottom: 2px solid var(--line); margin-bottom: 0.75rem; }
 .plot-territory-heading h3 { margin: 0; }
 .plot-territory-heading span { color: var(--muted); }
+.plot-territory-title { width: 100%; }
+.plot-territory-toggle { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; width: 100%; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.plot-territory-toggle > span:first-child { color: var(--ink); }
+.plot-territory-toggle:hover > span:first-child { text-decoration: underline; }
+.plot-territory-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 3px; }
+.plot-territory-toggle-meta { display: inline-flex; align-items: center; gap: 0.7rem; white-space: nowrap; font-size: 0.85rem; font-weight: 400; }
+.plot-territory-chevron { display: inline-block; width: 1em; color: var(--ink) !important; font-size: 0.7rem; text-align: center; }
 .plot-territory-section.outside { border-top: 2px solid var(--line); padding-top: 0.75rem; }
 .plot-region-groups > section { overflow: hidden; border: 1px solid var(--line); border-radius: 12px; }
 .plot-region-groups > section > header { position: sticky; top: 0; z-index: 1; display: flex; justify-content: space-between; padding: 0.65rem 0.8rem; background: #edf4e5; }

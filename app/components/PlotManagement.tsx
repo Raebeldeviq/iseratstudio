@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, DragEvent, useMemo, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from "react";
 import { readSheet } from "read-excel-file/browser";
 import {
   applyPlotImportPreview,
@@ -17,6 +17,7 @@ import {
 import type { AddressOwner, PlotRecord } from "../types";
 import { plotAddressSelection, plotListingCountAppearance, selectablePlotIds } from "../../plot-selection.mjs";
 import { partitionPlotsByTerritory } from "../../plot-territory.mjs";
+import { defaultPlotTerritoryVisibility, readPlotTerritoryVisibility, savePlotTerritoryVisibility, togglePlotTerritoryVisibility } from "../../plot-territory-visibility.mjs";
 import { generatePoolB, rowFromPlot, rowFromPlotB } from "../../plot-master-sync.mjs";
 
 const MAX_IMPORT_BYTES = 10 * 1024 * 1024;
@@ -164,9 +165,31 @@ export default function PlotManagement({
   const [masterBusy, setMasterBusy] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<PlotRecord | null>(null);
   const [message, setMessage] = useState("");
+  const [expandedTerritories, setExpandedTerritories] = useState({ ...defaultPlotTerritoryVisibility });
   const [resetTarget, setResetTarget] = useState<{ plot: PlotRecord; listingCount: number } | null>(null);
   const excelInput = useRef<HTMLInputElement>(null);
   const pdfInput = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      try {
+        setExpandedTerritories(readPlotTerritoryVisibility(window.localStorage));
+      } catch {
+        // The browser may deny access to local storage.
+      }
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, []);
+
+  const toggleTerritory = (territoryId: "inside" | "outside") => {
+    const next = togglePlotTerritoryVisibility(expandedTerritories, territoryId);
+    setExpandedTerritories(next);
+    try {
+      savePlotTerritoryVisibility(window.localStorage, next);
+    } catch {
+      // The current view remains usable without browser storage.
+    }
+  };
 
   const activePlots = useMemo(() => plots.filter((plot) => plot.isActive !== false), [plots]);
   const selectablePlots = useMemo(() => activePlots.filter((plot) => plotAddressSelection(plot).selectable), [activePlots]);
@@ -521,7 +544,8 @@ export default function PlotManagement({
         </div> : null}
         {(!helperOnline || !syncStatus?.territory?.available) ? <p role="status">{syncStatus?.territory?.message || "Gebietszuordnung nicht verfügbar – Verbindung und aktive PLZ-Liste werden geprüft."}</p> : null}
         <div className="plot-territory-sections">{territorySections.map((territory) => <section className={`plot-territory-section ${territory.id}`} key={territory.id} aria-label={territory.label}>
-          <header className="plot-territory-heading"><h3>{territory.label}</h3><span>{territory.plots.length} Grundstücke</span></header>
+          <header className="plot-territory-heading">{territory.id === "inside" || territory.id === "outside" ? <h3 className="plot-territory-title"><button type="button" className="plot-territory-toggle" aria-expanded={expandedTerritories[territory.id]} aria-controls={`plot-territory-content-${territory.id}`} onClick={() => toggleTerritory(territory.id)}><span>{territory.label}</span><span className="plot-territory-toggle-meta"><span>{territory.plots.length} Grundstücke</span><span className="plot-territory-chevron" aria-hidden="true">{expandedTerritories[territory.id] ? "▼" : "▶"}</span></span></button></h3> : <><h3>{territory.label}</h3><span>{territory.plots.length} Grundstücke</span></>}</header>
+          <div id={`plot-territory-content-${territory.id}`} hidden={(territory.id === "inside" || territory.id === "outside") && !expandedTerritories[territory.id]}>
           {!territory.plots.length ? <p>Keine Grundstücke in diesem Bereich für den aktuellen Filter.</p> : null}
           <div className="plot-region-groups">{territory.groups.map((group) => <section key={group.label}><header><b>{group.label}</b><span>{group.plots.length} Grundstücke</span></header><div>{group.plots.map((plot) => {
           const listingCount = selectionMeta[plot.id]?.listingCount || 0;
@@ -534,7 +558,7 @@ export default function PlotManagement({
             <em>{listingCount} Inserate{appearance.detail ? <small>{appearance.detail}</small> : null}</em>
             <div className="plot-actions"><button onClick={() => beginEdit(plot)}>Bearbeiten</button><button className="secondary" disabled={resetDisabled || !listingCount} onClick={() => beginListingReset(plot)}>Inserate zurücksetzen</button>{plot.exposeFileReference ? <button onClick={() => openExpose(plot)}>Exposé öffnen</button> : null}{!showReview ? <button className="danger-link" onClick={() => removePlot(plot)}>Löschen</button> : null}</div>
           </article>;
-        })}</div></section>)}</div>
+        })}</div></section>)}</div></div>
         </section>)}</div>
         {!visiblePlots.length ? <div className="empty-state"><b>Keine Grundstücke gefunden</b><span>Importiere eine Excel-Datei oder lege ein Grundstück manuell an.</span></div> : null}
       </div>
