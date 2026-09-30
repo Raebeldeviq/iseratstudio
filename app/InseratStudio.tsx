@@ -101,7 +101,6 @@ import { selectCatalogSnapshot } from "../catalog-snapshot-selection.mjs";
 import {
   applyPlotToProject,
   createProjectFromPlot,
-  deletePlotRecordCascade,
   formatPlotStreet,
   normalizePlotState,
   patchPlotFromProject,
@@ -880,7 +879,6 @@ export default function InseratStudio() {
   const [expandedManagerListingKey, setExpandedManagerListingKey] = useState<string | null>(null);
   const [collapsedSingleManagerResultKey, setCollapsedSingleManagerResultKey] = useState<string | null>(null);
   const [plotSyncStatus, setPlotSyncStatus] = useState<PlotSyncStatus | null>(null);
-  const [plotSyncBusy, setPlotSyncBusy] = useState(false);
   const [postalRegionIndex, setPostalRegionIndex] = useState<PostalRegionIndex>({});
 
   useEffect(() => {
@@ -1346,24 +1344,43 @@ export default function InseratStudio() {
     setNotice(message);
   };
 
-  const deletePlot = (plot: PlotRecord) => {
-    const deletion = deletePlotRecordCascade(state, plot.id);
-    let nextState = normalizePlotState(deletion.state) as StudioState;
-    if (!nextState.projects.length) nextState = { ...nextState, projects: [newProject(activeOwner)] };
-    const nextProject = nextState.projects.find((project) => project.isActive !== false && project.plotId && (nextState.plots || []).some((entry) => entry.id === project.plotId && entry.isActive !== false))
-      || nextState.projects[0];
+  const deletePlot = (plot: PlotRecord, removeExcel: boolean) => {
+    const nextState = normalizePlotState({ ...state, plots: (state.plots || []).map((item) => item.id === plot.id
+      ? { ...item, isActive: false, masterSync: { a: item.masterSync?.a || "", b: item.masterSync?.b || "",
+        appOnlyRemoved: !removeExcel, excelDeleteRequested: removeExcel, syncedAt: item.masterSync?.syncedAt } }
+      : item) }) as StudioState;
+    const nextProject = nextState.projects.find((project) => project.isActive !== false && project.plotId && (nextState.plots || []).some((entry) => entry.id === project.plotId && entry.isActive !== false));
     setState(nextState);
     setSelectedPlotIds((ids) => ids.filter((id) => id !== plot.id));
-    setActiveProjectId(nextProject?.id || "");
+    if (nextProject) setActiveProjectId(nextProject.id);
     if (nextProject) setActiveOwner(projectOwner(nextProject));
-    setNotice(`Grundstück vollständig gelöscht. ${deletion.deletedProjectIds.length} interne Arbeitsstände und ${deletion.deletedListingIds.length} interne Inseratsreferenz${deletion.deletedListingIds.length === 1 ? "" : "en"} wurden bereinigt. Externe Inserate blieben unberührt.`);
-    if (plot.exposeFileReference && helperOnline) {
-      void helperFetch("/plot-exposes/archive", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reference: plot.exposeFileReference }),
-      }).catch(() => setNotice("Das Grundstück wurde vollständig gelöscht; die lokale Exposé-Datei konnte noch nicht archiviert werden."));
+    setNotice(removeExcel ? "Grundstück für die weitere Nutzung deaktiviert. Pool A und B werden nach Vorschau und Bestätigung des nächsten Excel-Abgleichs entfernt." : "Grundstück nur im Inseratestudio deaktiviert. Projekte, Listings und Historie bleiben erhalten.");
+  };
+
+  const previewMaster = async () => {
+    await deviceCatalogSaveQueue;
+    const response = await helperFetch("/plot-master/preview");
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.message || "Die Master-Vorschau ist fehlgeschlagen.");
+    return data;
+  };
+
+  const applyMaster = async (token: string, decisions: Record<string, string>) => {
+    await deviceCatalogSaveQueue;
+    const response = await helperFetch("/plot-master/apply", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, decisions }) });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.message || "Der Master-Abgleich ist fehlgeschlagen.");
+    if (data.catalogSavedAt && data.catalogSavedAt !== knownDeviceCatalogSavedAt) {
+      const snapshot = await loadDeviceCatalogSnapshot();
+      if (!snapshot) throw new Error("Der synchronisierte Katalog konnte nicht geladen werden.");
+      knownDeviceCatalogSavedAt = snapshot.savedAt;
+      const loaded = normalizeMandatoryListingStandards(normalizeProjectOwners(snapshot.state));
+      setState(loaded);
+      setSelectedPlotIds((ids) => ids.filter((id) => (loaded.plots || []).some((plot) => plot.id === id && plot.isActive !== false)));
     }
+    setNotice(data.applied ? "Master-Excel und Inseratestudio wurden synchronisiert." : "Keine Datenänderung erforderlich.");
+    return data;
   };
 
   const resetPlotListingWork = (plot: PlotRecord) => {
@@ -1389,49 +1406,6 @@ export default function InseratStudio() {
       Object.entries(current).filter(([projectId]) => !resetProjectIds.has(projectId)),
     ));
     setNotice(`${result.activeListingCount} Inserate für ${formatPlotStreet(plot)} wurden lokal zurückgesetzt. Grundstück und Audit-Historie bleiben erhalten.`);
-  };
-
-  const setPlotSyncSchedule = async (enabled: boolean) => {
-    setPlotSyncBusy(true);
-    try {
-      const response = await helperFetch('/plot-sync/schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) });
-      const data = await response.json();
-      if (!response.ok || !data.ok) throw new Error(data.message || 'Zeitplan konnte nicht gespeichert werden.');
-      setPlotSyncStatus(data);
-      setNotice(enabled ? 'Automatischer Excel-Abgleich aktiviert.' : 'Automatischer Excel-Abgleich pausiert.');
-    } catch (error) { setNotice(error instanceof Error ? error.message : 'Zeitplanfehler'); }
-    finally { setPlotSyncBusy(false); }
-  };
-
-  const runPlotSync = async (dryRun: boolean) => {
-    if (!helperOnline || plotSyncBusy) return;
-    setPlotSyncBusy(true);
-    try {
-      const response = await helperFetch("/plot-sync/run", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dryRun }),
-      });
-      const data = await response.json() as PlotSyncStatus & { ok?: boolean; message?: string };
-      if (!response.ok || !data.ok) throw new Error(data.message || "Der Grundstücksabgleich ist fehlgeschlagen.");
-      setPlotSyncStatus(data);
-      if (!dryRun && data.catalogSavedAt) {
-        const snapshot = await loadDeviceCatalogSnapshot();
-        if (!snapshot) throw new Error("Der aktualisierte lokale Katalog konnte nicht neu geladen werden.");
-        knownDeviceCatalogSavedAt = snapshot.savedAt;
-        const loaded = normalizeMandatoryListingStandards(normalizeProjectOwners(snapshot.state));
-        setState(loaded);
-        const availableProjects = loaded.projects.filter((project) => project.isActive !== false && project.plotId && (loaded.plots || []).some((plot) => plot.id === project.plotId && plot.isActive !== false));
-        setSelectedPlotIds((ids) => ids.filter((id) => (loaded.plots || []).some((plot) => plot.id === id && plot.isActive !== false)));
-        if (activeProjectId && !availableProjects.some((project) => project.id === activeProjectId) && availableProjects[0]) setActiveProjectId(availableProjects[0].id);
-      }
-      const run = data.lastRun;
-      setNotice(run ? `${dryRun ? "Dry-Run" : "Abgleich"}: ${run.created} neu, ${run.updated} aktualisiert, ${run.deactivated} deaktiviert, ${run.failed} fehlerhaft.` : "Grundstücksabgleich abgeschlossen.");
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Der Grundstücksabgleich ist fehlgeschlagen.");
-    } finally {
-      setPlotSyncBusy(false);
-    }
   };
 
   const updateCentralPlotSelection = (plotIds: string[]) => {
@@ -3456,14 +3430,13 @@ export default function InseratStudio() {
           linkedProjectCounts={linkedProjectCounts}
           selectionMeta={plotSelectionMeta}
           syncStatus={plotSyncStatus}
-          syncBusy={plotSyncBusy}
           onSelectionChange={updateCentralPlotSelection}
           onSave={savePlotRecords}
           onDelete={deletePlot}
+          onMasterPreview={previewMaster}
+          onMasterApply={applyMaster}
           onResetListings={resetPlotListingWork}
           resetDisabled={uploading}
-          onSync={runPlotSync}
-          onScheduleChange={setPlotSyncSchedule}
         />{centralHousePoolPanel}</>
       ) : null}
 

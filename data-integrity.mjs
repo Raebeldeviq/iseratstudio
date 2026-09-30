@@ -312,7 +312,8 @@ export function cleanupStudioState(state, options = {}) {
   let cleaned = normalizePlotState(cleanedBase, { now });
   if (previousSchemaVersion < 4) {
     const legacyArchivedPlotIds = (cleaned.plots || [])
-      .filter((plot) => plot.isActive === false && !plot.sourceStatus && !plot.sourceInternalId && !plot.listingUrl)
+      .filter((plot) => plot.isActive === false && !plot.masterSync
+        && !plot.sourceStatus && !plot.sourceInternalId && !plot.listingUrl)
       .map((plot) => plot.id);
     for (const plotId of legacyArchivedPlotIds) {
       const deletion = deletePlotRecordCascade(cleaned, plotId);

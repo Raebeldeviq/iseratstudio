@@ -17,7 +17,7 @@ import {
 import type { AddressOwner, PlotRecord } from "../types";
 import { plotAddressSelection, plotListingCountAppearance, selectablePlotIds } from "../../plot-selection.mjs";
 import { partitionPlotsByTerritory } from "../../plot-territory.mjs";
-import { mergeAddressPools, parseAddressPoolRows } from "../../address-rotation.mjs";
+import { generatePoolB, rowFromPlot, rowFromPlotB } from "../../plot-master-sync.mjs";
 
 const MAX_IMPORT_BYTES = 10 * 1024 * 1024;
 const MAX_PDF_BYTES = 30 * 1024 * 1024;
@@ -52,14 +52,13 @@ type Props = {
   linkedProjectCounts: Record<string, number>;
   selectionMeta: Record<string, { listingCount: number; regionLabel: string; uploadDate: string }>;
   syncStatus: PlotSyncStatus | null;
-  syncBusy: boolean;
   onSelectionChange: (ids: string[]) => void;
   onSave: (plots: PlotRecord[], message: string) => void;
-  onDelete: (plot: PlotRecord) => void;
+  onDelete: (plot: PlotRecord, removeExcel: boolean) => void;
+  onMasterPreview: () => Promise<MasterPreview>;
+  onMasterApply: (token: string, decisions: Record<string, string>) => Promise<unknown>;
   onResetListings: (plot: PlotRecord) => void;
   resetDisabled: boolean;
-  onSync: (dryRun: boolean) => void;
-  onScheduleChange: (enabled: boolean) => void;
 };
 
 type PlotSortKey = "city" | "postalCode" | "plotSizeSqm" | "purchasePrice" | "uploadDate" | "listingCount";
@@ -89,6 +88,14 @@ type PlotSyncStatus = {
   config: { sourcePath: string; intervalDays: number; hour: number; timeZone: string };
   lastRun: PlotSyncRun | null;
   lastSuccessfulRun: PlotSyncRun | null;
+};
+
+type MasterPreview = {
+  token: string;
+  sourcePath: string;
+  sourceFound: boolean;
+  counts: Record<string, number>;
+  items: Array<{ plotId: string; action: string; direction?: string; label: string }>;
 };
 
 function euro(value: number): string {
@@ -133,16 +140,14 @@ export default function PlotManagement({
   linkedProjectCounts,
   selectionMeta,
   syncStatus,
-  syncBusy,
   onSelectionChange,
   onSave,
   onDelete,
+  onMasterPreview,
+  onMasterApply,
   onResetListings,
   resetDisabled,
-  onSync,
-  onScheduleChange,
 }: Props) {
-  const [logOpen, setLogOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [showReview, setShowReview] = useState(false);
   const [cityFilter, setCityFilter] = useState("");
@@ -154,8 +159,10 @@ export default function PlotManagement({
   const [importBusy, setImportBusy] = useState(false);
   const [importRows, setImportRows] = useState<PlotImportPreviewRow[]>([]);
   const [importErrors, setImportErrors] = useState<string[]>([]);
-  const [rotationPreview, setRotationPreview] = useState<PlotRecord[] | null>(null);
-  const [rotationPairCount, setRotationPairCount] = useState(0);
+  const [masterPreview, setMasterPreview] = useState<MasterPreview | null>(null);
+  const [masterDecisions, setMasterDecisions] = useState<Record<string, string>>({});
+  const [masterBusy, setMasterBusy] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<PlotRecord | null>(null);
   const [message, setMessage] = useState("");
   const [resetTarget, setResetTarget] = useState<{ plot: PlotRecord; listingCount: number } | null>(null);
   const excelInput = useRef<HTMLInputElement>(null);
@@ -207,7 +214,6 @@ export default function PlotManagement({
         .sort((left, right) => collator.compare(left.firstPostalCode, right.firstPostalCode) || collator.compare(left.label, right.label)) };
     });
   }, [selectionMeta, sortDirection, sortKey, visiblePlots, helperOnline, syncStatus?.territory]);
-  const displayedSyncRun = syncStatus?.lastSuccessfulRun || syncStatus?.lastRun;
 
   const beginEdit = (plot?: PlotRecord) => {
     setDraft(plot ? normalizePlotRecord(plot, { fallbackId: plot.id }) as PlotRecord : emptyPlot(defaultOwner));
@@ -392,13 +398,28 @@ export default function PlotManagement({
     }).catch(() => setMessage("Die Verknüpfung wurde entfernt; die lokale Archivierung der Datei ist noch offen."));
   };
 
-  const removePlot = (plot: PlotRecord) => {
-    const links = linkedProjectCounts[plot.id] || 0;
-    const warning = links
-      ? `Mit diesem Grundstück sind ${links} interne Arbeitsstände verknüpft. Grundstück, Arbeitsstände und interne Folgebeziehungen werden vollständig gelöscht. Bereits veröffentlichte externe Inserate bleiben unberührt. Fortfahren?`
-      : "Soll dieses Grundstück wirklich vollständig aus der App gelöscht werden? Externe Inserate bleiben unberührt.";
-    if (!window.confirm(warning)) return;
-    onDelete(plot);
+  const removePlot = (plot: PlotRecord) => setDeleteTarget(plot);
+
+  const openMasterPreview = async () => {
+    setMasterBusy(true);
+    try {
+      const preview = await onMasterPreview();
+      setMasterPreview(preview);
+      setMasterDecisions({});
+      setMessage("Vorschau erstellt. Bitte Änderungen und fehlende Grundstücke prüfen.");
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Die Master-Vorschau ist fehlgeschlagen."); }
+    finally { setMasterBusy(false); }
+  };
+
+  const confirmMaster = async () => {
+    if (!masterPreview) return;
+    setMasterBusy(true);
+    try {
+      await onMasterApply(masterPreview.token, masterDecisions);
+      setMasterPreview(null);
+      setMessage("Master-Abgleich abgeschlossen. Bestehende Inserate und Historie wurden nicht entfernt.");
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Der Master-Abgleich ist fehlgeschlagen."); }
+    finally { setMasterBusy(false); }
   };
 
   const beginListingReset = (plot: PlotRecord) => {
@@ -436,29 +457,6 @@ export default function PlotManagement({
     }
   };
 
-  const importRotationMaster = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (!file) return;
-    if (!file.size || file.size > MAX_IMPORT_BYTES) { setMessage("Die Master-Datei ist leer oder größer als 10 MB."); return; }
-    setImportBusy(true);
-    setRotationPreview(null);
-    try {
-      const [a, b] = await Promise.all([
-        readSheet(file, "Pool_A"), readSheet(file, "Pool_B"),
-      ]);
-      const poolA = parseAddressPoolRows(a, "A");
-      const poolB = parseAddressPoolRows(b, "B");
-      const merged = mergeAddressPools(plots, poolA, poolB) as PlotRecord[];
-      const paired = merged.filter((plot) => plot.addressRotation?.poolA && plot.addressRotation?.poolB).length;
-      setRotationPreview(merged);
-      setRotationPairCount(paired);
-      setMessage(`${poolA.length} Pool-A-Zeilen und ${poolB.length} Pool-B-Zeilen geprüft. ${paired} Grundstücke besitzen beide Varianten. Keine Änderung gespeichert.`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Die Pool-Master-Datei konnte nicht geprüft werden.");
-    } finally { setImportBusy(false); }
-  };
-
   const updateImportRow = (id: string, patch: Partial<PlotImportPreviewRow>) => {
     setImportRows((current) => current.map((row) => row.id === id ? { ...row, ...patch } : row));
   };
@@ -490,17 +488,6 @@ export default function PlotManagement({
           </div>
         </div>
 
-        <section className="plot-sync-card" aria-label="Automatischer Grundstücksabgleich">
-          <div><span className="eyebrow">Excel-Abgleich · {syncStatus?.scheduleEnabled ? 'Zeitplan aktiv: alle 3 Tage um 07:00 Uhr' : 'Automatik pausiert'}</span><b>{syncStatus?.sourceFound ? "Quelldatei gefunden" : "Quelldatei nicht gefunden"}</b><small>{syncStatus?.config.sourcePath || "Status wird vom lokalen Helfer geladen …"}</small><button className="secondary" disabled={!helperOnline || syncBusy} onClick={() => onScheduleChange(!syncStatus?.scheduleEnabled)}>{syncStatus?.scheduleEnabled ? 'Zeitplan pausieren' : 'Zeitplan aktivieren'}</button></div>
-          <dl>
-            <div><dt>Letzter Erfolg</dt><dd>{syncStatus?.lastSuccessfulRun ? new Date(syncStatus.lastSuccessfulRun.startedAt).toLocaleString("de-DE") : "–"}</dd></div>
-            <div><dt>Nächster Lauf</dt><dd>{syncStatus?.nextScheduledRunAt ? new Date(syncStatus.nextScheduledRunAt).toLocaleString("de-DE") : "–"}</dd></div>
-            <div><dt>Neu / aktualisiert</dt><dd>{displayedSyncRun ? `${displayedSyncRun.created} / ${displayedSyncRun.updated}` : "–"}</dd></div>
-            <div><dt>Deaktiviert / Fehler</dt><dd>{displayedSyncRun ? `${displayedSyncRun.deactivated} / ${displayedSyncRun.failed}` : "–"}</dd></div>
-          </dl>
-          <div className="button-row"><button className="secondary" disabled={!helperOnline || syncBusy} onClick={() => onSync(true)}>Dry-Run</button><button className="primary" disabled={!helperOnline || syncBusy} onClick={() => onSync(false)}>{syncBusy ? "Abgleich läuft …" : "Jetzt synchronisieren"}</button><button className="secondary" disabled={!syncStatus?.lastRun} onClick={() => setLogOpen((open) => !open)}>Letztes Protokoll öffnen</button></div>
-          {logOpen && syncStatus?.lastRun ? <div className="plot-sync-log"><b>{syncStatus.lastRun.message}</b><span>{syncStatus.lastRun.rowsRead} gelesen · {syncStatus.lastRun.created} neu · {syncStatus.lastRun.updated} aktualisiert · {syncStatus.lastRun.deactivated} deaktiviert · {syncStatus.lastRun.skipped} übersprungen · {syncStatus.lastRun.duplicatesPrevented} Dubletten verhindert · {syncStatus.lastRun.failed} fehlerhaft</span>{syncStatus.lastRun.errors?.length ? <ul>{syncStatus.lastRun.errors.map((error, index) => <li key={`${error.excelRow}-${index}`}>Zeile {error.excelRow || "–"}: {error.reason}</li>)}</ul> : null}</div> : null}
-        </section>
 
         {message ? <div className="plot-inline-message" role="status">{message}</div> : null}
 
@@ -520,8 +507,18 @@ export default function PlotManagement({
         </div>
 
         <p role="note">Gebietsabgleich: aktive PLZ im Excel-Blatt „Suchgebiet“. Grundstücke außerhalb bleiben erlaubt und bei gültiger Anschrift auswählbar. Bestehende Online-Inserate bleiben unverändert.</p>
-        <label className="field"><span>Pool-Master-Datei prüfen</span><input type="file" accept=".xlsx" disabled={importBusy} onChange={importRotationMaster} /></label>
-        {rotationPreview ? <div className="action-bar"><span>{rotationPairCount} Grundstücke mit Pool A und B; bestehende Inserate bleiben unverändert.</span><button className="primary" onClick={() => { onSave(rotationPreview, `${rotationPairCount} Adresspaare gespeichert.`); setRotationPreview(null); }}>Pool-Adressen speichern</button><button className="secondary" onClick={() => setRotationPreview(null)}>Abbrechen</button></div> : null}
+        <div className="action-bar"><span>Master: KI_Grundstuecke_MASTER.xlsx · Pool A und Pool B</span><button className="primary" disabled={!helperOnline || masterBusy} onClick={openMasterPreview}>{masterBusy ? "Excel wird geprüft …" : "Excel synchronisieren"}</button></div>
+        {masterPreview ? <div className="content-card plot-import-preview" role="dialog" aria-label="Master-Abgleich prüfen">
+          <h3>Änderungen vor dem Synchronisieren</h3>
+          <p>{masterPreview.counts.import || 0} neue Grundstücke aus Excel · {masterPreview.counts.export || 0} neue aus Inseratestudio · {masterPreview.counts.update || 0} geändert · {masterPreview.counts["missing-excel"] || 0} fehlen in Excel · {masterPreview.counts.conflict || 0} Konflikte</p>
+          {!masterPreview.sourceFound ? <p>Die Master-Datei fehlt noch. Beim Bestätigen wird sie mit Pool A und Pool B angelegt.</p> : null}
+          {masterPreview.items.map((item) => <div className="action-bar" key={item.plotId}><span>{item.label} · {item.plotId} · {item.action === "import" ? "Excel → App" : item.action === "export" ? "App → Excel" : item.action === "update" ? `${item.direction === "excel" ? "Excel → App" : "App → Excel"} geändert` : item.action === "delete-excel" ? "Pool A und B entfernen" : item.action === "missing-excel" ? "Fehlt in Excel" : "Konflikt"}</span>
+            {item.action === "conflict" ? <select aria-label={`Konflikt ${item.plotId}`} value={masterDecisions[item.plotId] || "keep"} onChange={(event) => setMasterDecisions((current) => ({ ...current, [item.plotId]: event.target.value }))}><option value="keep">Unverändert lassen</option><option value="app">Version Inseratestudio</option><option value="excel">Version Excel</option></select> : null}
+            {item.action === "missing-excel" ? <select aria-label={`Fehlendes Grundstück ${item.plotId}`} value={masterDecisions[item.plotId] || "keep"} onChange={(event) => setMasterDecisions((current) => ({ ...current, [item.plotId]: event.target.value }))}><option value="keep">Im Katalog behalten</option><option value="remove-app">Aus Inseratestudio entfernen</option></select> : null}
+          </div>)}
+          {masterPreview.counts["missing-excel"] > 1 ? <button className="secondary" onClick={() => setMasterDecisions((current) => ({ ...current, ...Object.fromEntries(masterPreview.items.filter((item) => item.action === "missing-excel").map((item) => [item.plotId, "remove-app"])) }))}>Alle fehlenden aus Inseratestudio entfernen</button> : null}
+          <div className="action-bar"><span>Keine Portalobjekte, Listings oder Lösch-Batches werden gelöscht.</span><div className="button-row"><button className="secondary" onClick={() => setMasterPreview(null)}>Abbrechen</button><button className="primary" disabled={masterBusy} onClick={confirmMaster}>Synchronisierung bestätigen</button></div></div>
+        </div> : null}
         {(!helperOnline || !syncStatus?.territory?.available) ? <p role="status">{syncStatus?.territory?.message || "Gebietszuordnung nicht verfügbar – Verbindung und aktive PLZ-Liste werden geprüft."}</p> : null}
         <div className="plot-territory-sections">{territorySections.map((territory) => <section className={`plot-territory-section ${territory.id}`} key={territory.id} aria-label={territory.label}>
           <header className="plot-territory-heading"><h3>{territory.label}</h3><span>{territory.plots.length} Grundstücke</span></header>
@@ -533,7 +530,7 @@ export default function PlotManagement({
           const address = plotAddressSelection(plot);
           return <article className={`plot-selection-card ${appearance.tone}${selectedPlotIds.includes(plot.id) ? " selected" : ""}`} key={plot.id}>
             <label className="plot-selection-main"><input type="checkbox" disabled={!address.selectable} checked={address.selectable && selectedPlotIds.includes(plot.id)} onChange={() => togglePlot(plot.id)} aria-label={`${formatPlotStreet(plot) || 'Adresse offen'} auswählen`} /><span><b>{formatPlotStreet(plot) || "–"}</b><small>{plot.postalCode || "–"} {plot.city || "–"}</small><small>Grundstücks-ID: {plot.id}</small>{plot.addressRotation ? <small>{(() => { const status = rotationStatuses[plot.id]; return status?.state === "incomplete" ? "Adresspool unvollständig" : status?.state === "ready" ? `${status.currentPool ? `Pool ${status.currentPool} abgeschlossen · ` : ""}Pool ${status.nextPool} bereit` : `Pool ${status?.currentPool} · ${status?.remaining}/4 noch offen · nächster Pool ${status?.nextPool} · Zyklus ${status?.cycle}`; })()}</small> : null}{!address.selectable ? <small>{address.reason}</small> : address.houseNumberUnconfirmed ? <small>Hausnummer unbestätigt – vor Veröffentlichung prüfen</small> : null}</span></label>
-            <div className="plot-selection-facts"><span><small>Grundstück</small><b>{plot.plotSizeSqm ? `${number(plot.plotSizeSqm)} m²` : "–"}</b></span><span><small>Kaufpreis</small><b>{plot.purchasePrice ? euro(plot.purchasePrice) : "–"}</b></span><span><small>Plattform-Upload</small><b>{uploadDate ? date(uploadDate) : "Noch nicht hochgeladen"}</b></span></div>
+            <div className="plot-selection-facts"><span><small>Pool A · {formatPlotStreet(plot)}</small><b>{number(plot.plotSizeSqm)} m² · {euro(plot.purchasePrice)}</b></span><span><small>Pool B · {formatPlotStreet(rowFromPlotB(plot)) || "Hausnummer prüfen"}</small><b>{number(rowFromPlotB(plot).plotSizeSqm)} m² · {euro(rowFromPlotB(plot).purchasePrice)}</b><small>{plot.addressRotation?.poolBDetails?.mode === "MANUAL" ? "Pool B manuell" : "Pool B automatisch"}{rowFromPlotB(plot).status ? " · Pool B prüfen" : ""}</small></span><span><small>Plattform-Upload</small><b>{uploadDate ? date(uploadDate) : "Noch nicht hochgeladen"}</b></span></div>
             <em>{listingCount} Inserate{appearance.detail ? <small>{appearance.detail}</small> : null}</em>
             <div className="plot-actions"><button onClick={() => beginEdit(plot)}>Bearbeiten</button><button className="secondary" disabled={resetDisabled || !listingCount} onClick={() => beginListingReset(plot)}>Inserate zurücksetzen</button>{plot.exposeFileReference ? <button onClick={() => openExpose(plot)}>Exposé öffnen</button> : null}{!showReview ? <button className="danger-link" onClick={() => removePlot(plot)}>Löschen</button> : null}</div>
           </article>;
@@ -570,6 +567,11 @@ export default function PlotManagement({
               <label className="field"><span>Kaufpreis</span><div className="input-shell"><input type="number" min={0} value={draft.purchasePrice || ""} onChange={(event) => setDraft({ ...draft, purchasePrice: Number(event.target.value) || 0 })} /><i>€</i></div></label>
               <label className="field field-wide"><span>Regionale Grundnotizen · optional</span><textarea rows={3} value={draft.regionalNotes} placeholder="Nur geprüfte Ortsfakten, z. B. seenreich, ruhig, Nähe zu Potsdam" onChange={(event) => setDraft({ ...draft, regionalNotes: event.target.value })} /></label>
             </div>
+            <div className="plot-pdf-section"><div><span className="eyebrow">Vermarktungsvariante</span><h3>Pool B</h3><p>Automatisch: +2 m², Hausnummer +2 und +1.350 €. Sonderhausnummern bleiben zur Prüfung offen.</p></div>
+              {(() => { const generated = generatePoolB(rowFromPlot(draft)); const b = rowFromPlotB(draft); return <><p>{b.street} {b.houseNumber || "Hausnummer prüfen"}, {b.postalCode} {b.city} · {number(b.plotSizeSqm)} m² · {euro(b.purchasePrice)} · {b.mode === "MANUAL" ? "Pool B manuell" : "Pool B automatisch"}{b.status ? " · Pool B prüfen" : ""}</p>
+                <div className="button-row"><button className="secondary" onClick={() => setDraft({ ...draft, addressRotation: { poolA: { street: draft.street, houseNumber: draft.houseNumber, postalCode: draft.postalCode, city: draft.city }, poolB: { street: generated.street, houseNumber: generated.houseNumber, postalCode: generated.postalCode, city: generated.city }, poolBDetails: { plotSizeSqm: generated.plotSizeSqm, purchasePrice: generated.purchasePrice, mode: "AUTO_GENERATED", status: generated.status as "" | "POOL_B_PRÜFEN" }, currentPool: draft.addressRotation?.currentPool || "", cycle: draft.addressRotation?.cycle || 0, listingIds: draft.addressRotation?.listingIds || [], lastUsedA: draft.addressRotation?.lastUsedA || "", lastUsedB: draft.addressRotation?.lastUsedB || "" } })}>Pool B automatisch</button><button className="secondary" onClick={() => setDraft({ ...draft, addressRotation: { poolA: draft.addressRotation?.poolA || null, poolB: { street: b.street, houseNumber: b.houseNumber, postalCode: b.postalCode, city: b.city }, poolBDetails: { plotSizeSqm: b.plotSizeSqm, purchasePrice: b.purchasePrice, mode: "MANUAL", status: b.status as "" | "POOL_B_PRÜFEN" }, currentPool: draft.addressRotation?.currentPool || "", cycle: draft.addressRotation?.cycle || 0, listingIds: draft.addressRotation?.listingIds || [], lastUsedA: draft.addressRotation?.lastUsedA || "", lastUsedB: draft.addressRotation?.lastUsedB || "" } })}>Pool B manuell bearbeiten</button></div>
+                {draft.addressRotation?.poolBDetails?.mode === "MANUAL" ? <div className="form-grid two"><label className="field"><span>Straße</span><input value={draft.addressRotation.poolB?.street || ""} onChange={(event) => setDraft({ ...draft, addressRotation: { ...draft.addressRotation!, poolB: { ...draft.addressRotation!.poolB!, street: event.target.value } } })} /></label><label className="field"><span>Hausnummer</span><input value={draft.addressRotation.poolB?.houseNumber || ""} onChange={(event) => setDraft({ ...draft, addressRotation: { ...draft.addressRotation!, poolB: { ...draft.addressRotation!.poolB!, houseNumber: event.target.value }, poolBDetails: { ...draft.addressRotation!.poolBDetails!, status: event.target.value ? "" : "POOL_B_PRÜFEN" } } })} /></label><label className="field"><span>Fläche m²</span><input type="number" min={0} value={draft.addressRotation.poolBDetails.plotSizeSqm} onChange={(event) => setDraft({ ...draft, addressRotation: { ...draft.addressRotation!, poolBDetails: { ...draft.addressRotation!.poolBDetails!, plotSizeSqm: Number(event.target.value) || 0 } } })} /></label><label className="field"><span>Preis €</span><input type="number" min={0} value={draft.addressRotation.poolBDetails.purchasePrice} onChange={(event) => setDraft({ ...draft, addressRotation: { ...draft.addressRotation!, poolBDetails: { ...draft.addressRotation!.poolBDetails!, purchasePrice: Number(event.target.value) || 0 } } })} /></label></div> : null}</>; })()}
+            </div>
 
             <div className="plot-pdf-section">
               <div><span className="eyebrow">Interne PDF-Ablage</span><h3>Grundstücksexposé</h3><p>Ausgelesen werden ausschließlich Straße, PLZ, Ort, Grundstücksgröße und Kaufpreis. Keine Bilder, Maklerdaten oder Bebaubarkeitsanalyse.</p></div>
@@ -603,6 +605,7 @@ export default function PlotManagement({
           </div>
         </div>
       ) : null}
+      {deleteTarget ? <div className="plot-editor-backdrop" role="dialog" aria-modal="true" aria-label="Grundstück entfernen"><div className="plot-editor content-card"><h2>Grundstück auch aus der Master-Excel entfernen?</h2><p>{formatPlotStreet(deleteTarget)} · {deleteTarget.id}. Die weitere Nutzung wird beendet. {linkedProjectCounts[deleteTarget.id] || 0} Projekte sowie Listings, Uploadhistorie und Lösch-Batches bleiben erhalten.</p><div className="button-row"><button className="secondary" onClick={() => setDeleteTarget(null)}>Abbrechen</button><button className="secondary" onClick={() => { onDelete(deleteTarget, false); setDeleteTarget(null); }}>Nur aus Inseratestudio entfernen</button><button className="primary" onClick={() => { onDelete(deleteTarget, true); setDeleteTarget(null); }}>Inseratestudio + Excel löschen</button></div><p>Excel-Zeilen werden nach Vorschau und Bestätigung des nächsten Abgleichs entfernt.</p></div></div> : null}
     </section>
   );
 }

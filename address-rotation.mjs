@@ -69,7 +69,8 @@ export function addressRotationStatus(state, plotId) {
   const currentPool = rotation.currentPool || "";
   const nextPool = currentPool === "A" ? "B" : "A";
   const nextAddress = nextPool === "A" ? rotation.poolA : rotation.poolB;
-  const readyPair = Boolean(rotation.poolA && rotation.poolB);
+  const readyPair = Boolean(rotation.poolA && rotation.poolB && rotation.poolB.houseNumber
+    && rotation.poolBDetails?.status !== "POOL_B_PRÜFEN");
   if (!currentPool) return { state: readyPair ? "ready" : "incomplete", currentPool, nextPool, remaining: 0, cycle: 0 };
   const ids = rotation.listingIds || [];
   const project = (state.projects || []).find((item) => item.plotId === plotId);
@@ -80,7 +81,7 @@ export function addressRotationStatus(state, plotId) {
     const control = project?.listingGroup?.listingControls?.find((item) => item.listingId === id);
     return !listing || !entry || entry.status !== "deleted" || control?.premiumPlacement || (control?.manualLock && listing.status !== "deleted");
   }).length;
-  return { state: ids.length === 4 && remaining === 0 && nextAddress ? "ready" : "active",
+  return { state: ids.length === 4 && remaining === 0 && nextAddress && readyPair ? "ready" : "active",
     currentPool, nextPool, remaining, cycle: Number(rotation.cycle) || 0 };
 }
 

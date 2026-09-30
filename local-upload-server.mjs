@@ -48,6 +48,7 @@ import {
   readPlotExpose,
 } from "./plot-expose-store.mjs";
 import { createPlotSyncService } from "./plot-sync-service.mjs";
+import { createPlotMasterService } from "./plot-master-service.mjs";
 import { buildImportPackage } from "./app/lib/openimmo.ts";
 import { createUploadJobId } from "./batch-upload.mjs";
 import { eligiblePromotionHeroImages } from "./listing-creative-selection.mjs";
@@ -136,6 +137,7 @@ const writeProductionDeleteLog = createStructuredFileLogger(PRODUCTION_DELETE_LO
 const uploadJobLedger = createUploadJobLedger(UPLOAD_JOB_LEDGER_PATH);
 const plotDailyUploadGuard = createPlotDailyUploadGuard(PLOT_DAILY_UPLOAD_GUARD_PATH);
 const plotSyncService = createPlotSyncService();
+const plotMasterService = createPlotMasterService();
 const catalogStateStore = createCatalogStateStore();
 
 async function reconcileCompletedManualBatchTransfer(uploadJob, completedJob) {
@@ -722,9 +724,11 @@ const server = createServer(async (request, response) => {
   const isPlotSyncRun = request.method === "POST" && pathname === "/plot-sync/run";
   const isPlotSyncSchedule = request.method === "POST" && pathname === "/plot-sync/schedule";
   const isPlotSyncLog = request.method === "GET" && pathname === "/plot-sync/log";
+  const isPlotMasterPreview = request.method === "GET" && pathname === "/plot-master/preview";
+  const isPlotMasterApply = request.method === "POST" && pathname === "/plot-master/apply";
   const isMailRuntimeProbe = request.method === "POST" && pathname === "/mail-runtime/probe";
   const isExactProductionDelete = request.method === "POST" && pathname === EXACT_PRODUCTION_DELETE_PATH;
-  if (!isPlotSyncSchedule && !isHealth && !isRuntimeProvenance && !isUpload && !isBinaryUpload && !isManualBatchResumption && !isLocalSave && !isTextGeneration && !isImageCaptionGeneration && !isOpenAiKeyValidation && !isCredentialLoad && !isCredentialSave && !isCatalogLoad && !isCatalogSave && !isCatalogV2Start && !isCatalogV2ImageSave && !isCatalogV2Commit && !isCatalogV2ManifestLoad && !isCatalogV2ImageLoad && !isMediaLibraryList && !isMediaLibrarySequence && !isMediaLibraryImage && !isPlotExposeAnalyze && !isPlotExposeCommit && !isPlotExposeLoad && !isPlotExposeArchive && !isPlotSyncStatus && !isPlotSyncRun && !isPlotSyncLog && !isMailRuntimeProbe && !isExactProductionDelete) {
+  if (!isPlotSyncSchedule && !isHealth && !isRuntimeProvenance && !isUpload && !isBinaryUpload && !isManualBatchResumption && !isLocalSave && !isTextGeneration && !isImageCaptionGeneration && !isOpenAiKeyValidation && !isCredentialLoad && !isCredentialSave && !isCatalogLoad && !isCatalogSave && !isCatalogV2Start && !isCatalogV2ImageSave && !isCatalogV2Commit && !isCatalogV2ManifestLoad && !isCatalogV2ImageLoad && !isMediaLibraryList && !isMediaLibrarySequence && !isMediaLibraryImage && !isPlotExposeAnalyze && !isPlotExposeCommit && !isPlotExposeLoad && !isPlotExposeArchive && !isPlotSyncStatus && !isPlotSyncRun && !isPlotSyncLog && !isPlotMasterPreview && !isPlotMasterApply && !isMailRuntimeProbe && !isExactProductionDelete) {
     send(response, 404, { ok: false, message: "Nicht gefunden." }, origin);
     return;
   }
@@ -892,6 +896,11 @@ const server = createServer(async (request, response) => {
 
     if (isPlotSyncLog) {
       send(response, 200, { ok: true, log: await plotSyncService.lastLog() }, origin);
+      return;
+    }
+
+    if (isPlotMasterPreview) {
+      send(response, 200, { ok: true, ...(await plotMasterService.preview()) }, origin);
       return;
     }
 
@@ -1080,16 +1089,17 @@ const server = createServer(async (request, response) => {
     }
 
     if (isPlotSyncRun) {
-      const result = await plotSyncService.run({
-        dryRun: body.dryRun === true,
-        trigger: "manual",
-      });
-      send(response, 200, { ok: true, ...result }, origin);
+      send(response, 410, { ok: false, message: "Der alte Excel-Schreibabgleich wurde durch den bestätigungspflichtigen Master-Abgleich ersetzt." }, origin);
+      return;
+    }
+
+    if (isPlotMasterApply) {
+      send(response, 200, { ok: true, ...(await plotMasterService.apply(body)) }, origin);
       return;
     }
 
     if (isPlotSyncSchedule) {
-      send(response, 200, { ok: true, ...(await plotSyncService.setScheduleEnabled(body.enabled)) }, origin);
+      send(response, 410, { ok: false, message: "Automatische Grundstücksänderungen sind deaktiviert. Bitte den Master-Abgleich manuell prüfen." }, origin);
       return;
     }
 
@@ -1303,18 +1313,7 @@ async function startLocalHelper() {
     } catch (error) {
       console.error(`Inseratrotation: ${error instanceof Error ? error.message : "Read-only Startprüfung fehlgeschlagen."}`);
     }
-    try {
-      await plotSyncService.runIfDue();
-    } catch (error) {
-      console.error(`Grundstücksabgleich: ${error instanceof Error ? error.message : "Start fehlgeschlagen."}`);
-    }
   })();
-  const syncTimer = setInterval(() => {
-    void plotSyncService.runIfDue().catch((error) => {
-      if (error?.code !== "PLOT_SYNC_LOCKED") console.error(`Grundstücksabgleich: ${error instanceof Error ? error.message : "Zeitplan fehlgeschlagen."}`);
-    });
-  }, 60_000);
-  syncTimer.unref();
   const listingSchedulerTimer = setInterval(() => {
     void listingRotationSchedulerService.runIfDue({ trigger: "periodic" }).catch((error) => {
       if (error?.code !== "LISTING_SCHEDULER_LOCKED") {

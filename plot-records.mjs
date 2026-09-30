@@ -75,6 +75,7 @@ export function normalizePlotRecord(value, options = {}) {
     updatedAt: safeIsoDate(value?.updatedAt ?? value?.updated_at, now),
     isActive: value?.isActive !== false && value?.is_active !== false,
     addressRotation: value?.addressRotation || undefined,
+    masterSync: value?.masterSync || undefined,
   };
 }
 

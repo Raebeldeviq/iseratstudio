@@ -1,5 +1,24 @@
 # Änderungsprotokoll
 
+## Unreleased · Bidirektionaler Grundstücks-Master – 30. September 2026
+
+### Report
+
+- `KI_Grundstuecke_MASTER.xlsx` mit `Pool_A` und `Pool_B` wird anhand der unveränderten `plotId` in beide Richtungen mit dem lokalen Grundstückskatalog abgeglichen. Neue App-Grundstücke werden in beide Blätter exportiert; neue Pool-A-Zeilen aus Excel werden importiert und erhalten bei Bedarf automatisch Pool B.
+- Pool B verwendet +2 m², eine nur bei rein numerischer Hausnummer um 2 erhöhte Hausnummer und +1.350 €. Sonderhausnummern bleiben leer und erhalten `POOL_B_PRÜFEN`. Manuelle Pool-B-Werte werden als `MANUAL` getrennt von automatisch erzeugten Werten gespeichert.
+- Vor jedem Schreiben erscheint eine Vorschau mit Konfliktwahl und Einzel- bzw. Sammelentscheidung für in Excel fehlende Grundstücke. Ein veralteter Vorschau-Stand wird abgewiesen. Grundstückslöschungen deaktivieren nur die weitere Nutzung; Projekte, Listings, Uploadhistorie und Lösch-Batches bleiben bestehen. Eine bestätigte Excel-Löschung entfernt ausschließlich die zwei Zeilen derselben `plotId` beim nächsten bestätigten Abgleich.
+- Der bisherige automatische Einweg-Abgleich und sein Schreib-Endpunkt wurden stillgelegt, damit dieser keine Grundstücke ohne Zustimmung deaktiviert. Die Gebietszuordnung aus dem bestehenden Excel-Blatt bleibt lesbar.
+
+### Begründung
+
+Die `plotId` ist der einzige fachliche Schlüssel. Ein gespeicherter Stand von Pool A und B pro Grundstück erlaubt den Vergleich mit der jeweils letzten Synchronisierung und blockiert widersprüchliche Änderungen. Die vorhandene Katalog-Snapshot-Sicherung schützt die App-Seite; die Master-Datei wird atomar ersetzt und bei einem fehlgeschlagenen Katalog-Commit zurückgesetzt. Andere Bestandteile der Excel-Arbeitsmappe bleiben beim Schreiben erhalten.
+
+### Hürden und Risiken
+
+- Die produktive Master-Datei war bei der Implementierung nicht vorhanden. Der erste echte Abgleich und seine Inhalte müssen in der Haupt-App durch Pascal geprüft und bestätigt werden; es wurde kein produktives Grundstück automatisch gelöscht oder Portal-Upload ausgelöst.
+- Bestehende Adresspaare ohne bisher gespeicherten Synchronisationsstand können beim ersten Vergleich einen Konflikt auslösen. Ihre manuell abweichende Pool-B-Adresse wird nicht automatisch überschrieben.
+- Wenn ein externer Worker die Excel-Datei genau zwischen letzter Dateiprüfung und atomarem Ersetzen schreibt, kann dessen Änderung ohne gemeinsame Dateisperre nicht vollständig ausgeschlossen werden. Der Worker sollte dieselbe `.sync.lock`-Datei beachten oder während des bestätigten Abgleichs pausieren.
+
 ## Unreleased · Adressrotation Pool A/B – 29. September 2026
 
 ### Report

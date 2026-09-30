@@ -222,6 +222,7 @@ export type AddressOwner = "fabian" | "pascal";
 
 export type PlotRecord = {
   id: string;
+  masterSync?: { a: string; b: string; appOnlyRemoved?: boolean; excelDeleteRequested?: boolean; syncedAt?: string };
   addressRotation?: {
     poolA: PublicationAddress | null;
     poolB: PublicationAddress | null;
@@ -230,6 +231,7 @@ export type PlotRecord = {
     listingIds: string[];
     lastUsedA: string;
     lastUsedB: string;
+    poolBDetails?: { plotSizeSqm: number; purchasePrice: number; mode: "AUTO_GENERATED" | "MANUAL"; status: "" | "POOL_B_PRÜFEN" };
   };
   street: string;
   houseNumber: string;
