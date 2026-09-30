@@ -167,10 +167,13 @@ export function reconcileMaster(state, excelA, excelB, choices = {}, now = new D
     const a = direction === "excel" ? aExcel : aApp;
     let b;
     if (!bExcel) b = generatePoolB(a);
-    else if ((hasConflict && choices[id] === "excel") || (!hasConflict && bDirection === "excel")) {
-      b = fingerprint(bExcel) === fingerprint(generatePoolB(aExcel))
-        ? generatePoolB(a) : { ...bExcel, mode: "MANUAL" };
-    }
+    else if (hasConflict && choices[id] === "excel") {
+      const changedExcelB = bDirection === "excel" || bDirection === "conflict";
+      b = bExcel.mode === "MANUAL" ? bExcel
+        : changedExcelB && fingerprint(bExcel) !== fingerprint(generatePoolB(aExcel))
+          ? { ...bExcel, mode: "MANUAL" } : generatePoolB(a);
+    } else if (!hasConflict && bDirection === "excel") b = fingerprint(bExcel) === fingerprint(generatePoolB(aExcel))
+      ? generatePoolB(a) : { ...bExcel, mode: "MANUAL" };
     else if (bApp.mode === "MANUAL") b = bApp;
     else b = generatePoolB(a);
     if (!bExcel || fingerprint(b) !== fingerprint(bExcel)) nextB.set(id, b);

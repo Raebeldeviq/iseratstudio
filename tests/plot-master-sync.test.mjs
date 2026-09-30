@@ -75,6 +75,10 @@ test("simultaneous app and Excel changes require a choice", () => {
   assert.equal(preview.state.plots[0].purchasePrice, 135000);
   const chosen = reconcileMaster(state([appChanged]), [excelChanged], [generatePoolB(row)], { [row.plotId]: "app" });
   assert.equal(chosen.poolA[0].purchasePrice, 135000);
+  const excelChoice = reconcileMaster(state([appChanged]), [excelChanged], [generatePoolB(row)], { [row.plotId]: "excel" });
+  assert.equal(excelChoice.poolA[0].purchasePrice, 140000);
+  assert.equal(excelChoice.poolB[0].purchasePrice, 141350);
+  assert.equal(excelChoice.poolB[0].mode, "AUTO_GENERATED");
 });
 
 test("a manually changed Pool B survives Pool A updates", () => {
