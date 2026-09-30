@@ -1,5 +1,21 @@
 # Änderungsprotokoll
 
+## Unreleased · Plattform-Upload aus Grundstücksübersicht entfernt – 30. September 2026
+
+### Report
+
+- Die sichtbare „Plattform-Upload“-Angabe ist aus jeder Grundstückskarte entfernt. Pool A und Pool B teilen sich die frei gewordene Faktenfläche; die Zeilen sind etwas kompakter.
+- Adresse, Grundstücks-ID, Inseratanzahl und Bearbeitungsaktionen bleiben sichtbar. Die Upload-Datum-Sortierung und die Anzeige des Exposé-Uploads im Editor bleiben erhalten.
+
+### Begründung
+
+Die Grundstücksübersicht konzentriert sich auf die Grundstücks- und Pooldaten. Der Uploadablauf wird weiterhin in den dafür vorgesehenen Inserats- und Batchbereichen geführt.
+
+### Hürden und Risiken
+
+- Das Upload-Datum wird auch für die bestehende Sortierung verwendet. Daher wurde ausschließlich das lokale Anzeigeelement entfernt; die Metadaten und ihre übrigen Verwendungen wurden nicht geändert.
+- Auf schmalen Bildschirmen bleibt das bestehende einspaltige Layout aktiv.
+
 ## Unreleased · Einklappbare Grundstücksbereiche – 30. September 2026
 
 ### Report

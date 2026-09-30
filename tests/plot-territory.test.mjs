@@ -124,6 +124,21 @@ test("render separates same county into inside then outside, PLZ ascending in ea
   assert.match(html, /value="postalCode" selected/);
 });
 
+test("plot cards omit platform upload without losing pools, listing count or actions", async () => {
+  const html = await renderPlots([plot("compact", "10115")], {
+    selectionMeta: { compact: { regionLabel: "Berlin", listingCount: 3, uploadDate: "2026-09-29" } },
+  });
+  const card = html.match(/<article class="plot-selection-card[\s\S]*?<\/article>/u)?.[0];
+  assert.ok(card);
+  assert.doesNotMatch(card, /Plattform-Upload|Noch nicht hochgeladen|29\.09\.2026/u);
+  for (const expected of ["Grundstücks-ID: compact", "Pool A", "Pool B", "3 Inserate", "Bearbeiten", "Inserate zurücksetzen", "Löschen"]) {
+    assert.match(card, new RegExp(expected, "u"));
+  }
+  assert.match(html, /<option value="uploadDate">Upload-Datum<\/option>/u);
+  const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.match(css, /\.plot-selection-facts \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/u);
+});
+
 test("offline rendering never reuses stale territory; private addresses remain excluded", async () => {
   const html = await renderPlots([plot("public", "10115"), plot("hidden", "14469", { street: "Adresse nicht öffentlich angegeben" })], { helperOnline: false });
   assert.match(html, /aria-label="Gebietszuordnung nicht verfügbar"/);
