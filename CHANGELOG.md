@@ -7,6 +7,7 @@
 - `KI_Grundstuecke_MASTER.xlsx` mit `Pool_A` und `Pool_B` wird anhand der unveränderten `plotId` in beide Richtungen mit dem lokalen Grundstückskatalog abgeglichen. Neue App-Grundstücke werden in beide Blätter exportiert; neue Pool-A-Zeilen aus Excel werden importiert und erhalten bei Bedarf automatisch Pool B.
 - Pool B verwendet +2 m², eine nur bei rein numerischer Hausnummer um 2 erhöhte Hausnummer und +1.350 €. Sonderhausnummern bleiben leer und erhalten `POOL_B_PRÜFEN`. Manuelle Pool-B-Werte werden als `MANUAL` getrennt von automatisch erzeugten Werten gespeichert.
 - Vor jedem Schreiben erscheint eine Vorschau mit Konfliktwahl und Einzel- bzw. Sammelentscheidung für in Excel fehlende Grundstücke. Ein veralteter Vorschau-Stand wird abgewiesen. Grundstückslöschungen deaktivieren nur die weitere Nutzung; Projekte, Listings, Uploadhistorie und Lösch-Batches bleiben bestehen. Eine bestätigte Excel-Löschung entfernt ausschließlich die zwei Zeilen derselben `plotId` beim nächsten bestätigten Abgleich.
+- Vorschau und Bestätigung warten auf die verzögerte lokale Katalogsicherung. Direkt zuvor gespeicherte Grundstücke gehen dadurch nicht im Abgleich verloren; zwischenzeitliche Änderungen machen die Vorschau ungültig.
 - Der bisherige automatische Einweg-Abgleich und sein Schreib-Endpunkt wurden stillgelegt, damit dieser keine Grundstücke ohne Zustimmung deaktiviert. Die Gebietszuordnung aus dem bestehenden Excel-Blatt bleibt lesbar.
 
 ### Begründung

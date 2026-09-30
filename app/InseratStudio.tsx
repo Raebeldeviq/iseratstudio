@@ -1358,6 +1358,8 @@ export default function InseratStudio() {
   };
 
   const previewMaster = async () => {
+    // Let the existing 450 ms catalog save debounce enqueue the latest plot edit.
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 600));
     await deviceCatalogSaveQueue;
     const response = await helperFetch("/plot-master/preview");
     const data = await response.json();
@@ -1366,6 +1368,7 @@ export default function InseratStudio() {
   };
 
   const applyMaster = async (token: string, decisions: Record<string, string>) => {
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 600));
     await deviceCatalogSaveQueue;
     const response = await helperFetch("/plot-master/apply", { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, decisions }) });
