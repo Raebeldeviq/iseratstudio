@@ -1,8 +1,9 @@
+import { listingInteriorImages } from "../../interior-sets.mjs";
 import JSZip from "jszip";
 import { APP_VERSION } from "./app-version.mjs";
 import { isHvObjectNumber } from "../../object-number-sequence.mjs";
 import { resolveProjectLocation } from "../../project-location.mjs";
-import { imageSequenceIssues, orderHouseImages, parseHouseVariant } from "../../image-sequence.mjs";
+import { imageSequenceIssues, parseHouseVariant } from "../../image-sequence.mjs";
 import {
   fillMissingProjectingDefaults,
   projectingEnvironmentLabels,
@@ -26,6 +27,7 @@ import type {
 } from "../types";
 
 export type PackageInput = {
+  interiorAssets?: HouseImage[];
   project: ProjectInput;
   listings: GeneratedListing[];
   houses: HouseTemplate[];
@@ -78,7 +80,7 @@ export const OPENIMMO_STRUCTURED_FIELDS = Object.freeze({
 });
 
 function listingImages(input: PackageInput, house: HouseTemplate, listing?: GeneratedListing): HouseImage[] {
-  const orderedImages = orderHouseImages(house.images);
+  const orderedImages = listingInteriorImages(input, house, listing) as HouseImage[];
   const assignedHeroId = listing ? input.heroImageIdsByListingId?.[listing.id] : undefined;
   const assignedHero = assignedHeroId
     ? orderedImages.find((image) =>
@@ -143,7 +145,7 @@ export function validateImportPackage(input: PackageInput): string[] {
     if (images.length < 4 || images.length > MAX_EXPORTED_IMAGES) {
       errors.push(`${label}: benötigt 4 bis 14 Bilder.`);
     }
-    const sequenceImages = assignedHeroId ? orderHouseImages(house.images) : images;
+    const sequenceImages = assignedHeroId ? listingInteriorImages(input, house, listing) : images;
     for (const issue of imageSequenceIssues(sequenceImages, {
       requiresUpperFloor: house.floors > 1,
       requiresThirdFloor: house.floors > 2,

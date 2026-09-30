@@ -791,3 +791,10 @@ input:focus, textarea:focus, select:focus { border-color: #91bc47; box-shadow: 0
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
 }
+
+.interior-sets-card { display: block; }
+.interior-sets-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.interior-set-slot { display: flex; align-items: center; gap: 10px; margin: 10px 0; }
+.interior-set-slot img, .interior-set-placeholder { width: 72px; height: 54px; object-fit: cover; border-radius: 6px; }
+.interior-set-slot label { display: grid; gap: 3px; min-width: 0; }
+.interior-set-slot input { max-width: 100%; font-size: 11px; }

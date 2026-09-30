@@ -1,3 +1,4 @@
+import { listingInteriorImages } from "./interior-sets.mjs";
 import { Client } from "basic-ftp";
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { mkdir, open, readFile, rm, stat } from "node:fs/promises";
@@ -459,7 +460,7 @@ async function automaticRotationUpload({ state, project, listing, runId, batchOv
     if (!sourceHouse) throw new Error("Der Haustyp der Rotationskopie ist nicht mehr vorhanden.");
     const hydratedHouse = {
       ...sourceHouse,
-      images: await Promise.all((sourceHouse.images || []).map(hydratedCatalogImage)),
+      images: await Promise.all(listingInteriorImages(state, sourceHouse, listing).map(hydratedCatalogImage)),
     };
     const promotionImageId = String(listing.promotionImageId || "");
     const promotionImage = promotionImageId
@@ -472,6 +473,7 @@ async function automaticRotationUpload({ state, project, listing, runId, batchOv
     }
     const hydratedPromotionImage = promotionImage ? await hydratedCatalogImage(promotionImage) : null;
     const packageResult = await buildImportPackage({
+      interiorAssets: await Promise.all((state.interiorAssets || []).filter(image => Object.values(listing.interiorAssetIds || {}).includes(image.id)).map(hydratedCatalogImage)),
       project,
       listings: [listing],
       houses: [hydratedHouse],

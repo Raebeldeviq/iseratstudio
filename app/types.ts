@@ -336,7 +336,13 @@ export type ProjectingSettings = {
   environmentShopping?: boolean;
 };
 
+export type InteriorSetId = "A" | "B" | "C";
+export type InteriorRoomRole = "living" | "kids" | "bedroom" | "kitchen" | "bathroom" | "office";
+
 export type GeneratedListing = {
+  interiorSet?: InteriorSetId;
+  interiorSetSource?: "automatic" | "manual";
+  interiorAssetIds?: Record<InteriorRoomRole, string>;
   id: string;
   addressSnapshot?: {
     plotId: string;
@@ -656,6 +662,9 @@ export type ImportReportReview = {
 };
 
 export type StudioState = {
+  interiorAssets?: HouseImage[];
+  interiorSets?: Partial<Record<InteriorSetId, Partial<Record<InteriorRoomRole, string>>>>;
+  interiorRotationLastSet?: InteriorSetId;
   version: 1;
   catalogIntegrityRevision?: number;
   catalogRepairReview?: { automaticProductionAllowed: boolean; unresolved: Array<{ kind: string; projectId: string; listingId: string; externalId?: string }> };

@@ -45,6 +45,7 @@ function safeId(value, label) {
 function withoutImageData(state) {
   return {
     ...state,
+    ...(state.interiorAssets ? { interiorAssets: state.interiorAssets.map(image => ({ ...image, dataUrl: "" })) } : {}),
     promotionImage: state.promotionImage
       ? { ...state.promotionImage, dataUrl: "" }
       : null,
@@ -63,6 +64,7 @@ function withoutImageData(state) {
 function imageEntries(state) {
   const images = [
     ...state.houses.flatMap((house) => house.images),
+    ...(state.interiorAssets || []),
     ...(Array.isArray(state.promotionImages) ? state.promotionImages : []),
     ...(state.promotionImage ? [state.promotionImage] : []),
   ];

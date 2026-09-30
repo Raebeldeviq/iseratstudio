@@ -1,6 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
+import { INTERIOR_SET_IDS, INTERIOR_SET_ROLES, interiorSetStatus, assignNewInteriorListings, listingInteriorImages } from "../interior-sets.mjs";
 import { ChangeEvent, useEffect, useState } from "react";
 import { AI_MODEL_OPTIONS, DEFAULT_AI_MODEL } from "../ai-models.mjs";
 import { isDraftListing, mergeListingCollection } from "../listing-catalog-view.mjs";
@@ -659,6 +660,7 @@ function catalogWithoutImageData(state: StudioState): StudioState {
   return {
     ...state,
     ...promotion,
+    ...(state.interiorAssets ? { interiorAssets: state.interiorAssets.map(image => ({ ...image, dataUrl: "" })) } : {}),
     promotionImage: promotion.promotionImage
       ? { ...promotion.promotionImage, dataUrl: "" }
       : null,
@@ -678,6 +680,7 @@ async function saveDeviceCatalogSnapshot(
   const sessionId = uid();
   const allImages = [
     ...state.houses.flatMap((house) => house.images),
+    ...(state.interiorAssets || []),
     ...normalizePromotionLibrary(state).promotionImages,
   ];
   const imageById = new Map(allImages.map((image) => [image.id, image]));
@@ -762,6 +765,7 @@ async function loadDeviceCatalogSnapshot(): Promise<{
     if (manifestResponse.ok && manifestData.ok && manifestData.stored && manifestData.state && manifestData.savedAt) {
       v2ManifestFound = true;
       const imageIds = [...new Set([
+        ...(manifestData.state.interiorAssets || []).map(image => image.id),
         ...manifestData.state.houses.flatMap((house) => house.images.map((image) => image.id)),
         ...normalizePromotionLibrary(manifestData.state).promotionImages.map((image) => image.id),
       ])];
@@ -779,6 +783,7 @@ async function loadDeviceCatalogSnapshot(): Promise<{
       const state: StudioState = {
         ...manifestData.state,
         ...manifestPromotion,
+        interiorAssets: (manifestData.state.interiorAssets || []).map(image => ({ ...image, dataUrl: dataUrlById.get(image.id) ?? "" })),
         promotionImages,
         promotionImage: promotionImages[0] || null,
         promotionImageEnabled: manifestPromotion.promotionSettings.enabled && Boolean(promotionImages[0]),
@@ -1960,6 +1965,29 @@ export default function InseratStudio() {
     setNotice("Die festen Bildrollen wurden sortiert; die gewählte Reihenfolge der Innenräume blieb erhalten.");
   };
 
+  const addInteriorImage = async (event: ChangeEvent<HTMLInputElement>, setId: "A" | "B" | "C", role: "living" | "kids" | "bedroom" | "kitchen" | "bathroom" | "office") => {
+    const input = event.target;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file) return;
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > MAX_PROMOTION_IMAGE_BYTES) {
+      setNotice("Innenraumbilder müssen JPEG, PNG oder WebP sein und dürfen maximal 25 MB groß sein.");
+      return;
+    }
+    try {
+      const image: HouseImage = { id: uid(), name: file.name, mimeType: file.type,
+        dataUrl: await blobDataUrl(file), caption: captionForImageRole(role),
+        isFloorplan: false, role, captionLocked: true };
+      setState(current => ({ ...current,
+        interiorAssets: [...(current.interiorAssets || []), image],
+        interiorSets: { ...current.interiorSets, [setId]: { ...current.interiorSets?.[setId], [role]: image.id } },
+      }));
+      setNotice(`Innenraum-Set ${setId}: ${IMAGE_ROLE_LABELS[role]} zentral gespeichert. Bestehende Zuordnungen bleiben erhalten.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Innenraumbild konnte nicht gespeichert werden.");
+    }
+  };
+
   const applyPromotionLibrary = (
     current: StudioState,
     images: PromotionImageAsset[],
@@ -2332,7 +2360,7 @@ export default function InseratStudio() {
         }),
       };
     }
-    setState(preparedState);
+    setState(assignNewInteriorListings(state, preparedState) as StudioState);
     setBatchItemStatuses({});
     setTab("preview");
     setNotice(`${projectIds.length} Adresse${projectIds.length === 1 ? " wurde" : "n wurden"} mit gewichteter Vierer-Verteilung vorbereitet · ${preparedListings} Inserate mit Standardwerten und Bildern.${issues.length ? ` ${issues.length} Adresse(n) benötigen Nacharbeit: ${issues.slice(0, 2).join(" · ")}` : " Die Texte und Vorschauen sind bereit."}`);
@@ -2471,12 +2499,12 @@ export default function InseratStudio() {
     }).group as ListingGroup;
     group = releaseListingOperation(group, sourceListing, token) as ListingGroup;
     return {
-      state: linkDeleteBatchListings({
+      state: assignNewInteriorListings(current, linkDeleteBatchListings({
         ...allocation.state,
         projects: current.projects.map((item) => item.id === project.id
           ? { ...item, listingGroup: group, listings: [...item.listings, copy] }
           : item),
-      }),
+      })) as StudioState,
       message: `${copy.externalId} mit „${variant.templateName}“ wurde vorbereitet. Keine Veröffentlichung und keine Löschung.`,
       ok: true,
     };
@@ -2712,14 +2740,14 @@ export default function InseratStudio() {
       }
       const listings = mergeListingCollection(projectSnapshot.listings, sourceListings);
 
-      setState((current) => linkDeleteBatchListings({
+      setState((current) => assignNewInteriorListings(current, linkDeleteBatchListings({
         ...current,
         objectNumberSequence: stateWithObjectNumbers.objectNumberSequence,
         deleteBatches: stateWithObjectNumbers.deleteBatches,
         projects: current.projects.map((project) =>
           project.id === projectSnapshot.id ? { ...project, listings, listingGroup } : project,
         ),
-      }));
+      })) as StudioState);
       setActiveProjectId(projectSnapshot.id);
       setTab("preview");
       setNotice(`${listings.length} Haus- und Lagetext${listings.length === 1 ? " wurde" : "e wurden"} individuell geschrieben und lokal geprüft. Alle vorgeschriebenen Felder blieben unverändert vorbefüllt.`);
@@ -2837,7 +2865,7 @@ export default function InseratStudio() {
     }
     const invalidImageCounts = listings
       .map((listing) => ({
-        house: sourceState.houses.find((house) => house.id === listing.templateId),
+        house: (() => { const house = sourceState.houses.find((house) => house.id === listing.templateId); return house ? { ...house, images: listingInteriorImages(sourceState, house, listing) } : undefined; })(),
         promotionImage: promotionImagesByListingId[listing.id],
       }))
       .filter(
@@ -2860,8 +2888,8 @@ export default function InseratStudio() {
       if (!house) return [];
       const promotionImage = promotionImagesByListingId[listing.id];
       const images = promotionImage
-        ? [{ ...promotionImage, role: "promotion" as ImageRole }, ...orderHouseImages(house.images)]
-        : orderHouseImages(house.images);
+        ? [{ ...promotionImage, role: "promotion" as ImageRole }, ...listingInteriorImages(sourceState, house, listing)]
+        : listingInteriorImages(sourceState, house, listing);
       return imageSequenceIssues(images, {
         requiresUpperFloor: house.floors > 1,
         requiresThirdFloor: house.floors > 2,
@@ -2880,6 +2908,7 @@ export default function InseratStudio() {
       houses: sourceState.houses,
       provider: sourceState.provider,
       promotionImagesByListingId,
+      interiorAssets: sourceState.interiorAssets,
     };
   };
 
@@ -3445,6 +3474,23 @@ export default function InseratStudio() {
 
       {tab === "houses" ? (
         <>
+        <section className="workspace interior-sets-card">
+          <div><span className="eyebrow">Globale Bildbibliothek</span><h2>Innenraum-Sets</h2>
+          <p>Neue Inserate verwenden vollständige Sets in der Folge A → B → C. Fehlende Sets werden übersprungen. Bestehende Inserate behalten ihre Bildfolge.</p></div>
+          <div className="interior-sets-grid">{INTERIOR_SET_IDS.map((setId: "A" | "B" | "C") => {
+            const status = interiorSetStatus(state, setId);
+            return <article key={setId}><h3>Set {setId} · {status.complete ? "VOLLSTÄNDIG" : "UNVOLLSTÄNDIG"}</h3>
+              {INTERIOR_SET_ROLES.map((role: "living" | "kids" | "bedroom" | "kitchen" | "bathroom" | "office") => {
+                const image = state.interiorAssets?.find(item => item.id === state.interiorSets?.[setId]?.[role]);
+                return <div className="interior-set-slot" key={role}>
+                  {image ? <img src={image.dataUrl} alt={IMAGE_ROLE_LABELS[role]} /> : <span className="interior-set-placeholder">—</span>}
+                  <label><b>{IMAGE_ROLE_LABELS[role]}</b><small>{status.missing.includes(role) ? "fehlt" : "vorhanden"}</small>
+                    <input aria-label={`Set ${setId}: ${IMAGE_ROLE_LABELS[role]}`} type="file" accept="image/jpeg,image/png,image/webp" onChange={event => void addInteriorImage(event, setId, role)} /></label>
+                </div>;
+              })}</article>;
+          })}</div>
+        </section>
+
         <section className="workspace promotion-card">
           <div className="promotion-copy">
             <span className="eyebrow">Aktionsbildverwaltung</span>
@@ -3853,7 +3899,7 @@ export default function InseratStudio() {
                       const plannedItem = batchOverviewPlan.addresses.find((address: { projectId: string }) => address.projectId === activeProject.id)?.items.find((item: { listingId: string }) => item.listingId === listing.id);
                       const promotionImageId = plannedItem?.promotionImageId || listing.promotionImageId || "";
                       const promotionImage = promotionLibrary.promotionImages.find((image) => image.id === promotionImageId);
-                      const displayImages = house ? promotionImage ? [{ ...promotionImage, role: "promotion" as ImageRole }, ...orderHouseImages(house.images)] : orderHouseImages(house.images) : [];
+                      const displayImages = house ? promotionImage ? [{ ...promotionImage, role: "promotion" as ImageRole }, ...listingInteriorImages(state, house, listing)] : listingInteriorImages(state, house, listing) : [];
                       const displayImage = displayImages[0];
                       const shortPreview = [listing.texts.title, listing.texts.description].filter(Boolean).join(" — ").slice(0, 280);
                       return <article className="listing-card" key={listing.id}>
@@ -3872,7 +3918,7 @@ export default function InseratStudio() {
                           {staticCopyEditor(listing, STATIC_COPY_FIELD.TERMS, "Allgemeine Geschäftsbedingungen", 3)}
                           {staticCopyEditor(listing, STATIC_COPY_FIELD.RECOMMENDATION, "Freier Textblock für Empfehlungen", 8)}
                         </div>
-                        <footer><span>{displayImages.length} Bilder automatisch zugeordnet{promotionImage ? " · Aktionsbild an Position 1" : " · normale Bildfolge"}</span><span>Weitergabe an Portale: <b>deaktiviert</b></span></footer>
+                        <footer><span>{displayImages.length} Bilder automatisch zugeordnet{listing.interiorSet ? ` · Innenraum-Set ${listing.interiorSet}` : ""}{promotionImage ? " · Aktionsbild an Position 1" : " · normale Bildfolge"}</span><span>Weitergabe an Portale: <b>deaktiviert</b></span></footer>
                       </article>;
                     })}
                   </div>
@@ -3953,7 +3999,7 @@ export default function InseratStudio() {
                     <div><span>Adresse</span><b>{listing.addressSnapshot ? `${listing.addressSnapshot.address.street} ${listing.addressSnapshot.address.houseNumber}, ${listing.addressSnapshot.address.postalCode} ${listing.addressSnapshot.address.city}` : projectSelectionLabel(project)}</b></div>
                     <div><span>Objektnummer</span><b>{listing.externalId || "Noch nicht hochgeladen"}</b>{listing.importConfirmedAt ? <small>Immoprofessional: erfolgreich importiert · {localDateTime(listing.importConfirmedAt)}</small> : null}{listing.supersededByListingId ? <small>Ersetzt durch {project.listings.find((candidate) => candidate.id === listing.supersededByListingId)?.externalId || listing.supersededByListingId}</small> : null}</div>
                     <div><span>Hausvariante</span><b>{listing.templateName}</b><small>{euro(listing.price)}</small></div>
-                    <div><span>Aktionsbild</span><b>{promotionLibrary.promotionImages.find((image) => image.id === listing.promotionImageId)?.name || "Normale Bildfolge"}</b><small>{listing.promotionAssignedAt ? localDateTime(listing.promotionAssignedAt) : "Noch nicht zugeordnet"}</small></div>
+                    <div><span>Innenraum-Set</span><b>{listing.interiorSet || "Bestandsbildfolge"}</b><small>{listing.interiorSetSource === "automatic" ? "Automatisch zugeordnet" : ""}</small></div><div><span>Aktionsbild</span><b>{promotionLibrary.promotionImages.find((image) => image.id === listing.promotionImageId)?.name || "Normale Bildfolge"}</b><small>{listing.promotionAssignedAt ? localDateTime(listing.promotionAssignedAt) : "Noch nicht zugeordnet"}</small></div>
                     <div><span>Letzte / nächste Aktualisierung</span><b>{localDateTime(control.lastSuccessAt || control.lastUpdatedAt)}</b><small>{localDateTime(control.nextUpdatedAt)}</small></div>
                     <div><span>Status / Health Score</span><b>{control.statusMessage || workflowStatusLabel(control.status)} · {health.score}</b><small>{listing.externalDeletionPending ? "Externe Löschung noch ausstehend" : control.lastError || `${Math.floor(health.daysSinceSuccess)} Tage seit Erfolg`}</small></div>
                   </div>

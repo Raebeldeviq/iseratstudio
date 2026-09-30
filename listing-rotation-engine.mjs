@@ -1,3 +1,4 @@
+import { assignNewInteriorListings } from "./interior-sets.mjs";
 import {
   assignListingGroupVariant,
   claimListingOperation,
@@ -195,11 +196,12 @@ export function prepareListingRotationInState(state, projectId, listingId, optio
     ...project.listings.filter((listing) => listing.id !== copy.id),
     copy,
   ];
+  const nextState = assignNewInteriorListings(state, replaceProject(allocation.state, { ...project, listingGroup: group, listings: projectListings }));
   return {
-    state: replaceProject(allocation.state, { ...project, listingGroup: group, listings: projectListings }),
+    state: nextState,
     ok: true,
     message: `${copy.externalId} mit „${copy.templateName}“ wurde für den FTPS-Upload vorbereitet. Die veröffentlichte Quelle bleibt unverändert aktiv.`,
     issues: [],
-    copy,
+    copy: nextState.projects.find(item => item.id === project.id).listings.find(item => item.id === copy.id),
   };
 }

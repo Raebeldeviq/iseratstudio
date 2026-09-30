@@ -581,3 +581,22 @@ test("exports the fixed role sequence and keeps the action image in front", () =
     );
   }
 });
+
+
+test("exports a persisted global interior set into the final ZIP without mixing house interiors", async () => {
+  const input = energyScenarioInput();
+  const rooms = ["living", "kids", "bedroom", "kitchen", "bathroom", "office"];
+  const roles = ["cover", "kitchen", "bathroom", "bedroom", "kids", "living", "office", "emotion", "floorplan_ground", "floorplan_upper", "awards", "trust", "qr"];
+  const image = (id, role) => ({ id, role, name: `${id}.jpg`, mimeType: "image/jpeg", dataUrl: "data:image/jpeg;base64,/9j/2Q==", caption: id, isFloorplan: role.startsWith("floorplan") });
+  input.houses[0].images = roles.map(role => image(`house-${role}`, role));
+  input.interiorAssets = rooms.map(role => image(`B-${role}`, role));
+  input.listings[0].interiorSet = "B";
+  input.listings[0].interiorAssetIds = Object.fromEntries(rooms.map(role => [role, `B-${role}`]));
+  assert.deepEqual(validateImportPackage(input), []);
+  const result = await buildImportPackage(input);
+  const ids = result.creativePayloadManifest[0].payloadImageAssetIds;
+  assert.deepEqual(ids.slice(1, 7), rooms.map(role => `B-${role}`));
+  assert.equal(ids.some(id => rooms.some(role => id === `house-${role}`)), false);
+  const zip = await JSZip.loadAsync(await result.blob.arrayBuffer());
+  assert.equal(Object.keys(zip.files).filter(path => path.endsWith(".jpg")).length, 13);
+});
