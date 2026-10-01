@@ -14,7 +14,7 @@ Die Bildpriorität war im Resolver bereits korrekt umgesetzt. Die fehlende Set-Z
 
 Bestehende gespeicherte Inserate ohne Set behalten absichtlich ihre alte Bildfolge. Nur neue IDs erhalten eine Zuweisung. Fehlende persistierte Set-Assets blockieren weiterhin den Export. Alte Bilddateien werden nicht gelöscht.
 
-Die automatische Freigabeprüfung hat die Integration in main und die anschließende Runtime-Installation wegen der AGENTS.md-Regel abgelehnt. Die kleine Korrektur verbleibt daher bis zur ausdrücklichen Klärung auf dem Feature-Branch. Die installierte Runtime verfügt bereits über den unverändert korrekten gemeinsamen Bildresolver.
+Pascal hat nach bestandener Portalprüfung von 30460-003015 die Integration des geprüften Feature-Stands in main, origin/main und Runtime ausdrücklich freigegeben. Entwickelt wurde ausschließlich auf dem Feature-Branch.
 
 ## Prüfungen
 
@@ -34,4 +34,8 @@ Die automatische Freigabeprüfung hat die Integration in main und die anschließ
 - Alle 112 vorher vorhandenen Inserate und sämtliche Haustyp-/Bildassets unverändert geprüft.
 - Die erste lokale Statusübernahme nach dem erfolgreichen Transfer scheiterte an einer irrtümlichen Rotationsquellen-Kennzeichnung des unabhängigen Tests. Nur beim neuen Canary wurde diese Kennzeichnung korrigiert und der bereits vorhandene Uploadjournalbeleg lokal übernommen. Kein zweiter Upload und keine Änderung der Quelle.
 - Portal-Bildfolge und tatsächlicher Import bleiben Pascals manueller Prüfung vorbehalten.
-- Die Erzeugungspfad-Korrektur ist getestet und auf dem Feature-Branch gespeichert; Integration und Runtime-Aktualisierung bleiben wegen der automatischen Freigabeablehnung offen.
+- Die Erzeugungspfad-Korrektur ist getestet. Integration und Runtime-Aktualisierung wurden anschließend von Pascal ausdrücklich freigegeben.
+
+## Freigegebener vollständiger Rotationszyklus
+
+Nach Installation genau drei unabhängige neue Testinserate erzeugen und deren persistierte Folge B → C → A, sechs konsistente globale Raumreferenzen, Ausschluss alter Innenräume und Erhalt der übrigen Rollen anhand der finalen Pakete prüfen. Nur diese drei neuen Inserate jeweils einmal übertragen. Der ursprüngliche Bestand und der erste Canary bleiben unverändert. Uploadjournal und vollständiger Vorher-/Nachher-Vergleich dienen als Nachweis; die Portalprüfung erfolgt durch Pascal.
