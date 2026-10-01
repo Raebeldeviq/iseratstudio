@@ -76,3 +76,19 @@ test('catalog stores global assets once and keeps listing references on reload',
     assert.ok(await loadCatalogImage('A-office',root));
   } finally {await rm(root,{recursive:true,force:true});}
 });
+
+test('new prepared drafts prefer the complete global set while saved drafts retain legacy images', () => {
+  const state = fixture();
+  const legacy = { id: 'saved-draft', status: 'draft' };
+  state.projects = [{ id: 'p', listings: [legacy] }];
+  const house = { images: ['cover', ...INTERIOR_SET_ROLES, 'floorplan_ground', 'emotion', 'awards', 'trust', 'qr'].map(role => ({ id: `legacy-${role}`, role })) };
+  const next = assignNewInteriorListings(state, { ...state, projects: [{ id: 'p', listings: [legacy, { id: 'new-prepared-draft', status: 'draft' }] }] });
+  const [old, fresh] = next.projects[0].listings;
+  assert.equal(old, legacy);
+  assert.equal(fresh.interiorSet, 'A');
+  const sequence = listingInteriorImages(next, house, fresh);
+  assert.equal(sequence.filter(image => INTERIOR_SET_ROLES.includes(image.role)).length, 6);
+  assert.ok(sequence.filter(image => INTERIOR_SET_ROLES.includes(image.role)).every(image => image.id.startsWith('A-')));
+  assert.ok(sequence.filter(image => !INTERIOR_SET_ROLES.includes(image.role)).every(image => house.images.includes(image)));
+  assert.ok(listingInteriorImages(next, house, old).some(image => image.id === 'legacy-office'));
+});

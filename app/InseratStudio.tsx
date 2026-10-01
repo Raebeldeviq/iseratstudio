@@ -441,7 +441,7 @@ function normalizeMandatoryListingStandards(inputState: StudioState): StudioStat
         listingGroup: listingGroup as ListingGroup,
       };
     });
-  return linkDeleteBatchListings({
+  return assignNewInteriorListings(inputState, linkDeleteBatchListings({
     ...stateWithObjectNumbers,
     ...promotion,
     uploadHistory: Array.isArray(state.uploadHistory) ? state.uploadHistory.slice(-BATCH_UPLOAD_LOG_LIMIT) : [],
@@ -449,7 +449,7 @@ function normalizeMandatoryListingStandards(inputState: StudioState): StudioStat
     scheduler: normalizeListingScheduler(state.scheduler),
     projects,
     houseDistribution: normalizeHouseDistribution(state.houseDistribution, houses, projects) as HouseDistributionState,
-  });
+  })) as StudioState;
 }
 
 function effectiveHouseImages(state: StudioState, house: HouseTemplate): HouseImage[] {
