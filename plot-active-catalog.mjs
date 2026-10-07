@@ -17,7 +17,7 @@ export function catalogPlotDisposition(plot, source, policy) {
   const member = source.masterPlots.some(row => row.id === plot.id);
   const newPlot = policy?.version === 1 && Array.isArray(policy.legacyPlotIds)
     && !policy.legacyPlotIds.includes(plot.id);
-  if (inside && (member || newPlot || plot.exclusiveOutsideTerritory === true)) return "inside";
+  if (inside && (member || newPlot || plot.keepInActiveCatalog === true || plot.exclusiveOutsideTerritory === true)) return "inside";
   if (!inside && plot.exclusiveOutsideTerritory === true) return "outside";
   return "excluded";
 }

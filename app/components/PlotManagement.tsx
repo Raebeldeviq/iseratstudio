@@ -128,7 +128,7 @@ function splitStreetLine(value: string): { street: string; houseNumber: string }
 }
 
 function emptyPlot(owner: AddressOwner): PlotRecord {
-  return createPlotRecord({ owner }, { createId: () => crypto.randomUUID() }) as PlotRecord;
+  return createPlotRecord({ owner, keepInActiveCatalog: true }, { createId: () => crypto.randomUUID() }) as PlotRecord;
 }
 
 async function responseJson<T>(response: Response): Promise<T> {
@@ -625,6 +625,7 @@ export default function PlotManagement({
               <label className="field"><span>Ort</span><input value={draft.city} onChange={(event) => setDraft({ ...draft, city: event.target.value })} /></label>
               <label className="field"><span>Grundstücksgröße</span><div className="input-shell"><input type="number" min={0} value={draft.plotSizeSqm || ""} onChange={(event) => setDraft({ ...draft, plotSizeSqm: Number(event.target.value) || 0 })} /><i>m²</i></div></label>
               <label className="field"><span>Kaufpreis</span><div className="input-shell"><input type="number" min={0} value={draft.purchasePrice || ""} onChange={(event) => setDraft({ ...draft, purchasePrice: Number(event.target.value) || 0 })} /><i>€</i></div></label>
+              <label className="field field-wide plot-exclusive-field"><span><input type="checkbox" checked={draft.keepInActiveCatalog === true} onChange={event => setDraft({ ...draft, keepInActiveCatalog: event.target.checked })} /> Im eigenen Suchgebiet auch ohne Master-Eintrag behalten</span></label>
               <label className="field field-wide plot-exclusive-field"><span><input type="checkbox" checked={draft.exclusiveOutsideTerritory === true} onChange={event => setDraft({ ...draft, exclusiveOutsideTerritory: event.target.checked })} /> Exklusiv / außerhalb des Suchgebietes behalten</span></label>
               <label className="field field-wide"><span>Regionale Grundnotizen · optional</span><textarea rows={3} value={draft.regionalNotes} placeholder="Nur geprüfte Ortsfakten, z. B. seenreich, ruhig, Nähe zu Potsdam" onChange={(event) => setDraft({ ...draft, regionalNotes: event.target.value })} /></label>
             </div>

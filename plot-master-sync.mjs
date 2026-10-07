@@ -140,7 +140,7 @@ export function reconcileMaster(state, excelA, excelB, choices = {}, now = new D
     }
     if (!plot) continue;
     if (!aExcel) {
-      if (state.activePlotCatalog?.approvedAt && state.activePlotCatalog.legacyPlotIds?.includes(id) && !plot.exclusiveOutsideTerritory) continue;
+      if (state.activePlotCatalog?.approvedAt && state.activePlotCatalog.legacyPlotIds?.includes(id) && !plot.keepInActiveCatalog && !plot.exclusiveOutsideTerritory) continue;
       if (plot.masterSync?.a) {
         items.push({ plotId: id, action: "missing-excel", label: `${plot.street} ${plot.houseNumber}` });
         if (choices[id] === "remove-app") nextPlots.set(id, { ...plot, isActive: false,

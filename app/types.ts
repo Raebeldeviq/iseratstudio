@@ -221,6 +221,7 @@ export type HouseTemplate = {
 export type AddressOwner = "fabian" | "pascal";
 
 export type PlotRecord = {
+  keepInActiveCatalog?: boolean;
   exclusiveOutsideTerritory?: boolean;
   id: string;
   masterSync?: { a: string; b: string; appOnlyRemoved?: boolean; excelDeleteRequested?: boolean; syncedAt?: string };

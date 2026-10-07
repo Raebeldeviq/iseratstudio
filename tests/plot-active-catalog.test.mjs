@@ -66,6 +66,45 @@ test("cleanup preview writes nothing; explicit approval preserves all history an
   assert.throws(() => approveActivePlotCatalog(result, data, "later"), /bereits bestätigt/);
 });
 
+test("explicitly retained local plots inside survive cleanup without a master row", () => {
+  const local = plot("kept-local", "14089", { city: "Berlin-Kladow", keepInActiveCatalog: true });
+  const legacy = plot("unconfirmed-legacy");
+  const projects = [{ id: "historic", plotId: local.id, listings: [{ id: "online", status: "published" }] }];
+  const state = { plots: [local, legacy], projects, selectedPlotIds: [local.id, legacy.id] };
+  const data = source([]);
+  const preview = catalogCleanupPreview(state, data);
+  assert.deepEqual(preview.inside.map(p => p.id), [local.id]);
+  assert.deepEqual(preview.removed.map(p => p.id), [legacy.id]);
+  const result = approveActivePlotCatalog(state, data, "2026-10-07T12:00:00Z");
+  const reloaded = JSON.parse(JSON.stringify(result));
+  assert.deepEqual(operationalCatalogPlots(reloaded.plots, { source: data, policy: reloaded.activePlotCatalog }).map(p => p.id), [local.id]);
+  assert.deepEqual(result.selectedPlotIds, [local.id]);
+  assert.equal(result.projects, projects);
+  assert.equal(result.plots[0], local);
+});
+
+test("retention inside the own territory does not activate outside or invalid addresses", () => {
+  const plots = [plot("outside", "99999", { keepInActiveCatalog: true }),
+    plot("private", "14469", { keepInActiveCatalog: true, street: "Adresse nicht öffentlich angegeben" }),
+    plot("inactive", "14469", { keepInActiveCatalog: true, isActive: false })];
+  const context = { source: source([]), policy: approved(plots) };
+  assert.deepEqual(operationalCatalogPlots(plots, context), []);
+  assert.deepEqual(selectablePlotIds(plots, plots.map(p => p.id), context), []);
+});
+
+test("retention survives normalization and Pool A/B sync without reviving unrelated legacy plots", () => {
+  const kept = plot("kept", "14469", { keepInActiveCatalog: true });
+  const legacy = plot("legacy");
+  const projects = [{ id: "historic", listings: [{ id: "online" }] }];
+  const result = reconcileMaster({ plots: [kept, legacy], projects, activePlotCatalog: approved([kept, legacy]) }, [], []);
+  assert.deepEqual(result.poolA.map(p => p.plotId), [kept.id]);
+  assert.deepEqual(result.poolB.map(p => p.plotId), [kept.id]);
+  assert.equal(result.state.plots.find(p => p.id === kept.id).keepInActiveCatalog, true);
+  assert.deepEqual(result.state.projects, projects);
+  assert.equal(normalizePlotRecord({ ...kept, keepInActiveCatalog: "false" }).keepInActiveCatalog, false);
+  assert.equal(Object.hasOwn(normalizePlotRecord(legacy), "keepInActiveCatalog"), false);
+});
+
 test("exclusive boolean survives normalization and existing Pool A/B reconciliation", () => {
   const row = { plotId: "exclusive", street: "Testweg", houseNumber: "2", postalCode: "99999", city: "Ort", plotSizeSqm: 100, purchasePrice: 10000, mode: "AUTO_GENERATED", status: "" };
   const p = applyMasterRowsToPlot(plot("exclusive", "99999", { exclusiveOutsideTerritory: true }), row, generatePoolB(row), "2026-10-07T12:00:00Z");
