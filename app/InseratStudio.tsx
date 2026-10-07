@@ -76,6 +76,7 @@ import {
   STATIC_COPY_SOURCE,
 } from "../listing-copy.mjs";
 import PlotManagement from "./components/PlotManagement";
+import { workspaceProject } from "./lib/workspace-selection";
 import { APP_VERSION } from "./lib/app-version.mjs";
 import { buildImportPackage } from "./lib/openimmo";
 import {
@@ -1148,9 +1149,7 @@ export default function InseratStudio() {
       ? activePlotProjects
       : eligibleProjects;
   const ownerProjects = [...projectSource].sort(compareProjectsByRegion);
-  const activeProject =
-    ownerProjects.find((project) => project.id === activeProjectId) ??
-    ownerProjects[0];
+  const activeProject = workspaceProject(state.projects, ownerProjects, activeProjectId);
   const activeListingGroup = activeProject
     ? normalizeListingGroup(activeProject.listingGroup, activeProject.id) as ListingGroup
     : null;
