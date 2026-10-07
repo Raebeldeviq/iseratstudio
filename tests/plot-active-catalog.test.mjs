@@ -40,10 +40,10 @@ test("outside only explicitly opted-in plots are selectable, including generatio
   assert.deepEqual(selectablePlotProjects(plots, projects, context).map(p => p.id), ["project-inside", "project-exclusive"]);
 });
 
-test("new local, worker or sync plots inside activate automatically; new external plots await opt-in", () => {
+test("all local, historical, worker or sync plots inside activate after approval; external plots await opt-in", () => {
   const old = plot("old");
   const plots = [old, plot("new-local"), plot("new-worker", "99999")];
-  assert.deepEqual(operationalCatalogPlots(plots, { source: source([]), policy: approved([old]) }).map(p => p.id), ["new-local"]);
+  assert.deepEqual(operationalCatalogPlots(plots, { source: source([]), policy: approved([old]) }).map(p => p.id), ["old", "new-local"]);
   assert.equal(operationalCatalogPlots(plots, { source: source(plots), policy: undefined }).length, 0);
   assert.equal(operationalCatalogPlots(plots, { source: { available: false }, policy: approved(plots) }).length, 0);
 });
@@ -55,20 +55,22 @@ test("cleanup preview writes nothing; explicit approval preserves all history an
   const before = structuredClone(state);
   const data = source([plots[0], plot("new-master")]);
   const preview = catalogCleanupPreview(state, data);
-  assert.deepEqual([preview.inside.length, preview.outside.length, preview.removed.length], [2, 0, 3]);
+  assert.deepEqual([preview.inside.length, preview.outside.length, preview.removed.length], [4, 0, 1]);
+  assert.deepEqual(preview.removed.map(p => p.id), ["outside-old"]);
   assert.deepEqual(state, before);
   const result = approveActivePlotCatalog(state, data, "2026-10-07T12:00:00Z");
   for (const key of ["projects", "uploadHistory", "deleteBatches", "audit"]) assert.equal(result[key], state[key]);
   assert.deepEqual(result.plots.slice(0, plots.length), plots);
   assert.equal(result.plots.length, plots.length + 1);
-  assert.deepEqual(result.selectedPlotIds, ["master"]);
-  assert.deepEqual(operationalCatalogPlots(result.plots, { source: data, policy: result.activePlotCatalog }).map(p => p.id), ["master", "new-master"]);
+  assert.deepEqual(result.selectedPlotIds, ["master", "inside-old"]);
+  assert.deepEqual(operationalCatalogPlots(result.plots, { source: data, policy: result.activePlotCatalog }).map(p => p.id), ["master", "inside-old", "private", "new-master"]);
+  assert.deepEqual(selectablePlotIds(result.plots, result.plots.map(p => p.id), { source: data, policy: result.activePlotCatalog }), ["master", "inside-old", "new-master"]);
   assert.throws(() => approveActivePlotCatalog(result, data, "later"), /bereits bestätigt/);
 });
 
-test("explicitly retained local plots inside survive cleanup without a master row", () => {
-  const local = plot("kept-local", "14089", { city: "Berlin-Kladow", keepInActiveCatalog: true });
-  const legacy = plot("unconfirmed-legacy");
+test("local plots inside survive cleanup and reload without a master row or retention flag", () => {
+  const local = plot("kept-local", "14089", { city: "Berlin-Kladow" });
+  const legacy = plot("outside-legacy", "99999");
   const projects = [{ id: "historic", plotId: local.id, listings: [{ id: "online", status: "published" }] }];
   const state = { plots: [local, legacy], projects, selectedPlotIds: [local.id, legacy.id] };
   const data = source([]);
@@ -83,13 +85,46 @@ test("explicitly retained local plots inside survive cleanup without a master ro
   assert.equal(result.plots[0], local);
 });
 
-test("retention inside the own territory does not activate outside or invalid addresses", () => {
+test("incomplete own-territory addresses remain retained but cannot generate new listings", () => {
   const plots = [plot("outside", "99999", { keepInActiveCatalog: true }),
     plot("private", "14469", { keepInActiveCatalog: true, street: "Adresse nicht öffentlich angegeben" }),
     plot("inactive", "14469", { keepInActiveCatalog: true, isActive: false })];
   const context = { source: source([]), policy: approved(plots) };
-  assert.deepEqual(operationalCatalogPlots(plots, context), []);
+  assert.deepEqual(operationalCatalogPlots(plots, context).map(p => p.id), ["private"]);
   assert.deepEqual(selectablePlotIds(plots, plots.map(p => p.id), context), []);
+  assert.deepEqual(selectablePlotProjects(plots, plots.map(p => ({ id: `project-${p.id}`, plotId: p.id })), context), []);
+  const preview = catalogCleanupPreview({ plots }, context.source);
+  assert.deepEqual(preview.inside.map(p => p.id), ["private"]);
+  assert.deepEqual(preview.review.map(p => p.id), ["private", "inactive"]);
+  assert.deepEqual(preview.removed.map(p => p.id), ["outside"]);
+});
+
+test("no active plot in any configured postal code ever appears in the cleanup removal list", () => {
+  const own = territory.postalCodes.flatMap((zip, i) => [
+    plot(`own-${i}`, zip, { createdAt: "2020-01-01T00:00:00Z", keepInActiveCatalog: false }),
+    plot(`review-${i}`, zip, { street: "Adresse nicht öffentlich angegeben" }),
+  ]);
+  const excluded = plot("external", "99999");
+  const inactive = plot("archived", "14089", { isActive: false });
+  const state = { plots: [...own, excluded, inactive], projects: [{ id: "historic", listings: [{ id: "online" }] }], selectedPlotIds: own.map(p => p.id) };
+  const data = source([]);
+  const preview = catalogCleanupPreview(state, data);
+  assert.deepEqual(preview.inside.map(p => p.id), own.map(p => p.id));
+  assert.deepEqual(preview.removed.map(p => p.id), [excluded.id]);
+  const result = approveActivePlotCatalog(state, data, "2026-10-07T12:00:00Z");
+  assert.equal(result.projects, state.projects);
+  assert.equal(result.plots.find(p => p.id === inactive.id).isActive, false);
+  assert.deepEqual(result.selectedPlotIds, own.filter(p => !p.id.startsWith("review-")).map(p => p.id));
+});
+
+test("public cleanup preview counts own-territory address reviews as retained rather than removed", async () => {
+  const state = { plots: [plot("own"), plot("review", "14469", { street: "Adresse nicht öffentlich angegeben" }), plot("external", "99999")] };
+  const before = structuredClone(state);
+  const service = createActivePlotCatalogService({ loadSource: async () => source([]), loadCatalog: async () => ({ state, savedAt: "first" }) });
+  const preview = await service.preview();
+  assert.deepEqual(preview.counts, { inside: 2, insideReview: 1, outside: 0, removed: 1 });
+  assert.deepEqual(preview.removed.map(p => p.id), ["external"]);
+  assert.deepEqual(state, before);
 });
 
 test("retention survives normalization and Pool A/B sync without reviving unrelated legacy plots", () => {
@@ -115,7 +150,7 @@ test("exclusive boolean survives normalization and existing Pool A/B reconciliat
 });
 
 test("historical excluded plots cannot be exported back into the master to undo cleanup", () => {
-  const p = plot("legacy");
+  const p = plot("legacy", "99999");
   const result = reconcileMaster({ plots: [p], projects: [], activePlotCatalog: approved([p]) }, [], []);
   assert.equal(result.poolA.length, 0);
   assert.equal(result.poolB.length, 0);
@@ -123,7 +158,7 @@ test("historical excluded plots cannot be exported back into the master to undo 
 });
 
 test("search and city filters span both active areas and exclude historical results", () => {
-  const plots = [plot("own"), plot("exclusive", "99999", { city: "Anderer Ort", exclusiveOutsideTerritory: true }), plot("old")];
+  const plots = [plot("own"), plot("exclusive", "99999", { city: "Anderer Ort", exclusiveOutsideTerritory: true }), plot("old", "99999")];
   const active = operationalCatalogPlots(plots, { source: source([plots[0]]), policy: approved(plots) });
   assert.equal(filterCatalogPlots(active, "testweg").length, 2);
   assert.deepEqual(filterCatalogPlots(active, "99999").map(p => p.id), ["exclusive"]);

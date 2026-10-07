@@ -10,14 +10,13 @@ export function catalogSourceReady(source) {
     && partitionPlotsByTerritory([], source.territory).some(section => section.id === "inside");
 }
 
-export function catalogPlotDisposition(plot, source, policy) {
+export function catalogPlotDisposition(plot, source) {
   if (!catalogSourceReady(source)) return "unavailable";
-  if (plot.isActive === false || !plotAddressSelection(plot).selectable) return "review";
+  if (plot.isActive === false) return "review";
   const inside = partitionPlotsByTerritory([plot], source.territory)[0].plots.length === 1;
-  const member = source.masterPlots.some(row => row.id === plot.id);
-  const newPlot = policy?.version === 1 && Array.isArray(policy.legacyPlotIds)
-    && !policy.legacyPlotIds.includes(plot.id);
-  if (inside && (member || newPlot || plot.keepInActiveCatalog === true || plot.exclusiveOutsideTerritory === true)) return "inside";
+  // Territory retention and address eligibility are separate decisions.
+  if (inside) return "inside";
+  if (!plotAddressSelection(plot).selectable) return "review";
   if (!inside && plot.exclusiveOutsideTerritory === true) return "outside";
   return "excluded";
 }
@@ -49,11 +48,11 @@ export function catalogCleanupPreview(state, source) {
   const inside = [], outside = [], removed = [], review = [];
   for (const plot of plots) {
     const disposition = catalogPlotDisposition(plot, source, state.activePlotCatalog);
+    if (disposition === "review" || (disposition === "inside" && !plotAddressSelection(plot).selectable)) review.push(plot);
     if (disposition === "inside") inside.push(plot);
     else if (disposition === "outside") outside.push(plot);
     else {
       if ((state.plots || []).some(row => row.id === plot.id && row.isActive !== false)) removed.push(plot);
-      if (disposition === "review") review.push(plot);
     }
   }
   return { inside, outside, removed, review, plots };
@@ -64,7 +63,7 @@ export function approveActivePlotCatalog(state, source, approvedAt) {
   const preview = catalogCleanupPreview(state, source);
   const policy = { version: 1, approvedAt, legacyPlotIds: preview.plots.map(plot => plot.id) };
   const context = { source, policy };
-  const eligible = new Set(operationalCatalogPlots(preview.plots, context).map(plot => plot.id));
+  const eligible = new Set(operationalCatalogPlots(preview.plots, context).filter(plot => plotAddressSelection(plot).selectable).map(plot => plot.id));
   // Keep every project/listing/history/audit object exactly as received; no normalization or deletion.
   return { ...state, plots: preview.plots, activePlotCatalog: policy,
     selectedPlotIds: (state.selectedPlotIds || []).filter(id => eligible.has(id)) };

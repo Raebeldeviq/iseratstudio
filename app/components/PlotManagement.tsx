@@ -128,7 +128,7 @@ function splitStreetLine(value: string): { street: string; houseNumber: string }
 }
 
 function emptyPlot(owner: AddressOwner): PlotRecord {
-  return createPlotRecord({ owner, keepInActiveCatalog: true }, { createId: () => crypto.randomUUID() }) as PlotRecord;
+  return createPlotRecord({ owner }, { createId: () => crypto.randomUUID() }) as PlotRecord;
 }
 
 async function responseJson<T>(response: Response): Promise<T> {
@@ -552,7 +552,7 @@ export default function PlotManagement({
           <div className="button-row"><button className="secondary" disabled={!visibleIds.length} onClick={toggleAllVisible}>{allVisibleSelected ? "Sichtbare abwählen" : "Alle sichtbaren wählen"}</button><button className="secondary" disabled={!selectedPlotIds.length} onClick={() => onSelectionChange([])}>Auswahl aufheben</button></div>
         </div>
 
-        <p role="note">Suchgebiet: vorhandene aktive PLZ aus „Suchgebiet“. Außerhalb werden nur ausdrücklich als exklusiv gespeicherte Grundstücke ausgewählt.</p>
+        <p role="note">Alle Grundstücke innerhalb der aktiven PLZ aus „Suchgebiet“ bleiben erhalten, auch ohne Master-Eintrag. Außerhalb werden nur ausdrücklich als exklusiv gespeicherte Grundstücke ausgewählt.</p>
         {!catalogPolicy?.approvedAt ? <div className="plot-import-preview" role="region" aria-label="Einmalige Bereinigung">
           <h3>Aktive Grundstücksauswahl einmalig bereinigen</h3>
           <p>Die bisherige Auswahl bleibt gespeichert. Vor neuen Inseraten bitte die Vorschau prüfen und bestätigen.</p>
@@ -560,7 +560,8 @@ export default function PlotManagement({
         </div> : null}
         {catalogPreview ? <div className="plot-import-preview" role="dialog" aria-label="Bereinigungsvorschau">
           <h3>Bereinigung vor dem Bestätigen prüfen</h3>
-          <p>{catalogPreview.counts.inside} Grundstücke bleiben im eigenen Suchgebiet · {catalogPreview.counts.outside} bleiben als Exklusiv · {catalogPreview.counts.removed} alte Grundstücke werden aus der aktiven Auswahl entfernt.</p>
+          <p>{catalogPreview.counts.inside} Grundstücke bleiben im eigenen Suchgebiet · {catalogPreview.counts.outside} bleiben als Exklusiv · {catalogPreview.counts.removed} Grundstücke außerhalb werden aus der aktiven Auswahl ausgeblendet.</p>
+          {catalogPreview.counts.insideReview ? <p>Davon bleiben {catalogPreview.counts.insideReview} Grundstücke im Suchgebiet mit offener Adressprüfung erhalten. Für neue Inserate werden sie erst nach der Adressprüfung auswählbar.</p> : null}
           <details><summary>Betroffene Grundstücke ({catalogPreview.removed.length})</summary>{catalogPreview.removed.map(plot => <p key={plot.id}>{formatPlotStreet(plot)} · {plot.postalCode} {plot.city} · {plot.id}</p>)}</details>
           <p>Grundstücksdatensätze, bestehende Inserate, Uploadhistorien und Lösch-Batches bleiben erhalten.</p>
           <div className="button-row"><button className="secondary" disabled={catalogBusy} onClick={() => setCatalogPreview(null)}>Abbrechen</button><button className="primary" disabled={catalogBusy || catalogPreview.confirmed} onClick={confirmCatalog}>Aktive Auswahl einmalig bereinigen</button></div>
@@ -625,7 +626,6 @@ export default function PlotManagement({
               <label className="field"><span>Ort</span><input value={draft.city} onChange={(event) => setDraft({ ...draft, city: event.target.value })} /></label>
               <label className="field"><span>Grundstücksgröße</span><div className="input-shell"><input type="number" min={0} value={draft.plotSizeSqm || ""} onChange={(event) => setDraft({ ...draft, plotSizeSqm: Number(event.target.value) || 0 })} /><i>m²</i></div></label>
               <label className="field"><span>Kaufpreis</span><div className="input-shell"><input type="number" min={0} value={draft.purchasePrice || ""} onChange={(event) => setDraft({ ...draft, purchasePrice: Number(event.target.value) || 0 })} /><i>€</i></div></label>
-              <label className="field field-wide plot-exclusive-field"><span><input type="checkbox" checked={draft.keepInActiveCatalog === true} onChange={event => setDraft({ ...draft, keepInActiveCatalog: event.target.checked })} /> Im eigenen Suchgebiet auch ohne Master-Eintrag behalten</span></label>
               <label className="field field-wide plot-exclusive-field"><span><input type="checkbox" checked={draft.exclusiveOutsideTerritory === true} onChange={event => setDraft({ ...draft, exclusiveOutsideTerritory: event.target.checked })} /> Exklusiv / außerhalb des Suchgebietes behalten</span></label>
               <label className="field field-wide"><span>Regionale Grundnotizen · optional</span><textarea rows={3} value={draft.regionalNotes} placeholder="Nur geprüfte Ortsfakten, z. B. seenreich, ruhig, Nähe zu Potsdam" onChange={(event) => setDraft({ ...draft, regionalNotes: event.target.value })} /></label>
             </div>

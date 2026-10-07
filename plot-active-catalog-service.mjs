@@ -17,7 +17,8 @@ export function createActivePlotCatalogService(options = {}) {
     const result = catalogCleanupPreview(manifest.state, data);
     const token = createHash("sha256").update(JSON.stringify([manifest.savedAt, manifest.state.plots, manifest.state.activePlotCatalog, data])).digest("hex");
     return { token, confirmed: Boolean(manifest.state.activePlotCatalog?.approvedAt), source: data,
-      counts: { inside: result.inside.length, outside: result.outside.length, removed: result.removed.length },
+      counts: { inside: result.inside.length, insideReview: result.review.filter(plot => result.inside.includes(plot)).length,
+        outside: result.outside.length, removed: result.removed.length },
       removed: result.removed.map(plot => ({ id: plot.id, street: plot.street, houseNumber: plot.houseNumber, postalCode: plot.postalCode, city: plot.city })),
       state: manifest.state, savedAt: manifest.savedAt };
   }

@@ -1,7 +1,7 @@
 import type { PlotRecord, StudioState } from "./app/types";
 export type ActiveCatalogSource = { available: boolean; sourcePath?: string; message?: string; territory: { available: boolean; postalCodes: string[]; regions?: Record<string, string>; message?: string } | null; masterPlots: Array<PlotRecord & { district?: string }> };
 export type ActiveCatalogContext = { source?: ActiveCatalogSource | null; policy?: StudioState["activePlotCatalog"] };
-export type ActiveCatalogPreview = { token: string; confirmed: boolean; source: ActiveCatalogSource; counts: { inside: number; outside: number; removed: number }; removed: Array<Pick<PlotRecord, "id" | "street" | "houseNumber" | "postalCode" | "city">> };
+export type ActiveCatalogPreview = { token: string; confirmed: boolean; source: ActiveCatalogSource; counts: { inside: number; insideReview: number; outside: number; removed: number }; removed: Array<Pick<PlotRecord, "id" | "street" | "houseNumber" | "postalCode" | "city">> };
 export function uniqueCatalogPlots<T extends { id: string }>(plots?: T[]): T[];
 export function catalogSourceReady(source?: ActiveCatalogSource | null): boolean;
 export function catalogPlotDisposition(plot: PlotRecord, source?: ActiveCatalogSource | null, policy?: StudioState["activePlotCatalog"]): string;
