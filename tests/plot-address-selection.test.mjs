@@ -63,9 +63,10 @@ test('rendered normal selection hides non-public cards and labels house-number p
   const {default:Component}=await import('data:text/javascript;base64,'+Buffer.from(resolved).toString('base64'));
   const html=renderToStaticMarkup(createElement(Component,{
     plots:[plot('ready','Sichtbare Teststraße',{houseNumber:'0'}),plot('hidden','Adresse nicht öffentlich angegeben')],
-    selectedPlotIds:[],defaultOwner:'pascal',helperOnline:false,helperRequest:()=>{throw new Error('No requests during render');},
+    catalogPolicy:{version:1,approvedAt:"2026-10-07T12:00:00Z",legacyPlotIds:["ready","hidden"]},
+    selectedPlotIds:[],defaultOwner:'pascal',helperOnline:true,helperRequest:()=>{throw new Error('No requests during render');},
     linkedProjectCounts:{hidden:1},selectionMeta:{hidden:{listingCount:1,regionLabel:'Test',uploadDate:''}},
-    syncStatus:null,syncBusy:false,onSelectionChange:()=>{},onSave:()=>{},onDelete:()=>{throw new Error('No deletion');},onSync:()=>{},onScheduleChange:()=>{},
+    syncStatus:{ activeCatalog:{available:true,territory:{available:true,postalCodes:["12345"]},masterPlots:[plot("ready","Sichtbare Teststraße",{houseNumber:"0"})]}},syncBusy:false,onSelectionChange:()=>{},onSave:()=>{},onDelete:()=>{throw new Error('No deletion');},onSync:()=>{},onScheduleChange:()=>{},
   }));
   assert.match(html,/Sichtbare Teststraße/);
   assert.match(html,/Hausnummer unbestätigt/);

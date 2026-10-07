@@ -7,6 +7,8 @@ import { AI_MODEL_OPTIONS, DEFAULT_AI_MODEL } from "../ai-models.mjs";
 import { isDraftListing, mergeListingCollection } from "../listing-catalog-view.mjs";
 import { filterManagedListingsByObjectNumber } from "../listing-manager-view.mjs";
 import { activeWorkingListingCount } from "../active-listings.mjs";
+import { operationalCatalogPlots } from "../plot-active-catalog.mjs";
+import type { ActiveCatalogSource, ActiveCatalogPreview } from "../plot-active-catalog.mjs";
 import { plotAddressSelection, selectablePlotIds, selectablePlotProjects } from "../plot-selection.mjs";
 import {
   captionForImageRole,
@@ -234,6 +236,7 @@ type PlotSyncRun = {
 
 type PlotSyncStatus = {
   territory?: { available: boolean; postalCodes: string[]; message: string };
+  activeCatalog?: ActiveCatalogSource;
   scheduleEnabled?: boolean;
   sourceFound: boolean;
   running: boolean;
@@ -949,7 +952,7 @@ export default function InseratStudio() {
         if (data.catalogSavedAt && data.catalogSavedAt !== knownDeviceCatalogSavedAt) {
           const snapshot = await loadDeviceCatalogSnapshot();
           if (cancelled || !snapshot || snapshot.savedAt !== data.catalogSavedAt) return;
-          knownDeviceCatalogSavedAt = snapshot.savedAt;
+          acceptKnownDeviceCatalogSavedAt(snapshot.savedAt);
           const loaded = normalizeMandatoryListingStandards(normalizeProjectOwners(snapshot.state));
           setState({ ...loaded, selectedPlotIds: selectablePlotIds(loaded.plots, loaded.selectedPlotIds) });
           setNotice("Der automatische Grundstücksabgleich wurde in die geöffnete App übernommen.");
@@ -1116,13 +1119,14 @@ export default function InseratStudio() {
       })
     : [];
   const plotRecords = (state.plots || []) as PlotRecord[];
-  const activePlotIds = new Set(plotRecords.filter((plot) => plotAddressSelection(plot).selectable).map((plot) => plot.id));
-  const selectedPlotIds = selectablePlotIds(plotRecords, state.selectedPlotIds) as string[];
+  const plotCatalogContext = { source: helperOnline ? plotSyncStatus?.activeCatalog : null, policy: state.activePlotCatalog };
+  const activePlotIds = new Set(operationalCatalogPlots(plotRecords, plotCatalogContext).filter((plot) => plotAddressSelection(plot).selectable).map((plot) => plot.id));
+  const selectedPlotIds = selectablePlotIds(plotRecords, state.selectedPlotIds, plotCatalogContext) as string[];
   const setSelectedPlotIds = (next: string[] | ((ids: string[]) => string[])) => {
     setState((current) => {
-      const currentIds = selectablePlotIds(current.plots, current.selectedPlotIds) as string[];
+      const currentIds = selectablePlotIds(current.plots, current.selectedPlotIds, { ...plotCatalogContext, policy: current.activePlotCatalog }) as string[];
       const resolved = typeof next === "function" ? next(currentIds) : next;
-      return { ...current, selectedPlotIds: selectablePlotIds(current.plots, resolved) };
+      return { ...current, selectedPlotIds: selectablePlotIds(current.plots, resolved, { ...plotCatalogContext, policy: current.activePlotCatalog }) };
     });
   };
   const linkedProjectCounts = state.projects.reduce<Record<string, number>>((counts, project) => {
@@ -1135,7 +1139,7 @@ export default function InseratStudio() {
   const deletionToday = deletionBatches.filter((batch) => batch.days === 0).reduce((sum, batch) => sum + batch.active.length, 0);
   const deletionTomorrow = deletionBatches.filter((batch) => batch.days === 1).reduce((sum, batch) => sum + batch.active.length, 0);
   const deletionOverdue = deletionBatches.filter((batch) => batch.days < 0).reduce((sum, batch) => sum + batch.active.length, 0);
-  const eligibleProjects = selectablePlotProjects(plotRecords, state.projects) as ProjectInput[];
+  const eligibleProjects = selectablePlotProjects(plotRecords, state.projects, plotCatalogContext) as ProjectInput[];
   const activePlotProjects = eligibleProjects.filter((project) => Boolean(project.plotId));
   const selectedWorkflowProjects = activePlotProjects.filter((project) => selectedPlotIds.includes(project.plotId || ""));
   const projectSource = selectedWorkflowProjects.length
@@ -1382,13 +1386,36 @@ export default function InseratStudio() {
     if (data.catalogSavedAt && data.catalogSavedAt !== knownDeviceCatalogSavedAt) {
       const snapshot = await loadDeviceCatalogSnapshot();
       if (!snapshot) throw new Error("Der synchronisierte Katalog konnte nicht geladen werden.");
-      knownDeviceCatalogSavedAt = snapshot.savedAt;
+      acceptKnownDeviceCatalogSavedAt(snapshot.savedAt);
       const loaded = normalizeMandatoryListingStandards(normalizeProjectOwners(snapshot.state));
       setState(loaded);
       setSelectedPlotIds((ids) => ids.filter((id) => (loaded.plots || []).some((plot) => plot.id === id && plot.isActive !== false)));
     }
     setNotice(data.applied ? "Master-Excel und Inseratestudio wurden synchronisiert." : "Keine Datenänderung erforderlich.");
     return data;
+  };
+
+  const previewActiveCatalog = async (): Promise<ActiveCatalogPreview> => {
+    await new Promise<void>(resolve => window.setTimeout(resolve, 600));
+    await deviceCatalogSaveQueue;
+    const response = await helperFetch("/plot-active-catalog/preview");
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.message || "Die Bereinigungsvorschau ist nicht verfügbar.");
+    return data;
+  };
+
+  const confirmActiveCatalog = async (token: string) => {
+    await new Promise<void>(resolve => window.setTimeout(resolve, 600));
+    await deviceCatalogSaveQueue;
+    const response = await helperFetch("/plot-active-catalog/apply", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, confirmed: true }) });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.message || "Die Bereinigung konnte nicht gespeichert werden.");
+    const snapshot = await loadDeviceCatalogSnapshot();
+    if (!snapshot) throw new Error("Der bestätigte Katalog konnte nicht geladen werden.");
+    acceptKnownDeviceCatalogSavedAt(snapshot.savedAt);
+    setState(snapshot.state);
+    setNotice("Aktive Grundstücksauswahl wurde bestätigt. Inserate und Historien bleiben erhalten.");
   };
 
   const resetPlotListingWork = (plot: PlotRecord) => {
@@ -1417,7 +1444,7 @@ export default function InseratStudio() {
   };
 
   const updateCentralPlotSelection = (plotIds: string[]) => {
-    const activeIds = selectablePlotIds(plotRecords, plotIds) as string[];
+    const activeIds = selectablePlotIds(plotRecords, plotIds, plotCatalogContext) as string[];
     const selectedPlots = plotRecords.filter((plot) => activeIds.includes(plot.id));
     if (!selectedPlots.length) {
       setSelectedPlotIds([]);
@@ -3454,6 +3481,9 @@ export default function InseratStudio() {
       {tab === "plots" ? (
         <><PlotManagement
           plots={plotRecords}
+          catalogPolicy={state.activePlotCatalog}
+          onCatalogPreview={previewActiveCatalog}
+          onCatalogConfirm={confirmActiveCatalog}
           rotationStatuses={Object.fromEntries(plotRecords.map((plot) => [plot.id, addressRotationStatus(state, plot.id)]))}
           selectedPlotIds={selectedPlotIds}
           defaultOwner={activeOwner}

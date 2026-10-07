@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, rename, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { APPLICATION_DATA_DIRECTORY } from "./platform-paths.mjs";
+import { dirname } from "node:path";
+import { PLOT_MASTER_PATH } from "./plot-active-catalog-source.mjs";
 import { commitCatalogSnapshot, discardCatalogSnapshot, loadCatalogManifest, startCatalogSnapshot } from "./catalog-store.mjs";
 import { reconcileMaster } from "./plot-master-sync.mjs";
 import { createMasterWorkbook, readMasterWorkbook } from "./plot-master-workbook.mjs";
@@ -11,7 +11,7 @@ const conflict = (message) => Object.assign(new Error(message), { httpStatus: 40
 const key = (savedAt, bytes) => hash(`${savedAt || ""}:${hash(bytes)}`);
 
 export function createPlotMasterService(options = {}) {
-  const path = options.path || join(APPLICATION_DATA_DIRECTORY, "inputs", "KI_Grundstuecke_MASTER.xlsx");
+  const path = options.path || PLOT_MASTER_PATH;
   const readWorkbook = options.readWorkbook || readMasterWorkbook;
   const loadCatalog = options.loadCatalog || loadCatalogManifest;
   const stageCatalog = options.stageCatalog || startCatalogSnapshot;

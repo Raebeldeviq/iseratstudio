@@ -21,7 +21,8 @@ export function parseMasterRows(rows, pool) {
   const columns = {
     plotId: index("plotId", "Grundstücks-ID"), street: index("Straße", "Strasse"),
     houseNumber: index("Hausnummer", "Hausnr"), postalCode: index("PLZ", "Postleitzahl"),
-    city: index("Ort", "Stadt"), size: index("Grundstücksfläche m²", "Größe (m²)"),
+    city: index("Ort", "Stadt"), size: index("Grundstücksfläche m²", "Größe (m²)", "Grundstücksgröße (m²)"),
+    sourceStatus: index("Status"), district: index("Stadtteil"),
     price: index("Grundstückspreis €", "Preis (€)"), mode: index("PoolBModus"), status: index("PoolBStatus"),
   };
   for (const field of ["plotId", "street", "houseNumber", "postalCode", "city", "size", "price"]) {
@@ -43,6 +44,8 @@ export function parseMasterRows(rows, pool) {
     seen.add(plotId);
     return [{ plotId, street: get("street"), houseNumber: get("houseNumber"), postalCode,
       city: get("city"), plotSizeSqm: size, purchasePrice: price,
+      ...(columns.sourceStatus !== undefined ? { sourceStatus: get("sourceStatus") } : {}),
+      ...(columns.district !== undefined ? { district: get("district") } : {}),
       mode: pool === "B" && get("mode") === "MANUAL" ? "MANUAL" : "AUTO_GENERATED",
       status: pool === "B" && (get("status") === "POOL_B_PRÜFEN" || !get("houseNumber")) ? "POOL_B_PRÜFEN" : "" }];
   });
@@ -137,6 +140,7 @@ export function reconcileMaster(state, excelA, excelB, choices = {}, now = new D
     }
     if (!plot) continue;
     if (!aExcel) {
+      if (state.activePlotCatalog?.approvedAt && state.activePlotCatalog.legacyPlotIds?.includes(id) && !plot.exclusiveOutsideTerritory) continue;
       if (plot.masterSync?.a) {
         items.push({ plotId: id, action: "missing-excel", label: `${plot.street} ${plot.houseNumber}` });
         if (choices[id] === "remove-app") nextPlots.set(id, { ...plot, isActive: false,
@@ -190,7 +194,7 @@ export function masterRowsForWorkbook(rows, originalRows = []) {
   const header = originalRows.length ? [...originalRows[0]] : [...HEADERS];
   const names = header.map(normalizeHeader);
   const aliases = [["plotid", "grundstucksid"], ["strasse"], ["hausnummer", "hausnr"], ["plz", "postleitzahl"],
-    ["ort", "stadt"], ["grundstucksflachem2", "grossem2"], ["grundstuckspreis", "preis"], ["poolbmodus"], ["poolbstatus"]];
+    ["ort", "stadt"], ["grundstucksflachem2", "grossem2", "grundstucksgrossem2"], ["grundstuckspreis", "preis"], ["poolbmodus"], ["poolbstatus"]];
   const indexes = HEADERS.map((name, field) => {
     let index = names.findIndex((value) => aliases[field].includes(value));
     if (index < 0) { index = header.length; header.push(name); names.push(normalizeHeader(name)); }

@@ -221,6 +221,7 @@ export type HouseTemplate = {
 export type AddressOwner = "fabian" | "pascal";
 
 export type PlotRecord = {
+  exclusiveOutsideTerritory?: boolean;
   id: string;
   masterSync?: { a: string; b: string; appOnlyRemoved?: boolean; excelDeleteRequested?: boolean; syncedAt?: string };
   addressRotation?: {
@@ -670,6 +671,7 @@ export type StudioState = {
   catalogRepairReview?: { automaticProductionAllowed: boolean; unresolved: Array<{ kind: string; projectId: string; listingId: string; externalId?: string }> };
   dataSchemaVersion?: number;
   plotSchemaVersion?: number;
+  activePlotCatalog?: { version: 1; approvedAt: string; legacyPlotIds: string[] };
   houses: HouseTemplate[];
   plots?: PlotRecord[];
   selectedPlotIds?: string[];

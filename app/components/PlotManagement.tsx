@@ -16,7 +16,9 @@ import {
 } from "../../plot-records.mjs";
 import type { AddressOwner, PlotRecord } from "../types";
 import { plotAddressSelection, plotListingCountAppearance, selectablePlotIds } from "../../plot-selection.mjs";
-import { partitionPlotsByTerritory } from "../../plot-territory.mjs";
+import { catalogGeographicLabel, catalogPlotDisposition, filterCatalogPlots, operationalCatalogPlots, uniqueCatalogPlots } from "../../plot-active-catalog.mjs";
+import type { ActiveCatalogPreview, ActiveCatalogSource } from "../../plot-active-catalog.mjs";
+import type { StudioState } from "../types";
 import { defaultPlotTerritoryVisibility, readPlotTerritoryVisibility, savePlotTerritoryVisibility, togglePlotTerritoryVisibility } from "../../plot-territory-visibility.mjs";
 import { generatePoolB, rowFromPlot, rowFromPlotB } from "../../plot-master-sync.mjs";
 
@@ -45,6 +47,9 @@ type PdfReview = {
 
 type Props = {
   plots: PlotRecord[];
+  catalogPolicy?: StudioState["activePlotCatalog"];
+  onCatalogPreview: () => Promise<ActiveCatalogPreview>;
+  onCatalogConfirm: (token: string) => Promise<void>;
   rotationStatuses: Record<string, { state: string; currentPool: string; nextPool: string; remaining: number; cycle: number }>;
   selectedPlotIds: string[];
   defaultOwner: AddressOwner;
@@ -82,6 +87,7 @@ type PlotSyncRun = {
 
 type PlotSyncStatus = {
   territory?: { available: boolean; postalCodes: string[]; message: string };
+  activeCatalog?: ActiveCatalogSource;
   scheduleEnabled?: boolean;
   sourceFound: boolean;
   running: boolean;
@@ -133,6 +139,9 @@ async function responseJson<T>(response: Response): Promise<T> {
 
 export default function PlotManagement({
   plots,
+  catalogPolicy,
+  onCatalogPreview,
+  onCatalogConfirm,
   rotationStatuses,
   selectedPlotIds,
   defaultOwner,
@@ -150,6 +159,9 @@ export default function PlotManagement({
   resetDisabled,
 }: Props) {
   const [query, setQuery] = useState("");
+  const [catalogPreview, setCatalogPreview] = useState<ActiveCatalogPreview | null>(null);
+  const [catalogBusy, setCatalogBusy] = useState(false);
+  const [showInactiveEditor, setShowInactiveEditor] = useState(false);
   const [showReview, setShowReview] = useState(false);
   const [cityFilter, setCityFilter] = useState("");
   const [sortKey, setSortKey] = useState<PlotSortKey>("postalCode");
@@ -165,7 +177,7 @@ export default function PlotManagement({
   const [masterBusy, setMasterBusy] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<PlotRecord | null>(null);
   const [message, setMessage] = useState("");
-  const [expandedTerritories, setExpandedTerritories] = useState({ ...defaultPlotTerritoryVisibility });
+  const [expandedTerritories, setExpandedTerritories] = useState<Record<string, boolean>>({ ...defaultPlotTerritoryVisibility });
   const [resetTarget, setResetTarget] = useState<{ plot: PlotRecord; listingCount: number } | null>(null);
   const excelInput = useRef<HTMLInputElement>(null);
   const pdfInput = useRef<HTMLInputElement>(null);
@@ -181,7 +193,7 @@ export default function PlotManagement({
     return () => window.clearTimeout(timeout);
   }, []);
 
-  const toggleTerritory = (territoryId: "inside" | "outside") => {
+  const toggleTerritory = (territoryId: string) => {
     const next = togglePlotTerritoryVisibility(expandedTerritories, territoryId);
     setExpandedTerritories(next);
     try {
@@ -191,23 +203,31 @@ export default function PlotManagement({
     }
   };
 
-  const activePlots = useMemo(() => plots.filter((plot) => plot.isActive !== false), [plots]);
+  const source = helperOnline ? syncStatus?.activeCatalog : null;
+  const catalogContext = useMemo(() => ({ source, policy: catalogPolicy }), [source, catalogPolicy]);
+  const activePlots = useMemo(() => operationalCatalogPlots(plots, catalogContext), [plots, catalogContext]);
+  const inactivePlots = useMemo(() => uniqueCatalogPlots(plots).filter(plot => plot.isActive !== false && !activePlots.some(active => active.id === plot.id)), [plots, activePlots]);
+  const openCatalogPreview = async () => {
+    setCatalogBusy(true);
+    try { setCatalogPreview(await onCatalogPreview()); setMessage(""); }
+    catch (error) { setMessage(error instanceof Error ? error.message : "Vorschau konnte nicht geladen werden."); }
+    finally { setCatalogBusy(false); }
+  };
+  const confirmCatalog = async () => {
+    if (!catalogPreview) return;
+    setCatalogBusy(true);
+    try { await onCatalogConfirm(catalogPreview.token); setCatalogPreview(null); }
+    catch (error) { setCatalogPreview(null); setMessage(error instanceof Error ? error.message : "Bitte die Vorschau erneut öffnen."); }
+    finally { setCatalogBusy(false); }
+  };
   const selectablePlots = useMemo(() => activePlots.filter((plot) => plotAddressSelection(plot).selectable), [activePlots]);
-  const reviewPlots = useMemo(() => activePlots.filter((plot) => !plotAddressSelection(plot).selectable), [activePlots]);
+  const reviewPlots = useMemo(() => uniqueCatalogPlots(plots).filter((plot) => !plotAddressSelection(plot).selectable && plot.isActive !== false), [plots]);
   const displayedPlots = showReview ? reviewPlots : selectablePlots;
   const cityOptions = useMemo(() => [...new Set(activePlots.map((plot) => plot.city).filter(Boolean))].sort((a, b) => a.localeCompare(b, "de")), [activePlots]);
   const visiblePlots = useMemo(() => {
-    const needle = query.trim().toLocaleLowerCase("de-DE");
-    return displayedPlots.filter((plot) => {
-      if (cityFilter && plot.city !== cityFilter) return false;
-      if (!needle) return true;
-      return [formatPlotStreet(plot), plot.postalCode, plot.city]
-        .join(" ")
-        .toLocaleLowerCase("de-DE")
-        .includes(needle);
-    });
+    return filterCatalogPlots(displayedPlots, query, cityFilter);
   }, [displayedPlots, cityFilter, query]);
-  const visibleIds = selectablePlotIds(visiblePlots, visiblePlots.map((plot) => plot.id));
+  const visibleIds = selectablePlotIds(visiblePlots, visiblePlots.map((plot) => plot.id), catalogContext);
   const allVisibleSelected = Boolean(visibleIds.length) && visibleIds.every((id) => selectedPlotIds.includes(id));
   const territorySections = useMemo(() => {
     const collator = new Intl.Collator("de-DE", { numeric: true, sensitivity: "base" });
@@ -226,17 +246,20 @@ export default function PlotManagement({
       const ordered = numeric || collator.compare([left.city, left.postalCode, formatPlotStreet(left)].join(" "), [right.city, right.postalCode, formatPlotStreet(right)].join(" "));
       return sortDirection === "asc" ? ordered : -ordered;
     };
-    return partitionPlotsByTerritory(visiblePlots, helperOnline ? syncStatus?.territory : null).map((section) => {
+    return [
+      { id: "inside", label: "Im eigenen Suchgebiet", plots: visiblePlots.filter(plot => catalogPlotDisposition(plot, source, catalogPolicy) === "inside") },
+      { id: "outside", label: "Exklusiv / außerhalb des Suchgebietes", plots: visiblePlots.filter(plot => catalogPlotDisposition(plot, source, catalogPolicy) === "outside") },
+    ].map((section) => {
       const groups = new Map<string, PlotRecord[]>();
       for (const plot of section.plots) {
-        const label = selectionMeta[plot.id]?.regionLabel || "Nicht zugeordnet";
+        const label = catalogGeographicLabel(plot, source, selectionMeta[plot.id]?.regionLabel || "Nicht zugeordnet");
         groups.set(label, [...(groups.get(label) || []), plot]);
       }
       return { ...section, groups: [...groups.entries()]
         .map(([label, entries]) => ({ label, firstPostalCode: entries.map((plot) => plot.postalCode).sort()[0] || "", plots: entries.sort(compare) }))
         .sort((left, right) => collator.compare(left.firstPostalCode, right.firstPostalCode) || collator.compare(left.label, right.label)) };
     });
-  }, [selectionMeta, sortDirection, sortKey, visiblePlots, helperOnline, syncStatus?.territory]);
+  }, [selectionMeta, sortDirection, sortKey, visiblePlots, source, catalogPolicy]);
 
   const beginEdit = (plot?: PlotRecord) => {
     setDraft(plot ? normalizePlotRecord(plot, { fallbackId: plot.id }) as PlotRecord : emptyPlot(defaultOwner));
@@ -257,7 +280,7 @@ export default function PlotManagement({
   };
 
   const togglePlot = (plotId: string) => {
-    if (!selectablePlotIds(plots, [plotId]).length) return;
+    if (!selectablePlotIds(plots, [plotId], catalogContext).length) return;
     onSelectionChange(selectedPlotIds.includes(plotId)
       ? selectedPlotIds.filter((id) => id !== plotId)
       : [...selectedPlotIds, plotId]);
@@ -516,7 +539,7 @@ export default function PlotManagement({
 
         <div className="button-row" aria-label="Adressprüfung">
           <button className={!showReview ? 'primary' : 'secondary'} aria-pressed={!showReview} onClick={() => setShowReview(false)}>Auswählbare Grundstücke ({selectablePlots.length})</button>
-          <button className={showReview ? 'primary' : 'secondary'} aria-pressed={showReview} onClick={() => setShowReview(true)}>Müssen geprüft werden ({reviewPlots.length})</button>
+          <button className={showReview ? 'primary' : 'secondary'} aria-pressed={showReview} onClick={() => { setShowReview(false); setShowInactiveEditor(true); }}>Müssen geprüft werden ({reviewPlots.length})</button>
         </div>
         {showReview ? <p role="note">Nur Recherche und Bearbeitung möglich. Diese Grundstücke werden nicht in „Alle sichtbaren wählen“ übernommen. Bestehende Inserate und ihre Historie bleiben unverändert im Inseratsmanager.</p> : null}
 
@@ -529,8 +552,22 @@ export default function PlotManagement({
           <div className="button-row"><button className="secondary" disabled={!visibleIds.length} onClick={toggleAllVisible}>{allVisibleSelected ? "Sichtbare abwählen" : "Alle sichtbaren wählen"}</button><button className="secondary" disabled={!selectedPlotIds.length} onClick={() => onSelectionChange([])}>Auswahl aufheben</button></div>
         </div>
 
-        <p role="note">Gebietsabgleich: aktive PLZ im Excel-Blatt „Suchgebiet“. Grundstücke außerhalb bleiben erlaubt und bei gültiger Anschrift auswählbar. Bestehende Online-Inserate bleiben unverändert.</p>
-        <div className="action-bar"><span>Master: KI_Grundstuecke_MASTER.xlsx · Pool A und Pool B</span><button className="primary" disabled={!helperOnline || masterBusy} onClick={openMasterPreview}>{masterBusy ? "Excel wird geprüft …" : "Excel synchronisieren"}</button></div>
+        <p role="note">Suchgebiet: vorhandene aktive PLZ aus „Suchgebiet“. Außerhalb werden nur ausdrücklich als exklusiv gespeicherte Grundstücke ausgewählt.</p>
+        {!catalogPolicy?.approvedAt ? <div className="plot-import-preview" role="region" aria-label="Einmalige Bereinigung">
+          <h3>Aktive Grundstücksauswahl einmalig bereinigen</h3>
+          <p>Die bisherige Auswahl bleibt gespeichert. Vor neuen Inseraten bitte die Vorschau prüfen und bestätigen.</p>
+          <button className="primary" disabled={!helperOnline || catalogBusy} onClick={openCatalogPreview}>{catalogBusy ? "Vorschau wird geprüft …" : "Bereinigungsvorschau öffnen"}</button>
+        </div> : null}
+        {catalogPreview ? <div className="plot-import-preview" role="dialog" aria-label="Bereinigungsvorschau">
+          <h3>Bereinigung vor dem Bestätigen prüfen</h3>
+          <p>{catalogPreview.counts.inside} Grundstücke bleiben im eigenen Suchgebiet · {catalogPreview.counts.outside} bleiben als Exklusiv · {catalogPreview.counts.removed} alte Grundstücke werden aus der aktiven Auswahl entfernt.</p>
+          <details><summary>Betroffene Grundstücke ({catalogPreview.removed.length})</summary>{catalogPreview.removed.map(plot => <p key={plot.id}>{formatPlotStreet(plot)} · {plot.postalCode} {plot.city} · {plot.id}</p>)}</details>
+          <p>Grundstücksdatensätze, bestehende Inserate, Uploadhistorien und Lösch-Batches bleiben erhalten.</p>
+          <div className="button-row"><button className="secondary" disabled={catalogBusy} onClick={() => setCatalogPreview(null)}>Abbrechen</button><button className="primary" disabled={catalogBusy || catalogPreview.confirmed} onClick={confirmCatalog}>Aktive Auswahl einmalig bereinigen</button></div>
+        </div> : null}
+        <button className="secondary" onClick={() => setShowInactiveEditor(value => !value)}>Nicht aktive Grundstücke bearbeiten</button>
+        {showInactiveEditor ? <div className="plot-inactive-editor"><label className="field"><span>Grundstück zur Prüfung oder exklusiven Nutzung öffnen</span><select value="" onChange={event => { const plot = inactivePlots.find(plot => plot.id === event.target.value); if (plot) beginEdit(plot); }}><option value="">Grundstück wählen …</option>{filterCatalogPlots(inactivePlots, query).map(plot => <option value={plot.id} key={plot.id}>{formatPlotStreet(plot) || "Adresse offen"} · {plot.postalCode} {plot.city} · {plot.id}</option>)}</select></label></div> : null}
+        <div className="action-bar"><span>Master: KI_Grundstuecke_MASTER.xlsx · Pool A und Pool B</span><button className="primary" disabled={!helperOnline || masterBusy || !catalogPolicy?.approvedAt} onClick={openMasterPreview}>{masterBusy ? "Excel wird geprüft …" : "Excel synchronisieren"}</button></div>
         {masterPreview ? <div className="content-card plot-import-preview" role="dialog" aria-label="Master-Abgleich prüfen">
           <h3>Änderungen vor dem Synchronisieren</h3>
           <p>{masterPreview.counts.import || 0} neue Grundstücke aus Excel · {masterPreview.counts.export || 0} neue aus Inseratestudio · {masterPreview.counts.update || 0} geändert · {masterPreview.counts["missing-excel"] || 0} fehlen in Excel · {masterPreview.counts.conflict || 0} Konflikte</p>
@@ -542,12 +579,12 @@ export default function PlotManagement({
           {masterPreview.counts["missing-excel"] > 1 ? <button className="secondary" onClick={() => setMasterDecisions((current) => ({ ...current, ...Object.fromEntries(masterPreview.items.filter((item) => item.action === "missing-excel").map((item) => [item.plotId, "remove-app"])) }))}>Alle fehlenden aus Inseratestudio entfernen</button> : null}
           <div className="action-bar"><span>Keine Portalobjekte, Listings oder Lösch-Batches werden gelöscht.</span><div className="button-row"><button className="secondary" onClick={() => setMasterPreview(null)}>Abbrechen</button><button className="primary" disabled={masterBusy} onClick={confirmMaster}>Synchronisierung bestätigen</button></div></div>
         </div> : null}
-        {(!helperOnline || !syncStatus?.territory?.available) ? <p role="status">{syncStatus?.territory?.message || "Gebietszuordnung nicht verfügbar – Verbindung und aktive PLZ-Liste werden geprüft."}</p> : null}
+        {(!helperOnline || !source?.available) ? <p role="status">{source?.message || "Master-Datei und Suchgebiet werden geprüft. Die Auswahl für neue Inserate wartet auf den Datenabgleich."}</p> : null}
         <div className="plot-territory-sections">{territorySections.map((territory) => <section className={`plot-territory-section ${territory.id}`} key={territory.id} aria-label={territory.label}>
           <header className="plot-territory-heading">{territory.id === "inside" || territory.id === "outside" ? <h3 className="plot-territory-title"><button type="button" className="plot-territory-toggle" aria-expanded={expandedTerritories[territory.id]} aria-controls={`plot-territory-content-${territory.id}`} onClick={() => toggleTerritory(territory.id)}><span>{territory.label}</span><span className="plot-territory-toggle-meta"><span>{territory.plots.length} Grundstücke</span><span className="plot-territory-chevron" aria-hidden="true">{expandedTerritories[territory.id] ? "▼" : "▶"}</span></span></button></h3> : <><h3>{territory.label}</h3><span>{territory.plots.length} Grundstücke</span></>}</header>
           <div id={`plot-territory-content-${territory.id}`} hidden={(territory.id === "inside" || territory.id === "outside") && !expandedTerritories[territory.id]}>
           {!territory.plots.length ? <p>Keine Grundstücke in diesem Bereich für den aktuellen Filter.</p> : null}
-          <div className="plot-region-groups">{territory.groups.map((group) => <section key={group.label}><header><b>{group.label}</b><span>{group.plots.length} Grundstücke</span></header><div>{group.plots.map((plot) => {
+          <div className="plot-region-groups">{territory.groups.map((group) => <section key={group.label}><header><button type="button" className="plot-territory-toggle" aria-expanded={expandedTerritories[`group:${territory.id}:${group.label}`] !== false} aria-controls={`plot-group-${territory.id}-${encodeURIComponent(group.label)}`} onClick={() => toggleTerritory(`group:${territory.id}:${group.label}`)}><b>{group.label}</b><span>{group.plots.length} Grundstücke · {expandedTerritories[`group:${territory.id}:${group.label}`] === false ? "▶" : "▼"}</span></button></header><div id={`plot-group-${territory.id}-${encodeURIComponent(group.label)}`} hidden={expandedTerritories[`group:${territory.id}:${group.label}`] === false}>{group.plots.map((plot) => {
           const listingCount = selectionMeta[plot.id]?.listingCount || 0;
           const appearance = plotListingCountAppearance(listingCount);
           const address = plotAddressSelection(plot);
@@ -588,6 +625,7 @@ export default function PlotManagement({
               <label className="field"><span>Ort</span><input value={draft.city} onChange={(event) => setDraft({ ...draft, city: event.target.value })} /></label>
               <label className="field"><span>Grundstücksgröße</span><div className="input-shell"><input type="number" min={0} value={draft.plotSizeSqm || ""} onChange={(event) => setDraft({ ...draft, plotSizeSqm: Number(event.target.value) || 0 })} /><i>m²</i></div></label>
               <label className="field"><span>Kaufpreis</span><div className="input-shell"><input type="number" min={0} value={draft.purchasePrice || ""} onChange={(event) => setDraft({ ...draft, purchasePrice: Number(event.target.value) || 0 })} /><i>€</i></div></label>
+              <label className="field field-wide plot-exclusive-field"><span><input type="checkbox" checked={draft.exclusiveOutsideTerritory === true} onChange={event => setDraft({ ...draft, exclusiveOutsideTerritory: event.target.checked })} /> Exklusiv / außerhalb des Suchgebietes behalten</span></label>
               <label className="field field-wide"><span>Regionale Grundnotizen · optional</span><textarea rows={3} value={draft.regionalNotes} placeholder="Nur geprüfte Ortsfakten, z. B. seenreich, ruhig, Nähe zu Potsdam" onChange={(event) => setDraft({ ...draft, regionalNotes: event.target.value })} /></label>
             </div>
             <div className="plot-pdf-section"><div><span className="eyebrow">Vermarktungsvariante</span><h3>Pool B</h3><p>Automatisch: +2 m², Hausnummer +2 und +1.350 €. Sonderhausnummern bleiben zur Prüfung offen.</p></div>

@@ -74,6 +74,7 @@ export function normalizePlotRecord(value, options = {}) {
     createdAt: safeIsoDate(value?.createdAt ?? value?.created_at, now),
     updatedAt: safeIsoDate(value?.updatedAt ?? value?.updated_at, now),
     isActive: value?.isActive !== false && value?.is_active !== false,
+    ...(Object.hasOwn(value || {}, "exclusiveOutsideTerritory") ? { exclusiveOutsideTerritory: value?.exclusiveOutsideTerritory === true } : {}),
     addressRotation: value?.addressRotation || undefined,
     masterSync: value?.masterSync || undefined,
   };

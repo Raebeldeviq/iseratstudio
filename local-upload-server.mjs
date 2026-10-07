@@ -49,6 +49,7 @@ import {
   readPlotExpose,
 } from "./plot-expose-store.mjs";
 import { createPlotSyncService } from "./plot-sync-service.mjs";
+import { createActivePlotCatalogService } from "./plot-active-catalog-service.mjs";
 import { createPlotMasterService } from "./plot-master-service.mjs";
 import { buildImportPackage } from "./app/lib/openimmo.ts";
 import { createUploadJobId } from "./batch-upload.mjs";
@@ -139,6 +140,7 @@ const uploadJobLedger = createUploadJobLedger(UPLOAD_JOB_LEDGER_PATH);
 const plotDailyUploadGuard = createPlotDailyUploadGuard(PLOT_DAILY_UPLOAD_GUARD_PATH);
 const plotSyncService = createPlotSyncService();
 const plotMasterService = createPlotMasterService();
+const activePlotCatalogService = createActivePlotCatalogService();
 const catalogStateStore = createCatalogStateStore();
 
 async function reconcileCompletedManualBatchTransfer(uploadJob, completedJob) {
@@ -726,11 +728,13 @@ const server = createServer(async (request, response) => {
   const isPlotSyncRun = request.method === "POST" && pathname === "/plot-sync/run";
   const isPlotSyncSchedule = request.method === "POST" && pathname === "/plot-sync/schedule";
   const isPlotSyncLog = request.method === "GET" && pathname === "/plot-sync/log";
+  const isActivePlotCatalogPreview = request.method === "GET" && pathname === "/plot-active-catalog/preview";
+  const isActivePlotCatalogApply = request.method === "POST" && pathname === "/plot-active-catalog/apply";
   const isPlotMasterPreview = request.method === "GET" && pathname === "/plot-master/preview";
   const isPlotMasterApply = request.method === "POST" && pathname === "/plot-master/apply";
   const isMailRuntimeProbe = request.method === "POST" && pathname === "/mail-runtime/probe";
   const isExactProductionDelete = request.method === "POST" && pathname === EXACT_PRODUCTION_DELETE_PATH;
-  if (!isPlotSyncSchedule && !isHealth && !isRuntimeProvenance && !isUpload && !isBinaryUpload && !isManualBatchResumption && !isLocalSave && !isTextGeneration && !isImageCaptionGeneration && !isOpenAiKeyValidation && !isCredentialLoad && !isCredentialSave && !isCatalogLoad && !isCatalogSave && !isCatalogV2Start && !isCatalogV2ImageSave && !isCatalogV2Commit && !isCatalogV2ManifestLoad && !isCatalogV2ImageLoad && !isMediaLibraryList && !isMediaLibrarySequence && !isMediaLibraryImage && !isPlotExposeAnalyze && !isPlotExposeCommit && !isPlotExposeLoad && !isPlotExposeArchive && !isPlotSyncStatus && !isPlotSyncRun && !isPlotSyncLog && !isPlotMasterPreview && !isPlotMasterApply && !isMailRuntimeProbe && !isExactProductionDelete) {
+  if (!isActivePlotCatalogPreview && !isActivePlotCatalogApply && !isPlotSyncSchedule && !isHealth && !isRuntimeProvenance && !isUpload && !isBinaryUpload && !isManualBatchResumption && !isLocalSave && !isTextGeneration && !isImageCaptionGeneration && !isOpenAiKeyValidation && !isCredentialLoad && !isCredentialSave && !isCatalogLoad && !isCatalogSave && !isCatalogV2Start && !isCatalogV2ImageSave && !isCatalogV2Commit && !isCatalogV2ManifestLoad && !isCatalogV2ImageLoad && !isMediaLibraryList && !isMediaLibrarySequence && !isMediaLibraryImage && !isPlotExposeAnalyze && !isPlotExposeCommit && !isPlotExposeLoad && !isPlotExposeArchive && !isPlotSyncStatus && !isPlotSyncRun && !isPlotSyncLog && !isPlotMasterPreview && !isPlotMasterApply && !isMailRuntimeProbe && !isExactProductionDelete) {
     send(response, 404, { ok: false, message: "Nicht gefunden." }, origin);
     return;
   }
@@ -891,8 +895,17 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (isActivePlotCatalogPreview) {
+      send(response, 200, { ok: true, ...(await activePlotCatalogService.preview()) }, origin);
+      return;
+    }
+    if (isActivePlotCatalogApply) {
+      send(response, 200, { ok: true, ...(await activePlotCatalogService.apply(await readJson(request))) }, origin);
+      return;
+    }
+
     if (isPlotSyncStatus) {
-      send(response, 200, { ok: true, ...(await plotSyncService.loadStatus()) }, origin);
+      send(response, 200, { ok: true, ...(await plotSyncService.loadStatus()), activeCatalog: await activePlotCatalogService.source() }, origin);
       return;
     }
 

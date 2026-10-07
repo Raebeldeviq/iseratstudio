@@ -215,6 +215,9 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
 .plot-territory-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 3px; }
 .plot-territory-toggle-meta { display: inline-flex; align-items: center; gap: 0.7rem; white-space: nowrap; font-size: 0.85rem; font-weight: 400; }
 .plot-territory-chevron { display: inline-block; width: 1em; color: var(--ink) !important; font-size: 0.7rem; text-align: center; }
+.plot-exclusive-field input { width: auto; margin-right: 0.4rem; }
+.plot-inactive-editor { max-width: 720px; margin: 0.8rem 0; }
+.plot-import-preview details { margin: 0.75rem 0; max-height: 320px; overflow: auto; }
 .plot-territory-section.outside { border-top: 2px solid var(--line); padding-top: 0.75rem; }
 .plot-region-groups > section { overflow: hidden; border: 1px solid var(--line); border-radius: 12px; }
 .plot-region-groups > section > header { position: sticky; top: 0; z-index: 1; display: flex; justify-content: space-between; padding: 0.65rem 0.8rem; background: #edf4e5; }

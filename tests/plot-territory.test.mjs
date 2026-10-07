@@ -108,13 +108,14 @@ async function renderPlots(plots, overrides = {}) {
     plots, selectedPlotIds: [], defaultOwner: "pascal", helperOnline: true,
     helperRequest: () => { throw Error("No requests during render"); }, linkedProjectCounts: {},
     selectionMeta: Object.fromEntries(plots.map((p) => [p.id, { regionLabel: "Gleicher Landkreis", listingCount: 1, uploadDate: "" }])),
-    syncStatus: { territory, config: {} }, syncBusy: false, onSelectionChange: () => {}, onSave: () => {}, onDelete: () => { throw Error("No deletion"); }, onSync: () => {}, onScheduleChange: () => {}, ...overrides,
+    catalogPolicy: { version: 1, approvedAt: "2026-10-07T12:00:00Z", legacyPlotIds: plots.map(p => p.id) },
+    syncStatus: { territory, activeCatalog: { available: true, territory, masterPlots: plots }, config: {} }, syncBusy: false, onSelectionChange: () => {}, onSave: () => {}, onDelete: () => { throw Error("No deletion"); }, onSync: () => {}, onScheduleChange: () => {}, ...overrides,
   }));
 }
 
-test("render separates same county into inside then outside, PLZ ascending in each; outside checkbox enabled", async () => {
-  const html = await renderPlots([plot("outside-high", "99999"), plot("inside-high", "14469"), plot("outside-low", "10116"), plot("inside-low", "10115")]);
-  assert.ok(html.indexOf('aria-label="Im eigenen PLZ-Gebiet"') < html.indexOf('aria-label="Außerhalb des eigenen PLZ-Gebiets"'));
+test("render separates master plots and explicit exclusives into two areas with enabled checkboxes", async () => {
+  const html = await renderPlots([plot("outside-high", "99999", { exclusiveOutsideTerritory: true }), plot("inside-high", "14469"), plot("outside-low", "10116", { exclusiveOutsideTerritory: true }), plot("inside-low", "10115")]);
+  assert.ok(html.indexOf('aria-label="Im eigenen Suchgebiet"') < html.indexOf('aria-label="Exklusiv / außerhalb des Suchgebietes"'));
   assert.ok(html.indexOf("Teststraße inside-low") < html.indexOf("Teststraße inside-high"));
   assert.ok(html.indexOf("Teststraße inside-high") < html.indexOf("Teststraße outside-low"));
   assert.ok(html.indexOf("Teststraße outside-low") < html.indexOf("Teststraße outside-high"));
@@ -141,7 +142,7 @@ test("plot cards omit platform upload without losing pools, listing count or act
 
 test("offline rendering never reuses stale territory; private addresses remain excluded", async () => {
   const html = await renderPlots([plot("public", "10115"), plot("hidden", "14469", { street: "Adresse nicht öffentlich angegeben" })], { helperOnline: false });
-  assert.match(html, /aria-label="Gebietszuordnung nicht verfügbar"/);
-  assert.doesNotMatch(html, /aria-label="Im eigenen PLZ-Gebiet"/);
+  assert.match(html, /Master-Datei und Suchgebiet werden geprüft/);
+  assert.doesNotMatch(html, /<article class="plot-selection-card/);
   assert.doesNotMatch(html, /Adresse nicht öffentlich angegeben/);
 });

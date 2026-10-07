@@ -1,4 +1,4 @@
-// Display-only territory membership. Never controls publication or deletion.
+// Shared Suchgebiet membership; classification never deletes records or portal objects.
 const text = (value) => String(value ?? "").trim();
 const header = (value) => text(value).toLocaleLowerCase("de-DE").replace(/\s+/gu, "");
 
@@ -22,6 +22,16 @@ export function parseTerritoryPostalCodes(rows) {
   }
   if (!codes.size) throw new Error("Keine aktiven PLZ im Suchgebiet.");
   return [...codes].sort();
+}
+
+export function parseTerritoryRegions(rows) {
+  const codes = new Set(parseTerritoryPostalCodes(rows));
+  const headers = rows[0].map(header);
+  const zipIndex = headers.findIndex(value => value === "postleitzahl" || value === "plz");
+  const regionIndex = headers.indexOf("region");
+  if (regionIndex < 0) return {};
+  return Object.fromEntries(rows.slice(1).filter(row => codes.has(text(row[zipIndex]).padStart(5, "0")))
+    .map(row => [text(row[zipIndex]).padStart(5, "0"), text(row[regionIndex])]));
 }
 
 /** @template T @param {T[]} plots @param {{available?: boolean, postalCodes?: string[]}|null|undefined} territory */

@@ -1,3 +1,5 @@
+import { operationalCatalogPlots } from "./plot-active-catalog.mjs";
+
 export function plotListingCountAppearance(value) {
   const count = Math.max(0, Math.trunc(Number(value) || 0));
   return {
@@ -25,13 +27,13 @@ export function plotAddressSelection(plot) {
     houseNumberUnconfirmed:!number || /^0+$/u.test(number)};
 }
 
-export function selectablePlotIds(plots, requestedIds) {
-  const eligible = new Set((plots || []).filter(plot => plotAddressSelection(plot).selectable).map(plot => plot.id));
+export function selectablePlotIds(plots, requestedIds, context) {
+  const eligible = new Set(operationalCatalogPlots(plots || [], context).filter(plot => plotAddressSelection(plot).selectable).map(plot => plot.id));
   return [...new Set((requestedIds || []).filter(id => eligible.has(id)))];
 }
 
-export function selectablePlotProjects(plots, projects) {
-  const eligible = new Set((plots || []).filter(plot => plotAddressSelection(plot).selectable).map(plot => plot.id));
+export function selectablePlotProjects(plots, projects, context) {
+  const eligible = new Set(operationalCatalogPlots(plots || [], context).filter(plot => plotAddressSelection(plot).selectable).map(plot => plot.id));
   return (projects || []).filter(project => project.isActive !== false && (project.plotId
-    ? eligible.has(project.plotId) : plotAddressSelection(project).selectable));
+    ? eligible.has(project.plotId) : !context && plotAddressSelection(project).selectable));
 }

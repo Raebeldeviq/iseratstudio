@@ -8,6 +8,7 @@ export function readPlotTerritoryVisibility(storage) {
     return {
       inside: saved?.inside !== false,
       outside: saved?.outside !== false,
+      ...Object.fromEntries(Object.entries(saved || {}).filter(([key, value]) => key.startsWith("group:") && typeof value === "boolean")),
     };
   } catch {
     return { ...defaultPlotTerritoryVisibility };
@@ -15,8 +16,8 @@ export function readPlotTerritoryVisibility(storage) {
 }
 
 export function togglePlotTerritoryVisibility(current, territoryId) {
-  if (territoryId !== "inside" && territoryId !== "outside") return current;
-  return { ...current, [territoryId]: !current[territoryId] };
+  if (territoryId !== "inside" && territoryId !== "outside" && !territoryId.startsWith("group:")) return current;
+  return { ...current, [territoryId]: current[territoryId] === false };
 }
 
 export function savePlotTerritoryVisibility(storage, visibility) {
