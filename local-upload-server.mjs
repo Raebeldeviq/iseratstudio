@@ -56,7 +56,8 @@ import { createUploadJobId } from "./batch-upload.mjs";
 import { eligiblePromotionHeroImages } from "./listing-creative-selection.mjs";
 import { assertCreativePayload } from "./listing-creative-payload-guard.mjs";
 import { assertOpenImmoExternalIdsInArchive } from "./openimmo-external-id-guard.mjs";
-import { assertDeleteBatchUploadReady, confirmDeleteBatch, deleteBatchTrafficLight } from "./delete-batches.mjs";
+import { assertDeleteBatchUploadReady, confirmDeleteBatch, deleteBatchTrafficLight, linkDeleteBatchListings } from "./delete-batches.mjs";
+import { recordRefillDeletions, assertSmartRefillUploadReady } from "./smart-refill.mjs";
 import {
   assertProductionRuntime,
   loadHelperRuntimeProvenance,
@@ -990,6 +991,7 @@ const server = createServer(async (request, response) => {
       const catalogListing = uploadCatalog.projects?.find((project) => project.id === uploadJob.projectId)
         ?.listings?.find((listing) => listing.id === uploadJob.listingId);
       assertDeleteBatchUploadReady(uploadCatalog, catalogListing);
+      assertSmartRefillUploadReady(uploadCatalog, catalogListing);
       if (requiresPlotDailyUploadClaim(uploadJob.uploadOrigin)) {
         const context = await persistedUploadContext(uploadJob.projectId, uploadJob.listingId);
         plotDailyUploadClaim = await claimPlotDailyUpload({ ...context, uploadJob });
@@ -1144,7 +1146,7 @@ const server = createServer(async (request, response) => {
         const batch = deleteBatchTrafficLight(state).find((item) => item.id === batchId);
         if (!batch || batch.active.length !== expectedCount) throw new Error("Der Batch hat sich seit der Anzeige geändert. Bitte die Lösch-Ampel neu laden.");
         const confirmed = confirmDeleteBatch(state, batchId);
-        return { state: confirmed.state, result: { deletedCount: confirmed.deletedCount } };
+        return { state: recordRefillDeletions(linkDeleteBatchListings(state), confirmed.state), result: { deletedCount: confirmed.deletedCount } };
       });
       send(response, 200, { ok: true, savedAt: result.savedAt, deletedCount: result.result.deletedCount }, origin);
       return;

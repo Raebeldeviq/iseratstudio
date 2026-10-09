@@ -664,6 +664,7 @@ export type ImportReportReview = {
 };
 
 export type StudioState = {
+  smartRefill?: import("../smart-refill.mjs").SmartRefillState;
   interiorAssets?: HouseImage[];
   interiorSets?: Partial<Record<InteriorSetId, Partial<Record<InteriorRoomRole, string>>>>;
   interiorRotationLastSet?: InteriorSetId;

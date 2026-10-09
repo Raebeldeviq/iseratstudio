@@ -1,5 +1,19 @@
 # Änderungsprotokoll
 
+## Nachschub & Rotation – 9. Oktober 2026
+
+### Report
+
+Bestätigte Lösch-Batches geben dauerhaft nachvollziehbare Plätze frei. Automatische Kandidatenauswahl, vollständige Vierergruppen, fachliche Poolfreigabe, kurze Vorschau und manueller Sammelupload sind unter der Lösch-Ampel verbunden. Bestehende Erzeugung und Uploadpipeline werden wiederverwendet.
+
+### Begründung
+
+Reservierungen und Freigaben nutzen den vorhandenen Katalog samt Versionsprüfung. Historische Inserate bleiben erhalten; parallele Vorbereitung und wiederholte Übertragung werden durch Reservierungsprüfung und bestehendes Jobprotokoll abgesichert.
+
+### Hürden und Risiken
+
+Nur neue manuelle Löschbestätigungen erzeugen Plätze; frühere Bestätigungen werden nicht rückwirkend angerechnet. Unvollständige oder geschützte Zyklen bleiben gesperrt. Automatisch berechnete Pooldaten benötigen fachliche Prüfung. FTPS-Erfolg bleibt vom Portalimport getrennt. Details und Prüfungen: [Releasebericht](docs/releases/2026-10-09-smart-refill-v1.md).
+
 ## Unreleased · Plattform-Upload aus Grundstücksübersicht entfernt – 30. September 2026
 
 ### Report

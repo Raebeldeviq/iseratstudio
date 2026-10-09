@@ -804,3 +804,14 @@ input:focus, textarea:focus, select:focus { border-color: #91bc47; box-shadow: 0
 .interior-set-slot img, .interior-set-placeholder { width: 72px; height: 54px; object-fit: cover; border-radius: 6px; }
 .interior-set-slot label { display: grid; gap: 3px; min-width: 0; }
 .interior-set-slot input { max-width: 100%; font-size: 11px; }
+
+.smart-refill-panel { margin-top: 1rem; }
+.refill-summary { display: flex; flex-wrap: wrap; gap: 0.6rem 1.5rem; margin-bottom: 0.6rem; }
+.refill-summary > span { display: flex; align-items: baseline; gap: 0.4rem; color: var(--muted); font-size: 0.8rem; }
+.refill-summary b { color: var(--ink); font-size: 1.2rem; }
+.smart-refill-panel details { margin-top: 0.9rem; }
+.smart-refill-panel summary { cursor: pointer; font-weight: 650; }
+.refill-details { display: grid; gap: 0.6rem; margin-top: 0.6rem; }
+.refill-details > div { display: grid; gap: 0.25rem; padding: 0.65rem; border: 1px solid var(--line); border-radius: 8px; }
+.refill-details span, .refill-details small { color: var(--muted); font-size: 0.75rem; overflow-wrap: anywhere; }
+.refill-details button { justify-self: start; }

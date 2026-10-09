@@ -1,0 +1,18 @@
+import type { StudioState, PlotRecord, ProjectInput, HouseDistributionState, GeneratedListing } from "./app/types";
+export type RefillPool = "A" | "B";
+export type RefillFacts = { street: string; houseNumber: string; postalCode: string; city: string; plotSizeSqm: number; purchasePrice: number };
+export type RefillCredit = { id: string; batchId: string; projectId: string; listingId: string; externalId: string; deletedAt: string };
+export type RefillCycle = { id: string; plotId: string; projectId: string; pool: RefillPool; cycle: number; fingerprint: string; listingIds: string[]; creditIds: string[]; preparedAt: string };
+export type SmartRefillState = { version: 1; credits: RefillCredit[]; cycles: RefillCycle[]; poolApprovals: Array<{ plotId: string; pool: RefillPool; fingerprint: string; approvedAt: string }> };
+export type RefillCandidate = { plotId: string; projectId: string; label: string; pool: RefillPool; cycle: number; facts: RefillFacts; fingerprint: string; project: ProjectInput; priority: number; reason: string; houseIds: string[] };
+export type RefillBlocked = { plotId: string; label: string; pool: RefillPool; facts: RefillFacts; reason: string };
+export type RefillPlan = { released: number; free: number; reserved: number; activeCount: number; readyCount: number; remaining: number; availablePlotCount: number; candidates: RefillCandidate[]; blocked: RefillBlocked[]; availableCredits: RefillCredit[]; distribution: HouseDistributionState; preparedListingIds: string[]; cycles: RefillCycle[] };
+export function recordRefillDeletions(before: StudioState, after: StudioState): StudioState;
+export function refillPoolFacts(plot: PlotRecord, pool: RefillPool): RefillFacts;
+export function refillPoolFingerprint(plot: PlotRecord, pool: RefillPool): string;
+export function approveRefillPool(state: StudioState, plotId: string, pool: RefillPool, fingerprint: string, at?: string): StudioState;
+export function planSmartRefill(state: StudioState, options?: { now?: string; catalogContext?: unknown }): RefillPlan;
+export function prepareSmartRefill(state: StudioState, generate: (state: StudioState, projectIds: string[], distribution: HouseDistributionState) => StudioState, options?: { now?: string; catalogContext?: unknown }): StudioState;
+export function assertSmartRefillTransition(current: StudioState, next: StudioState): void;
+export function assertSmartRefillUploadReady(state: StudioState, listing: GeneratedListing): void;
+export function createSmartRefillUploadPlan(state: StudioState, options?: object): { projectIds: string[]; excludedListingIds: string[]; plan: ReturnType<typeof import("./batch-upload.mjs").createBatchUploadPlan> };

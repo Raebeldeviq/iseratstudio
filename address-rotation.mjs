@@ -62,7 +62,7 @@ export function mergeAddressPools(plots, poolA, poolB) {
   });
 }
 
-export function addressRotationStatus(state, plotId) {
+export function addressRotationStatus(state, plotId, options = {}) {
   const plot = (state.plots || []).find((item) => item.id === plotId);
   const rotation = plot?.addressRotation;
   if (!rotation) return { state: "unconfigured", currentPool: "", nextPool: "", remaining: 0, cycle: 0 };
@@ -71,13 +71,13 @@ export function addressRotationStatus(state, plotId) {
   const nextAddress = nextPool === "A" ? rotation.poolA : rotation.poolB;
   const readyPair = Boolean(rotation.poolA && rotation.poolB && rotation.poolB.houseNumber
     && rotation.poolBDetails?.status !== "POOL_B_PRÜFEN");
-  if (!currentPool) return { state: readyPair ? "ready" : "incomplete", currentPool, nextPool, remaining: 0, cycle: 0 };
+  if (!currentPool) return { state: readyPair || (options.initialPoolAOnly === true && rotation.poolA) ? "ready" : "incomplete", currentPool, nextPool, remaining: 0, cycle: 0 };
   const ids = rotation.listingIds || [];
   const project = (state.projects || []).find((item) => item.plotId === plotId);
   const entries = (state.deleteBatches || []).flatMap((batch) => batch.entries || []);
   const remaining = ids.filter((id) => {
     const listing = project?.listings?.find((item) => item.id === id);
-    const entry = entries.find((item) => item.listingId === id);
+    const entry = entries.find((item) => item.listingId === id && item.externalId === listing?.externalId && item.status !== "void");
     const control = project?.listingGroup?.listingControls?.find((item) => item.listingId === id);
     return !listing || !entry || entry.status !== "deleted" || control?.premiumPlacement || (control?.manualLock && listing.status !== "deleted");
   }).length;
@@ -85,8 +85,8 @@ export function addressRotationStatus(state, plotId) {
     currentPool, nextPool, remaining, cycle: Number(rotation.cycle) || 0 };
 }
 
-export function snapshotAddressRotation(state, plotId, listings, at = new Date().toISOString()) {
-  const status = addressRotationStatus(state, plotId);
+export function snapshotAddressRotation(state, plotId, listings, at = new Date().toISOString(), options = {}) {
+  const status = addressRotationStatus(state, plotId, options);
   if (status.state !== "ready" || listings.length !== 4) throw new Error("Für den nächsten Adresszyklus fehlen die Freigabe oder vier Hausinserate.");
   if (new Set(listings.map((listing) => listing.id)).size !== 4
     || listings.some((listing) => (state.plots.find((plot) => plot.id === plotId)?.addressRotation?.listingIds || []).includes(listing.id))) {

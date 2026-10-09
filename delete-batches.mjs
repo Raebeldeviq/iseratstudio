@@ -124,6 +124,15 @@ export function linkDeleteBatchListings(state) {
   return reconcileDeleteBatchProtections(linked);
 }
 
+export function deleteBatchesNeedReplan(state, listingIds, uploadDate = calendarDate()) {
+  const ids = new Set(listingIds);
+  const current = new Map((state.projects || []).flatMap(project => project.listings || [])
+    .filter(listing => ids.has(listing.id)).map(listing => [listing.id, listing.externalId]));
+  return batches(state).some(batch => batch.entries.some(entry => current.has(entry.listingId)
+    && current.get(entry.listingId) === entry.externalId
+    && (entry.status === "void" || (entry.status === "planned" && entry.uploadDate !== uploadDate))));
+}
+
 export function replanDeleteBatchesForUpload(state, listingIds, uploadDate = calendarDate()) {
   let next = linkDeleteBatchListings(state);
   const ids = new Set(listingIds);

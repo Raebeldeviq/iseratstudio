@@ -2,7 +2,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { INTERIOR_SET_IDS, INTERIOR_SET_ROLES, interiorSetStatus, assignNewInteriorListings, listingInteriorImages } from "../interior-sets.mjs";
-import { ChangeEvent, useEffect, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { AI_MODEL_OPTIONS, DEFAULT_AI_MODEL } from "../ai-models.mjs";
 import { isDraftListing, mergeListingCollection } from "../listing-catalog-view.mjs";
 import { filterManagedListingsByObjectNumber } from "../listing-manager-view.mjs";
@@ -47,7 +47,6 @@ import {
   recordListingGroupFailure,
   releaseListingOperation,
   replaceListingGroupVariantListing,
-  setListingGroupVariantActive,
   updateListingControl,
   validateListingGroupVariant,
 } from "../listing-groups.mjs";
@@ -75,6 +74,10 @@ import {
   STATIC_COPY_FIELD,
   STATIC_COPY_SOURCE,
 } from "../listing-copy.mjs";
+import { createVariantListing, existingOrAllocatedExternalId, prepareProjectListings } from "./lib/listing-preparation";
+import { approveRefillPool, createSmartRefillUploadPlan, planSmartRefill, prepareSmartRefill, refillPoolFingerprint } from "../smart-refill.mjs";
+import type { RefillPool } from "../smart-refill.mjs";
+import SmartRefillPanel from "./components/SmartRefillPanel";
 import PlotManagement from "./components/PlotManagement";
 import { workspaceProject } from "./lib/workspace-selection";
 import { APP_VERSION } from "./lib/app-version.mjs";
@@ -90,7 +93,6 @@ import {
   normalizePromotionLibrary as normalizePromotionLibraryValue,
 } from "../promotion-images.mjs";
 import {
-  commitHouseDistributionPreviews,
   generateWeightedDistribution,
   generateWeightedProjectPreview,
   HOUSES_PER_PROJECT,
@@ -112,9 +114,8 @@ import {
   plotFromProject,
 } from "../plot-records.mjs";
 import { latestResetListingFacts, resetPlotListings } from "../plot-listing-reset.mjs";
-import { isHvObjectNumber } from "../object-number-sequence.mjs";
-import { allocateDeleteBatchNumber, calendarDate, deleteBatchTrafficLight, linkDeleteBatchListings, reconcileDeleteBatchProtections, replanDeleteBatchesForUpload } from "../delete-batches.mjs";
-import { addressRotationStatus, snapshotAddressRotation } from "../address-rotation.mjs";
+import { allocateDeleteBatchNumber, calendarDate, deleteBatchTrafficLight, linkDeleteBatchListings, reconcileDeleteBatchProtections, deleteBatchesNeedReplan, replanDeleteBatchesForUpload } from "../delete-batches.mjs";
+import { addressRotationStatus } from "../address-rotation.mjs";
 import { normalizeWorkflowStatus, workflowStatusLabel, WORKFLOW_STATUS } from "../workflow-status.mjs";
 import {
   formatClaimIssue,
@@ -148,7 +149,6 @@ import type {
   PlotRecord,
   ProjectInput,
   SchedulerSettings,
-  ProviderSettings,
   StudioState,
 } from "./types";
 
@@ -288,62 +288,6 @@ const uid = () => crypto.randomUUID();
 const newHouse = (index = 1): HouseTemplate => createEmptyHouse(index) as HouseTemplate;
 const newProject = (owner: AddressOwner = "fabian"): ProjectInput => createEmptyProject(owner) as ProjectInput;
 const initialState = (): StudioState => createInitialStudioState() as StudioState;
-
-function createVariantListing(
-  house: HouseTemplate,
-  project: ProjectInput,
-  provider: ProviderSettings,
-  variantId: string,
-  order: number,
-  previous?: GeneratedListing | null,
-  allocatedExternalId = "",
-  preservedListingFacts: GeneratedListing["listingFacts"] = [],
-): GeneratedListing {
-  // Bestehende Texte bleiben Bestandsdaten. Eine Neugenerierung erfolgt nur
-  // auf ausdrückliche Nutzeraktion und nie während der Normalisierung.
-  if (previous && !isDraftListing(previous)) return { ...previous };
-  const version = Math.max(1, previous?.version || 1);
-  const persistedExternalId = String(previous?.externalId || "").trim();
-  const externalId = isHvObjectNumber(persistedExternalId)
-    ? persistedExternalId
-    : String(allocatedExternalId || "").trim();
-  if (!isHvObjectNumber(externalId)) {
-    throw new Error("Für das neue Inserat fehlt eine gültige externe Objektnummer 30460-N.");
-  }
-  return initializeListingStaticCopy({
-    ...previous,
-    id: previous?.id || uid(),
-    externalId,
-    templateId: house.id,
-    templateName: house.name,
-    price: totalPrice(house, project),
-    listingFacts: previous?.listingFacts || preservedListingFacts,
-    texts: completeListingTexts(
-      house,
-      project,
-      provider,
-      previous?.texts,
-      version,
-    ),
-    version,
-    status: normalizeWorkflowStatus(previous?.status, WORKFLOW_STATUS.DRAFT),
-    statusMessage: previous?.statusMessage || "Entwurf",
-    projectingSettings: fillMissingProjectingDefaults(previous?.projectingSettings),
-    listingGroupVariantId: variantId,
-    listingOrigin: previous?.listingOrigin || "group-source",
-  });
-}
-
-function existingOrAllocatedExternalId(
-  previous: GeneratedListing | null | undefined,
-  allocate: (position: number, projectId: string) => string,
-  position: number,
-  projectId: string,
-): string {
-  const existing = String(previous?.externalId || "").trim();
-  if (previous && !isDraftListing(previous)) return existing;
-  return isHvObjectNumber(existing) ? existing : allocate(position, projectId);
-}
 
 function normalizeMandatoryListingStandards(inputState: StudioState): StudioState {
   const state = cleanupStudioState(inputState, { apply: true }).state as StudioState;
@@ -820,6 +764,9 @@ export default function InseratStudio() {
   const [tab, setTab] = useState<Tab>("plots");
   const [today, setToday] = useState(() => calendarDate());
   const [state, setState] = useState<StudioState>(initialState);
+  const [refillBusy, setRefillBusy] = useState(false);
+  const refillOperation = useRef(false);
+  const refillPlan = useMemo(() => planSmartRefill(state), [state]);
   const [ready, setReady] = useState(false);
   const [catalogLoadError, setCatalogLoadError] = useState("");
   const [saveLabel, setSaveLabel] = useState("Lokaler Speicher wird vorbereitet …");
@@ -943,16 +890,17 @@ export default function InseratStudio() {
     if (!helperOnline || !ready) return;
     let cancelled = false;
     const refresh = async () => {
+      if (refillOperation.current) return;
       try {
         const response = await helperFetch("/plot-sync/status");
         const data = await response.json() as PlotSyncStatus & { ok?: boolean; message?: string };
         if (!response.ok || !data.ok) throw new Error(data.message || "Synchronisationsstatus ist nicht verfügbar.");
-        if (cancelled) return;
+        if (cancelled || refillOperation.current) return;
         setPlotSyncStatus(data);
         setState(current => rememberActiveCatalogSource(current, data.activeCatalog));
         if (data.catalogSavedAt && data.catalogSavedAt !== knownDeviceCatalogSavedAt) {
           const snapshot = await loadDeviceCatalogSnapshot();
-          if (cancelled || !snapshot || snapshot.savedAt !== data.catalogSavedAt) return;
+          if (cancelled || refillOperation.current || !snapshot || snapshot.savedAt !== data.catalogSavedAt) return;
           acceptKnownDeviceCatalogSavedAt(snapshot.savedAt);
           const loaded = normalizeMandatoryListingStandards(normalizeProjectOwners(snapshot.state));
           setState(rememberActiveCatalogSource({ ...loaded, selectedPlotIds: selectablePlotIds(loaded.plots, loaded.selectedPlotIds) }, data.activeCatalog));
@@ -1060,7 +1008,7 @@ export default function InseratStudio() {
   }, [credentialsReady, helperOnline]);
 
   useEffect(() => {
-    if (!ready || isPrimaryTab !== true) return;
+    if (!ready || isPrimaryTab !== true || refillBusy) return;
     const timer = window.setTimeout(() => {
       const savedAt = new Date().toISOString();
       const saves: Promise<unknown>[] = [saveStudioState(state, savedAt)];
@@ -1072,7 +1020,7 @@ export default function InseratStudio() {
         .catch(() => setSaveLabel("Speichern fehlgeschlagen"));
     }, 450);
     return () => window.clearTimeout(timer);
-  }, [helperOnline, isPrimaryTab, ready, state]);
+  }, [helperOnline, isPrimaryTab, ready, state, refillBusy]);
 
   useEffect(() => {
     if (!ready) return;
@@ -2287,120 +2235,16 @@ export default function InseratStudio() {
         return;
       }
     }
-    const committed = commitHouseDistributionPreviews(
-      houseDistribution,
-      state.houses,
-      state.projects,
-      projectIds,
-    );
-    if (!committed.ok) {
-      setNotice(`Vorbereitung blockiert: ${committed.issues.join(" · ")} Bitte zuerst die gewichtete Vorschau erstellen und vollständig prüfen.`);
-      return;
+    try {
+      const prepared = prepareProjectListings(state, projectIds, houseDistribution,
+        project => enrichProjectWithPostalRegion(project, postalRegionIndex));
+      setState(prepared.state);
+      setBatchItemStatuses({});
+      setTab("preview");
+      setNotice(`${projectIds.length} Adressen mit ${prepared.preparedListings} Inseraten vorbereitet. Die Texte und Vorschauen sind bereit.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Vorbereitung fehlgeschlagen.");
     }
-    let stateWithObjectNumbers = state;
-    const allocateExternalId = (position: number, projectId: string) => {
-      const allocation = allocateDeleteBatchNumber(stateWithObjectNumbers, { housePosition: position, projectId });
-      stateWithObjectNumbers = allocation.state as StudioState;
-      return allocation.externalId;
-    };
-    const issues: string[] = [];
-    let preparedListings = 0;
-    const projects = state.projects.map((project) => {
-      if (!projectIds.includes(project.id)) return project;
-      const rotationStatus = project.plotId ? addressRotationStatus(state, project.plotId) : null;
-      const rotationPlot = rotationStatus && rotationStatus.state === "ready"
-        ? state.plots?.find((plot) => plot.id === project.plotId) : null;
-      const rotationAddress = rotationStatus?.nextPool === "B"
-        ? rotationPlot?.addressRotation?.poolB : rotationPlot?.addressRotation?.poolA;
-      const projectForCycle = rotationAddress
-        ? enrichProjectWithPostalRegion({ ...project, street: rotationAddress.street, houseNumber: rotationAddress.houseNumber,
-          zip: rotationAddress.postalCode, city: rotationAddress.city, district: "", federalState: "", county: "" }, postalRegionIndex)
-        : project;
-      let group = normalizeListingGroup(project.listingGroup, project.id) as ListingGroup;
-      const templateIds = committed.distribution.projects
-        .find((record: { projectId: string }) => record.projectId === project.id)
-        ?.activeHouseIds || [];
-      if (templateIds.length !== HOUSES_PER_PROJECT) {
-        issues.push(`${project.name}: keine vollständige Vierer-Kombination`);
-        return project;
-      }
-      while (group.variants.length < HOUSES_PER_PROJECT) {
-        group = addListingGroupVariant(group) as ListingGroup;
-      }
-      for (let index = HOUSES_PER_PROJECT; index < group.variants.length; index += 1) {
-        group = setListingGroupVariantActive(group, group.variants[index].id, false) as ListingGroup;
-      }
-      for (let index = 0; index < HOUSES_PER_PROJECT; index += 1) {
-        const house = state.houses.find((item) => item.id === templateIds[index] && item.approved !== false);
-        if (!house) {
-          issues.push(`${project.name}: Haustyp ${templateIds[index]} fehlt oder ist nicht freigegeben`);
-          continue;
-        }
-        const variant = group.variants[index];
-        const previous = rotationAddress ? null : project.listings.find((listing) =>
-          listing.templateId === house.id && listing.listingOrigin !== "rotation-copy")
-          || (variant.templateId === house.id ? variant.listing : null)
-          || null;
-        group = assignListingGroupVariant(
-          group,
-          index + 1,
-          house,
-          createVariantListing(
-            house,
-            projectForCycle,
-            state.provider,
-            variant.id,
-            index + 1,
-            previous,
-            existingOrAllocatedExternalId(previous, allocateExternalId, index + 1, project.id),
-            latestResetListingFacts(state, project.id, house.id),
-          ),
-        ) as ListingGroup;
-      }
-      const sourceListings = group.variants
-        .filter((variant) => variant.active && variant.listing)
-        .slice(0, HOUSES_PER_PROJECT)
-        .map((variant) => variant.listing as GeneratedListing);
-      const mergedListings = mergeListingCollection(project.listings, sourceListings);
-      preparedListings += sourceListings.length;
-      return {
-        ...projectForCycle,
-        selectedHouseIds: group.variants
-          .filter((variant) => variant.active && variant.templateId)
-          .slice(0, HOUSES_PER_PROJECT)
-          .map((variant) => variant.templateId),
-        listings: mergedListings,
-        listingGroup: group,
-      };
-    });
-    let preparedState = linkDeleteBatchListings({
-      ...stateWithObjectNumbers,
-      projects,
-      houseDistribution: committed.distribution as HouseDistributionState,
-    }) as StudioState;
-    for (const projectId of projectIds) {
-      const project = preparedState.projects.find((item) => item.id === projectId);
-      if (!project?.plotId || !preparedState.plots?.find((plot) => plot.id === project.plotId)?.addressRotation) continue;
-      const activeListings = project.listingGroup?.variants.filter((variant) => variant.active && variant.listing)
-        .slice(0, HOUSES_PER_PROJECT).map((variant) => variant.listing as GeneratedListing) || [];
-      const cycle = snapshotAddressRotation(preparedState, project.plotId, activeListings);
-      const byId = new Map<string, GeneratedListing>(cycle.listings.map((listing: GeneratedListing) => [listing.id, listing]));
-      preparedState = {
-        ...preparedState,
-        plots: preparedState.plots?.map((plot) => plot.id === project.plotId ? { ...plot, addressRotation: cycle.rotation } : plot),
-        projects: preparedState.projects.map((item) => item.id !== projectId ? item : {
-          ...item,
-          listings: item.listings.map((listing) => byId.get(listing.id) || listing),
-          listingGroup: item.listingGroup ? { ...item.listingGroup,
-            variants: item.listingGroup.variants.map((variant) => variant.listing && byId.has(variant.listing.id)
-              ? { ...variant, listing: byId.get(variant.listing.id) as GeneratedListing } : variant) } : item.listingGroup,
-        }),
-      };
-    }
-    setState(assignNewInteriorListings(state, preparedState) as StudioState);
-    setBatchItemStatuses({});
-    setTab("preview");
-    setNotice(`${projectIds.length} Adresse${projectIds.length === 1 ? " wurde" : "n wurden"} mit gewichteter Vierer-Verteilung vorbereitet · ${preparedListings} Inserate mit Standardwerten und Bildern.${issues.length ? ` ${issues.length} Adresse(n) benötigen Nacharbeit: ${issues.slice(0, 2).join(" · ")}` : " Die Texte und Vorschauen sind bereit."}`);
   };
 
   const updateScheduler = (patch: Partial<SchedulerSettings>) => {
@@ -2981,8 +2825,26 @@ export default function InseratStudio() {
     }
   };
 
-  const uploadPackage = async () => {
-    if (!batchPlan.totalListings) {
+  const uploadPackage = async (refillOnly = false) => {
+    if (refillOperation.current || uploading) return;
+    refillOperation.current = true;
+    setRefillBusy(true);
+    try {
+      await performUploadPackage(refillOnly);
+    } finally {
+      refillOperation.current = false;
+      setRefillBusy(false);
+    }
+  };
+
+  const performUploadPackage = async (refillOnly: boolean) => {
+    let scope;
+    try { scope = refillOnly ? createSmartRefillUploadPlan(state, { promotionOverrides }) : null; }
+    catch (error) { setNotice(error instanceof Error ? error.message : "Nachschubupload gesperrt."); return; }
+    const uploadPlan = scope?.plan || batchPlan;
+    const uploadProjectIds = scope?.projectIds || effectiveBatchProjectIds;
+    const uploadExcludedIds = scope?.excludedListingIds || excludedUploadIds;
+    if (!uploadPlan.totalListings) {
       setNotice("Bitte mindestens ein Inserat für den Upload auswählen.");
       return;
     }
@@ -2994,11 +2856,12 @@ export default function InseratStudio() {
       setNotice("Der lokale Upload-Helfer ist nicht erreichbar. Bitte die Anwendung über den Startknopf öffnen.");
       return;
     }
-    const uploadListingIds = (batchPlan.addresses as Array<{ items: Array<{ listingId: string }> }>)
+    try { await queueDeviceCatalogSnapshot(state, new Date().toISOString()); }
+    catch (error) { setNotice(error instanceof Error ? error.message : "Der Uploadstand konnte nicht gespeichert werden."); return; }
+    const uploadListingIds = (uploadPlan.addresses as Array<{ items: Array<{ listingId: string }> }>)
       .flatMap((address) => address.items.map((item) => item.listingId));
     const uploadDay = calendarDate();
-    const needsReplan = (state.deleteBatches || []).some((batch) => batch.entries.some((entry) =>
-      uploadListingIds.includes(entry.listingId) && (entry.status === "void" || (entry.status === "planned" && entry.uploadDate !== uploadDay))));
+    const needsReplan = deleteBatchesNeedReplan(state, uploadListingIds, uploadDay);
     if (needsReplan) {
       try {
         const updated = replanDeleteBatchesForUpload(state, uploadListingIds, uploadDay) as StudioState;
@@ -3012,12 +2875,12 @@ export default function InseratStudio() {
       }
       return;
     }
-    let runPlan = batchPlan;
+    let runPlan = uploadPlan;
     let protectedListingIds: string[] = [];
     try {
       const parameters = new URLSearchParams();
-      for (const projectId of effectiveBatchProjectIds) parameters.append("projectId", projectId);
-      for (const address of batchPlan.addresses as Array<{ items: Array<{ listingId: string; jobId: string }> }>) {
+      for (const projectId of uploadProjectIds) parameters.append("projectId", projectId);
+      for (const address of uploadPlan.addresses as Array<{ items: Array<{ listingId: string; jobId: string }> }>) {
         for (const item of address.items) {
           parameters.append("listingId", item.listingId);
           parameters.append("jobId", item.jobId);
@@ -3028,14 +2891,14 @@ export default function InseratStudio() {
       if (!response.ok || !data.ok || !Array.isArray(data.protectedListingIds)) {
         throw new Error(data.message || "Der lokale Übertragungsstatus ist nicht verfügbar.");
       }
-      const resumed = createManualBatchResumptionPlan(state, effectiveBatchProjectIds, {
+      const resumed = createManualBatchResumptionPlan(state, uploadProjectIds, {
         jobs: data.protectedListingIds.map((listingId) => ({
           projectId: state.projects.find((project) => project.listings.some((listing) => listing.id === listingId))?.id || "",
           listingId,
           status: WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT,
         })),
       }, {
-        excludedListingIds: excludedUploadIds,
+        excludedListingIds: uploadExcludedIds,
         promotionOverrides,
       });
       runPlan = resumed.plan;
@@ -3196,12 +3059,54 @@ export default function InseratStudio() {
     }
   };
 
+  const runRefillAction = async (mutate: (current: StudioState) => StudioState, message: string) => {
+    if (refillOperation.current || uploading || !helperOnline) return;
+    refillOperation.current = true;
+    setRefillBusy(true);
+    try {
+      await queueDeviceCatalogSnapshot(state, new Date().toISOString());
+      const snapshot = await loadDeviceCatalogSnapshot();
+      if (!snapshot) throw new Error("Der aktuelle Katalog konnte nicht geladen werden.");
+      acceptKnownDeviceCatalogSavedAt(snapshot.savedAt);
+      const updated = mutate(snapshot.state);
+      const savedAt = new Date().toISOString();
+      if (updated !== snapshot.state) await queueDeviceCatalogSnapshot(updated, savedAt);
+      setState(updated);
+      await saveStudioState(updated, updated === snapshot.state ? snapshot.savedAt : savedAt);
+      setNotice(message);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Nachschub konnte nicht gespeichert werden.");
+    } finally {
+      refillOperation.current = false;
+      setRefillBusy(false);
+    }
+  };
+
+  const prepareRefill = () => runRefillAction(current => prepareSmartRefill(current,
+    (input, projectIds, distribution) => prepareProjectListings(input, projectIds, distribution,
+      project => enrichProjectWithPostalRegion(project, postalRegionIndex), { initialPoolAOnly: true }).state),
+  "Nachschub dauerhaft vorbereitet. Bitte die Vorschau prüfen und den Sammelupload ausdrücklich starten.");
+
+  const approveRefillFacts = (plotId: string, pool: RefillPool) => {
+    const plot = state.plots?.find(item => item.id === plotId);
+    const candidate = refillPlan.blocked.find(item => item.plotId === plotId);
+    if (!plot || !candidate) return;
+    const facts = candidate.facts;
+    if (!window.confirm(`Pool ${pool}: ${facts.street} ${facts.houseNumber}, ${facts.postalCode} ${facts.city} · ${facts.plotSizeSqm} m² · ${euro(facts.purchasePrice)}.\n\nIch bestätige, dass diese Adresse, Fläche und dieser Preis fachlich geprüft und zutreffend sind. Automatisch berechnete Werte allein sind keine reale Grundstücksgrundlage.`)) return;
+    const fingerprint = refillPoolFingerprint(plot, pool);
+    void runRefillAction(current => approveRefillPool(current, plotId, pool, fingerprint), "Die angezeigten Pooldaten sind für den Nachschub freigegeben. Jede Datenänderung erfordert eine neue Freigabe.");
+  };
+
   const markDeletionBatch = async (batchId: string) => {
+    if (refillOperation.current || uploading) return;
     const batch = deletionBatches.find((item) => item.id === batchId);
     if (!batch?.active.length) return;
     if (!helperOnline) { setNotice("Der lokale Helfer ist nicht erreichbar. Bitte die Anwendung über den Startknopf öffnen."); return; }
     if (!window.confirm(`Batch ${String(batch.number).padStart(3, "0")} mit ${batch.active.length} löschbaren Inseraten als gelöscht markieren?${batch.paused.length ? ` ${batch.paused.length} geschützte Inserate dürfen im Portal nicht gelöscht werden.` : ""}`)) return;
+    refillOperation.current = true;
+    setRefillBusy(true);
     try {
+      await queueDeviceCatalogSnapshot(state, new Date().toISOString());
       const response = await helperFetch("/delete-batches/confirm", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ batchId, expectedCount: batch.active.length }) });
       const result = await response.json() as { ok?: boolean; message?: string; savedAt?: string; deletedCount?: number };
       if (!response.ok || !result.ok) throw new Error(result.message || "Der Batch konnte nicht gespeichert werden.");
@@ -3213,7 +3118,7 @@ export default function InseratStudio() {
       setNotice(`Batch ${String(batch.number).padStart(3, "0")} mit ${result.deletedCount} Inseraten intern als gelöscht bestätigt. Es wurde keine Portalaktion ausgeführt.`);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Der Lösch-Batch konnte nicht bestätigt werden.");
-    }
+    } finally { refillOperation.current = false; setRefillBusy(false); }
   };
 
   const clearSavedCredentials = async () => {
@@ -3434,7 +3339,7 @@ export default function InseratStudio() {
   }
 
   return (
-    <main className="studio-shell">
+    <main className="studio-shell" inert={refillBusy || uploading}>
       <AppVersionBadge />
       {state.catalogRepairReview?.automaticProductionAllowed === false ? <section role="alert" className="notice"><strong>Produktionsschutz aktiv</strong><p>Die Oberfläche ist nutzbar. {state.catalogRepairReview.unresolved.length} historische Zuordnungen benötigen noch Originalbelege. Automatische Uploads und Löschungen bleiben gesperrt.</p></section> : null}
       <header className="topbar">
@@ -4097,12 +4002,15 @@ export default function InseratStudio() {
                     const listing = project?.listings.find((item) => item.id === entry.listingId);
                     return <div key={`${batch.id}-${entry.externalId}`}><b>{entry.externalId}</b><span>{entry.status === "paused" ? "Geschützt · nicht löschen" : entry.status === "deleted" ? "Gelöscht bestätigt" : "Löschbar"}</span><span>{listing?.addressSnapshot ? `Pool ${listing.addressSnapshot.pool} · Zyklus ${listing.addressSnapshot.cycle}` : project ? projectSelectionLabel(project) : "Adresse nicht mehr im Arbeitskatalog"}</span><span>{listing?.templateName || `Haus ${entry.housePosition}`}</span><span>Upload: {entry.uploadDate}</span><span>Löschung: {entry.plannedDeletionDate}</span></div>;
                   })}</div></details>
-                  {batch.active.length ? <button className="secondary" onClick={() => markDeletionBatch(batch.id)}>Batch als gelöscht markieren</button> : null}
+                  {batch.active.length ? <button className="secondary" disabled={refillBusy || uploading} onClick={() => markDeletionBatch(batch.id)}>Batch als gelöscht markieren</button> : null}
                 </article>;
               })}
               {!deletionBatches.length ? <div className="empty-state"><b>Noch keine aktiven Lösch-Batches</b><span>Neu erzeugte Inserate erscheinen nach erfolgreichem Upload hier. Bestehende Objektnummern werden nicht umgedeutet.</span></div> : null}
             </div>
           </div>
+          <SmartRefillPanel plan={refillPlan} state={state} busy={refillBusy} online={helperOnline} uploading={uploading}
+            onCheck={() => { void runRefillAction(current => current, "Nachschub anhand des gespeicherten Katalogs geprüft."); }}
+            onPrepare={() => { void prepareRefill(); }} onUpload={() => { void uploadPackage(true); }} onApprove={approveRefillFacts} />
         </section>
       ) : null}
 
@@ -4250,7 +4158,7 @@ export default function InseratStudio() {
               <div><span>Automatik</span><b>A++ · KFW40/55 · Wärmepumpe · Pflichtausstattung</b></div>
               <div><span>Veröffentlichung</span><b>manuell in Immoprofessional</b></div>
             </div>
-            <button className="primary full" disabled={uploading || !selectedUploadIds.length} onClick={uploadPackage}>{uploading ? uploadStatus || "Wird übertragen …" : "Sammel-Upload bestätigen & starten"}</button>
+            <button className="primary full" disabled={uploading || !selectedUploadIds.length} onClick={() => uploadPackage()}>{uploading ? uploadStatus || "Wird übertragen …" : "Sammel-Upload bestätigen & starten"}</button>
             <button className="secondary full" disabled={uploading || !activeProject.listings.length || !effectiveBatchProjectIds.includes(activeProject.id)} onClick={downloadPackage}>Aktives Inseratspaket nur herunterladen</button>
             <p className="first-test">Der erste Upload sollte mit einem einzelnen, nicht veröffentlichten Testobjekt geprüft werden. Immoprofessional kann eigene Importregeln anwenden.</p>
           </aside>
