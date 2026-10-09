@@ -10,6 +10,21 @@ export function catalogSourceReady(source) {
     && partitionPlotsByTerritory([], source.territory).some(section => section.id === "inside");
 }
 
+// A source failure changes connection status, never the approved local selection.
+export function resolveActiveCatalogSource(live, cached) {
+  if (catalogSourceReady(live) && live.excelAvailable !== false) return live;
+  const local = catalogSourceReady(cached) ? cached : live;
+  if (!catalogSourceReady(local)) return live || null;
+  return { ...local, available: true, excelAvailable: false, fallback: true };
+}
+
+export function rememberActiveCatalogSource(state, source) {
+  if (!state.activePlotCatalog?.approvedAt || !catalogSourceReady(source) || source.excelAvailable === false) return state;
+  const lastValidSource = { available: true, sourcePath: source.sourcePath, territory: source.territory, masterPlots: source.masterPlots };
+  if (JSON.stringify(state.activePlotCatalog.lastValidSource) === JSON.stringify(lastValidSource)) return state;
+  return { ...state, activePlotCatalog: { ...state.activePlotCatalog, lastValidSource } };
+}
+
 export function catalogPlotDisposition(plot, source) {
   if (!catalogSourceReady(source)) return "unavailable";
   if (plot.isActive === false) return "review";
@@ -23,8 +38,9 @@ export function catalogPlotDisposition(plot, source) {
 
 export function operationalCatalogPlots(plots, context) {
   if (!context) return uniqueCatalogPlots(plots);
-  if (context.policy?.version !== 1 || !context.policy.approvedAt || !catalogSourceReady(context.source)) return [];
-  return uniqueCatalogPlots(plots).filter(plot => ["inside", "outside"].includes(catalogPlotDisposition(plot, context.source, context.policy)));
+  const source = resolveActiveCatalogSource(context.source, context.policy?.lastValidSource);
+  if (context.policy?.version !== 1 || !context.policy.approvedAt || !catalogSourceReady(source)) return [];
+  return uniqueCatalogPlots(plots).filter(plot => ["inside", "outside"].includes(catalogPlotDisposition(plot, source, context.policy)));
 }
 
 export function catalogGeographicLabel(plot, source, fallback = "Nicht zugeordnet") {

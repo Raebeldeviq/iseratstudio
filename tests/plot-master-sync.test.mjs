@@ -126,15 +126,19 @@ test("workbook roundtrip keeps two sheets and rejects duplicate plotIds", async 
 test("service requires a current preview token before writing", async () => {
   const directory = await mkdtemp(join(tmpdir(), "master-service-"));
   const path = join(directory, "KI_Grundstuecke_MASTER.xlsx");
-  let manifest = { stored: true, savedAt: "initial", state: state([plot()]) };
+  const synced = applyMasterRowsToPlot(plot(), a(), generatePoolB(a()), "2026-09-30T00:00:00.000Z");
+  let manifest = { stored: true, savedAt: "initial", state: state([{ ...synced, purchasePrice: 135000 }]) };
   let staged;
   const service = createPlotMasterService({ path, loadCatalog: async () => manifest,
     stageCatalog: async (input) => { staged = input; return { missingImageIds: [] }; },
     commitCatalog: async () => { manifest = { stored: true, savedAt: staged.savedAt, state: staged.state }; },
     discardCatalog: async () => undefined });
   try {
+    await writeFile(path, await createMasterWorkbook([a()], [generatePoolB(a())]));
+    const initialWorkbook = await readMasterWorkbook(path);
+    manifest.state.plots = [{ ...applyMasterRowsToPlot(plot(), initialWorkbook.poolA[0], initialWorkbook.poolB[0], "2026-09-30T00:00:00.000Z"), purchasePrice: 135000 }];
     const preview = await service.preview();
-    assert.equal(preview.counts.export, 1);
+    assert.equal(preview.counts.update, 1);
     await assert.rejects(service.apply({ token: "stale" }), /Vorschau neu öffnen/u);
     assert.equal((await service.apply({ token: preview.token })).applied, true);
     const workbook = await readMasterWorkbook(path);

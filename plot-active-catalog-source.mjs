@@ -12,7 +12,7 @@ export async function loadActivePlotCatalogSource(options = {}) {
   const path = options.path || PLOT_MASTER_PATH;
   try {
     const workbook = await (options.readWorkbook || readMasterWorkbook)(path);
-    if (!workbook.bytes) throw new Error("Master fehlt");
+    if (!workbook.bytes?.length || !workbook.poolA?.length || !Array.isArray(workbook.poolB)) throw new Error("Master fehlt oder ist leer");
     let territory = await (options.loadTerritory || loadPlotTerritory)(path);
     // The current master has Pool_A/B only. Reuse the existing Suchgebiet source, never a second list.
     const archive = await JSZip.loadAsync(workbook.bytes);
@@ -24,9 +24,13 @@ export async function loadActivePlotCatalogSource(options = {}) {
     const masterPlots = workbook.poolA.filter(row => row.sourceStatus !== "Nicht mehr vorhanden")
       .map(row => ({ ...applyMasterRowsToPlot(null, row, b.get(row.plotId) || generatePoolB(row), "2000-01-01T00:00:00.000Z"),
         district: row.district || "", sourceStatus: row.sourceStatus || "" }));
-    return { available: true, sourcePath: path, territory, masterPlots, message: "" };
+    return { available: true, excelAvailable: true, sourcePath: path, territory, masterPlots, message: "" };
   } catch {
-    return { available: false, sourcePath: path, territory: null, masterPlots: [],
-      message: "Master-Datei oder vorhandenes Suchgebiet sind nicht gültig lesbar. Die Auswahl für neue Inserate wartet auf den Datenabgleich." };
+    // Bootstrap older catalogs from the existing local Suchgebiet file. Prefer the
+    // persisted last valid source in the service/UI if it is already known.
+    const territory = await (options.loadTerritory || loadPlotTerritory)(options.territoryPath || PLOT_SYNC_CONFIG.sourcePath)
+      .catch(() => null);
+    return { available: territory?.available === true, excelAvailable: false, fallback: true,
+      sourcePath: path, territory, masterPlots: [], message: "Excel momentan nicht erreichbar" };
   }
 }

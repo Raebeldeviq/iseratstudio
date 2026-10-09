@@ -672,7 +672,7 @@ export type StudioState = {
   catalogRepairReview?: { automaticProductionAllowed: boolean; unresolved: Array<{ kind: string; projectId: string; listingId: string; externalId?: string }> };
   dataSchemaVersion?: number;
   plotSchemaVersion?: number;
-  activePlotCatalog?: { version: 1; approvedAt: string; legacyPlotIds: string[] };
+  activePlotCatalog?: { version: 1; approvedAt: string; legacyPlotIds: string[]; lastValidSource?: import("../plot-active-catalog.mjs").ActiveCatalogSource };
   houses: HouseTemplate[];
   plots?: PlotRecord[];
   selectedPlotIds?: string[];

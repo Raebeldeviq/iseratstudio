@@ -1,9 +1,11 @@
 import type { PlotRecord, StudioState } from "./app/types";
-export type ActiveCatalogSource = { available: boolean; sourcePath?: string; message?: string; territory: { available: boolean; postalCodes: string[]; regions?: Record<string, string>; message?: string } | null; masterPlots: Array<PlotRecord & { district?: string }> };
+export type ActiveCatalogSource = { available: boolean; excelAvailable?: boolean; fallback?: boolean; sourcePath?: string; message?: string; territory: { available: boolean; postalCodes: string[]; regions?: Record<string, string>; message?: string } | null; masterPlots: Array<PlotRecord & { district?: string }> };
 export type ActiveCatalogContext = { source?: ActiveCatalogSource | null; policy?: StudioState["activePlotCatalog"] };
 export type ActiveCatalogPreview = { token: string; confirmed: boolean; source: ActiveCatalogSource; counts: { inside: number; insideReview: number; outside: number; removed: number }; removed: Array<Pick<PlotRecord, "id" | "street" | "houseNumber" | "postalCode" | "city">> };
 export function uniqueCatalogPlots<T extends { id: string }>(plots?: T[]): T[];
 export function catalogSourceReady(source?: ActiveCatalogSource | null): boolean;
+export function resolveActiveCatalogSource(live?: ActiveCatalogSource | null, cached?: ActiveCatalogSource): ActiveCatalogSource | null;
+export function rememberActiveCatalogSource(state: StudioState, source?: ActiveCatalogSource | null): StudioState;
 export function catalogPlotDisposition(plot: PlotRecord, source?: ActiveCatalogSource | null, policy?: StudioState["activePlotCatalog"]): string;
 export function operationalCatalogPlots(plots: PlotRecord[], context?: ActiveCatalogContext): PlotRecord[];
 export function catalogGeographicLabel(plot: PlotRecord, source?: ActiveCatalogSource | null, fallback?: string): string;

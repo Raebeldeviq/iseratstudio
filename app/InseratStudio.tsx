@@ -7,7 +7,7 @@ import { AI_MODEL_OPTIONS, DEFAULT_AI_MODEL } from "../ai-models.mjs";
 import { isDraftListing, mergeListingCollection } from "../listing-catalog-view.mjs";
 import { filterManagedListingsByObjectNumber } from "../listing-manager-view.mjs";
 import { activeWorkingListingCount } from "../active-listings.mjs";
-import { operationalCatalogPlots } from "../plot-active-catalog.mjs";
+import { operationalCatalogPlots, rememberActiveCatalogSource, resolveActiveCatalogSource } from "../plot-active-catalog.mjs";
 import type { ActiveCatalogSource, ActiveCatalogPreview } from "../plot-active-catalog.mjs";
 import { plotAddressSelection, selectablePlotIds, selectablePlotProjects } from "../plot-selection.mjs";
 import {
@@ -950,12 +950,13 @@ export default function InseratStudio() {
         if (!response.ok || !data.ok) throw new Error(data.message || "Synchronisationsstatus ist nicht verfügbar.");
         if (cancelled) return;
         setPlotSyncStatus(data);
+        setState(current => rememberActiveCatalogSource(current, data.activeCatalog));
         if (data.catalogSavedAt && data.catalogSavedAt !== knownDeviceCatalogSavedAt) {
           const snapshot = await loadDeviceCatalogSnapshot();
           if (cancelled || !snapshot || snapshot.savedAt !== data.catalogSavedAt) return;
           acceptKnownDeviceCatalogSavedAt(snapshot.savedAt);
           const loaded = normalizeMandatoryListingStandards(normalizeProjectOwners(snapshot.state));
-          setState({ ...loaded, selectedPlotIds: selectablePlotIds(loaded.plots, loaded.selectedPlotIds) });
+          setState(rememberActiveCatalogSource({ ...loaded, selectedPlotIds: selectablePlotIds(loaded.plots, loaded.selectedPlotIds) }, data.activeCatalog));
           setNotice("Der automatische Grundstücksabgleich wurde in die geöffnete App übernommen.");
         }
       } catch {
@@ -1120,7 +1121,7 @@ export default function InseratStudio() {
       })
     : [];
   const plotRecords = (state.plots || []) as PlotRecord[];
-  const plotCatalogContext = { source: helperOnline ? plotSyncStatus?.activeCatalog : null, policy: state.activePlotCatalog };
+  const plotCatalogContext = { source: resolveActiveCatalogSource(helperOnline ? plotSyncStatus?.activeCatalog : null, state.activePlotCatalog?.lastValidSource), policy: state.activePlotCatalog };
   const activePlotIds = new Set(operationalCatalogPlots(plotRecords, plotCatalogContext).filter((plot) => plotAddressSelection(plot).selectable).map((plot) => plot.id));
   const selectedPlotIds = selectablePlotIds(plotRecords, state.selectedPlotIds, plotCatalogContext) as string[];
   const setSelectedPlotIds = (next: string[] | ((ids: string[]) => string[])) => {
@@ -1365,13 +1366,26 @@ export default function InseratStudio() {
     setNotice(removeExcel ? "Grundstück für die weitere Nutzung deaktiviert. Pool A und B werden nach Vorschau und Bestätigung des nächsten Excel-Abgleichs entfernt." : "Grundstück nur im Inseratestudio deaktiviert. Projekte, Listings und Historie bleiben erhalten.");
   };
 
+  const retryPlotSource = async () => {
+    try {
+      const response = await helperFetch("/plot-sync/status");
+      const data = await response.json() as PlotSyncStatus & { ok?: boolean };
+      if (!response.ok || !data.ok) throw new Error("Status nicht verfügbar");
+      setPlotSyncStatus(data);
+      setState(current => rememberActiveCatalogSource(current, data.activeCatalog));
+    } catch { setPlotSyncStatus(null); }
+  };
+
   const previewMaster = async () => {
     // Let the existing 450 ms catalog save debounce enqueue the latest plot edit.
     await new Promise<void>((resolve) => window.setTimeout(resolve, 600));
     await deviceCatalogSaveQueue;
     const response = await helperFetch("/plot-master/preview");
     const data = await response.json();
-    if (!response.ok || !data.ok) throw new Error(data.message || "Die Master-Vorschau ist fehlgeschlagen.");
+    if (!response.ok || !data.ok) {
+      void retryPlotSource();
+      throw new Error(data.message || "Die Master-Vorschau ist fehlgeschlagen.");
+    }
     return data;
   };
 
@@ -3491,6 +3505,7 @@ export default function InseratStudio() {
           linkedProjectCounts={linkedProjectCounts}
           selectionMeta={plotSelectionMeta}
           syncStatus={plotSyncStatus}
+          onRetrySource={retryPlotSource}
           onSelectionChange={updateCentralPlotSelection}
           onSave={savePlotRecords}
           onDelete={deletePlot}

@@ -140,9 +140,9 @@ test("plot cards omit platform upload without losing pools, listing count or act
   assert.match(css, /\.plot-selection-facts \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/u);
 });
 
-test("offline rendering never reuses stale territory; private addresses remain excluded", async () => {
+test("offline rendering without a persisted source never guesses territory; private addresses remain excluded", async () => {
   const html = await renderPlots([plot("public", "10115"), plot("hidden", "14469", { street: "Adresse nicht öffentlich angegeben" })], { helperOnline: false });
-  assert.match(html, /Master-Datei und Suchgebiet werden geprüft/);
+  assert.match(html, /Grundstücksbestand wird geladen/);
   assert.doesNotMatch(html, /<article class="plot-selection-card/);
   assert.doesNotMatch(html, /Adresse nicht öffentlich angegeben/);
 });

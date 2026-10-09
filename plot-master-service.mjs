@@ -8,6 +8,7 @@ import { createMasterWorkbook, readMasterWorkbook } from "./plot-master-workbook
 
 const hash = (value) => createHash("sha256").update(value || Buffer.alloc(0)).digest("hex");
 const conflict = (message) => Object.assign(new Error(message), { httpStatus: 409, code: "MASTER_CHANGED" });
+const unavailable = () => Object.assign(new Error("Excel momentan nicht erreichbar oder ohne gültige Grundstücke. Bitte erneut prüfen."), { httpStatus: 503, code: "MASTER_UNAVAILABLE" });
 const key = (savedAt, bytes) => hash(`${savedAt || ""}:${hash(bytes)}`);
 
 export function createPlotMasterService(options = {}) {
@@ -21,10 +22,17 @@ export function createPlotMasterService(options = {}) {
   const lockPath = `${path}.sync.lock`;
 
   async function load() {
-    const [workbook, manifest] = await Promise.all([readWorkbook(path), loadCatalog()]);
+    const [workbook, manifest] = await Promise.all([readAvailableWorkbook(), loadCatalog()]);
     if (!manifest.stored || !manifest.state) throw new Error("Der lokale Grundstückskatalog fehlt.");
     const result = reconcileMaster(manifest.state, workbook.poolA, workbook.poolB, {}, now());
     return { workbook, manifest, result, token: key(manifest.savedAt, workbook.bytes) };
+  }
+
+  async function readAvailableWorkbook() {
+    let workbook;
+    try { workbook = await readWorkbook(path); } catch { throw unavailable(); }
+    if (!workbook?.bytes?.length || !workbook.poolA?.length || !Array.isArray(workbook.poolB)) throw unavailable();
+    return workbook;
   }
 
   function publicPreview(data) {
@@ -56,6 +64,8 @@ export function createPlotMasterService(options = {}) {
   async function preview() { return publicPreview(await load()); }
 
   async function apply(input = {}) {
+    // Reject unreadable/empty Excel before creating a lock or staging any catalog.
+    await load();
     const release = await acquire();
     let sessionId;
     let temporaryPath;
@@ -91,7 +101,7 @@ export function createPlotMasterService(options = {}) {
         temporaryPath = `${path}.${sessionId}.tmp`;
         await mkdir(dirname(path), { recursive: true });
         await writeFile(temporaryPath, bytes, { mode: 0o600 });
-        const actual = await readWorkbook(path);
+        const actual = await readAvailableWorkbook();
         if (hash(actual.bytes) !== hash(data.workbook.bytes)) throw conflict("Die Excel-Datei wurde während des Abgleichs geändert. Bitte neu prüfen.");
         originalBytes = data.workbook.bytes;
         await rename(temporaryPath, path);

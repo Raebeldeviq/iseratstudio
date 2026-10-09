@@ -16,7 +16,7 @@ import {
 } from "../../plot-records.mjs";
 import type { AddressOwner, PlotRecord } from "../types";
 import { plotAddressSelection, plotListingCountAppearance, selectablePlotIds } from "../../plot-selection.mjs";
-import { catalogGeographicLabel, catalogPlotDisposition, filterCatalogPlots, operationalCatalogPlots, uniqueCatalogPlots } from "../../plot-active-catalog.mjs";
+import { catalogGeographicLabel, catalogPlotDisposition, filterCatalogPlots, operationalCatalogPlots, resolveActiveCatalogSource, uniqueCatalogPlots } from "../../plot-active-catalog.mjs";
 import type { ActiveCatalogPreview, ActiveCatalogSource } from "../../plot-active-catalog.mjs";
 import type { StudioState } from "../types";
 import { defaultPlotTerritoryVisibility, readPlotTerritoryVisibility, savePlotTerritoryVisibility, togglePlotTerritoryVisibility } from "../../plot-territory-visibility.mjs";
@@ -58,6 +58,7 @@ type Props = {
   linkedProjectCounts: Record<string, number>;
   selectionMeta: Record<string, { listingCount: number; regionLabel: string; uploadDate: string }>;
   syncStatus: PlotSyncStatus | null;
+  onRetrySource: () => Promise<void>;
   onSelectionChange: (ids: string[]) => void;
   onSave: (plots: PlotRecord[], message: string) => void;
   onDelete: (plot: PlotRecord, removeExcel: boolean) => void;
@@ -150,6 +151,7 @@ export default function PlotManagement({
   linkedProjectCounts,
   selectionMeta,
   syncStatus,
+  onRetrySource,
   onSelectionChange,
   onSave,
   onDelete,
@@ -175,6 +177,7 @@ export default function PlotManagement({
   const [masterPreview, setMasterPreview] = useState<MasterPreview | null>(null);
   const [masterDecisions, setMasterDecisions] = useState<Record<string, string>>({});
   const [masterBusy, setMasterBusy] = useState(false);
+  const [sourceBusy, setSourceBusy] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<PlotRecord | null>(null);
   const [message, setMessage] = useState("");
   const [expandedTerritories, setExpandedTerritories] = useState<Record<string, boolean>>({ ...defaultPlotTerritoryVisibility });
@@ -203,7 +206,7 @@ export default function PlotManagement({
     }
   };
 
-  const source = helperOnline ? syncStatus?.activeCatalog : null;
+  const source = useMemo(() => resolveActiveCatalogSource(helperOnline ? syncStatus?.activeCatalog : null, catalogPolicy?.lastValidSource), [helperOnline, syncStatus, catalogPolicy]);
   const catalogContext = useMemo(() => ({ source, policy: catalogPolicy }), [source, catalogPolicy]);
   const activePlots = useMemo(() => operationalCatalogPlots(plots, catalogContext), [plots, catalogContext]);
   const inactivePlots = useMemo(() => uniqueCatalogPlots(plots).filter(plot => plot.isActive !== false && !activePlots.some(active => active.id === plot.id)), [plots, activePlots]);
@@ -221,7 +224,7 @@ export default function PlotManagement({
     finally { setCatalogBusy(false); }
   };
   const selectablePlots = useMemo(() => activePlots.filter((plot) => plotAddressSelection(plot).selectable), [activePlots]);
-  const reviewPlots = useMemo(() => uniqueCatalogPlots(plots).filter((plot) => !plotAddressSelection(plot).selectable && plot.isActive !== false), [plots]);
+  const reviewPlots = useMemo(() => (catalogPolicy?.approvedAt ? activePlots : uniqueCatalogPlots(plots)).filter((plot) => !plotAddressSelection(plot).selectable && plot.isActive !== false), [plots, activePlots, catalogPolicy]);
   const displayedPlots = showReview ? reviewPlots : selectablePlots;
   const cityOptions = useMemo(() => [...new Set(activePlots.map((plot) => plot.city).filter(Boolean))].sort((a, b) => a.localeCompare(b, "de")), [activePlots]);
   const visiblePlots = useMemo(() => {
@@ -457,6 +460,12 @@ export default function PlotManagement({
     finally { setMasterBusy(false); }
   };
 
+  const retrySource = async () => {
+    setSourceBusy(true);
+    try { await onRetrySource(); }
+    finally { setSourceBusy(false); }
+  };
+
   const confirmMaster = async () => {
     if (!masterPreview) return;
     setMasterBusy(true);
@@ -537,9 +546,15 @@ export default function PlotManagement({
 
         {message ? <div className="plot-inline-message" role="status">{message}</div> : null}
 
+        {source?.excelAvailable === false ? <div className="plot-source-warning" role="status">
+          <strong>Excel momentan nicht erreichbar</strong>
+          <p>Die Grundstücke werden aus dem letzten gespeicherten Stand angezeigt. Änderungen werden momentan nicht mit Excel synchronisiert.</p>
+          <button className="secondary" disabled={sourceBusy} onClick={retrySource}>{sourceBusy ? "Wird geprüft …" : "Erneut prüfen"}</button>
+        </div> : null}
+
         <div className="button-row" aria-label="Adressprüfung">
           <button className={!showReview ? 'primary' : 'secondary'} aria-pressed={!showReview} onClick={() => setShowReview(false)}>Auswählbare Grundstücke ({selectablePlots.length})</button>
-          <button className={showReview ? 'primary' : 'secondary'} aria-pressed={showReview} onClick={() => { setShowReview(false); setShowInactiveEditor(true); }}>Müssen geprüft werden ({reviewPlots.length})</button>
+          <button className={showReview ? 'primary' : 'secondary'} aria-pressed={showReview} onClick={() => setShowReview(true)}>Müssen geprüft werden ({reviewPlots.length})</button>
         </div>
         {showReview ? <p role="note">Nur Recherche und Bearbeitung möglich. Diese Grundstücke werden nicht in „Alle sichtbaren wählen“ übernommen. Bestehende Inserate und ihre Historie bleiben unverändert im Inseratsmanager.</p> : null}
 
@@ -568,8 +583,8 @@ export default function PlotManagement({
         </div> : null}
         <button className="secondary" onClick={() => setShowInactiveEditor(value => !value)}>Nicht aktive Grundstücke bearbeiten</button>
         {showInactiveEditor ? <div className="plot-inactive-editor"><label className="field"><span>Grundstück zur Prüfung oder exklusiven Nutzung öffnen</span><select value="" onChange={event => { const plot = inactivePlots.find(plot => plot.id === event.target.value); if (plot) beginEdit(plot); }}><option value="">Grundstück wählen …</option>{filterCatalogPlots(inactivePlots, query).map(plot => <option value={plot.id} key={plot.id}>{formatPlotStreet(plot) || "Adresse offen"} · {plot.postalCode} {plot.city} · {plot.id}</option>)}</select></label></div> : null}
-        <div className="action-bar"><span>Master: KI_Grundstuecke_MASTER.xlsx · Pool A und Pool B</span><button className="primary" disabled={!helperOnline || masterBusy || !catalogPolicy?.approvedAt} onClick={openMasterPreview}>{masterBusy ? "Excel wird geprüft …" : "Excel synchronisieren"}</button></div>
-        {masterPreview ? <div className="content-card plot-import-preview" role="dialog" aria-label="Master-Abgleich prüfen">
+        <div className="action-bar"><span>Master: KI_Grundstuecke_MASTER.xlsx · Pool A und Pool B</span><button className="primary" disabled={!helperOnline || masterBusy || !catalogPolicy?.approvedAt || !source?.available || source.excelAvailable === false} onClick={openMasterPreview}>{masterBusy ? "Excel wird geprüft …" : "Excel synchronisieren"}</button></div>
+        {masterPreview && source?.available && source.excelAvailable !== false ? <div className="content-card plot-import-preview" role="dialog" aria-label="Master-Abgleich prüfen">
           <h3>Änderungen vor dem Synchronisieren</h3>
           <p>{masterPreview.counts.import || 0} neue Grundstücke aus Excel · {masterPreview.counts.export || 0} neue aus Inseratestudio · {masterPreview.counts.update || 0} geändert · {masterPreview.counts["missing-excel"] || 0} fehlen in Excel · {masterPreview.counts.conflict || 0} Konflikte</p>
           {!masterPreview.sourceFound ? <p>Die Master-Datei fehlt noch. Beim Bestätigen wird sie mit Pool A und Pool B angelegt.</p> : null}
@@ -580,7 +595,7 @@ export default function PlotManagement({
           {masterPreview.counts["missing-excel"] > 1 ? <button className="secondary" onClick={() => setMasterDecisions((current) => ({ ...current, ...Object.fromEntries(masterPreview.items.filter((item) => item.action === "missing-excel").map((item) => [item.plotId, "remove-app"])) }))}>Alle fehlenden aus Inseratestudio entfernen</button> : null}
           <div className="action-bar"><span>Keine Portalobjekte, Listings oder Lösch-Batches werden gelöscht.</span><div className="button-row"><button className="secondary" onClick={() => setMasterPreview(null)}>Abbrechen</button><button className="primary" disabled={masterBusy} onClick={confirmMaster}>Synchronisierung bestätigen</button></div></div>
         </div> : null}
-        {(!helperOnline || !source?.available) ? <p role="status">{source?.message || "Master-Datei und Suchgebiet werden geprüft. Die Auswahl für neue Inserate wartet auf den Datenabgleich."}</p> : null}
+        {!source?.available ? <p role="status">Grundstücksbestand wird geladen. Bitte erneut prüfen, falls die Verbindung nicht verfügbar ist.</p> : null}
         <div className="plot-territory-sections">{territorySections.map((territory) => <section className={`plot-territory-section ${territory.id}`} key={territory.id} aria-label={territory.label}>
           <header className="plot-territory-heading">{territory.id === "inside" || territory.id === "outside" ? <h3 className="plot-territory-title"><button type="button" className="plot-territory-toggle" aria-expanded={expandedTerritories[territory.id]} aria-controls={`plot-territory-content-${territory.id}`} onClick={() => toggleTerritory(territory.id)}><span>{territory.label}</span><span className="plot-territory-toggle-meta"><span>{territory.plots.length} Grundstücke</span><span className="plot-territory-chevron" aria-hidden="true">{expandedTerritories[territory.id] ? "▼" : "▶"}</span></span></button></h3> : <><h3>{territory.label}</h3><span>{territory.plots.length} Grundstücke</span></>}</header>
           <div id={`plot-territory-content-${territory.id}`} hidden={(territory.id === "inside" || territory.id === "outside") && !expandedTerritories[territory.id]}>

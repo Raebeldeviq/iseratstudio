@@ -1,11 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
 import { loadCatalogManifest, startCatalogSnapshot, commitCatalogSnapshot, discardCatalogSnapshot } from "./catalog-store.mjs";
 import { loadActivePlotCatalogSource } from "./plot-active-catalog-source.mjs";
-import { approveActivePlotCatalog, catalogCleanupPreview } from "./plot-active-catalog.mjs";
+import { approveActivePlotCatalog, catalogCleanupPreview, resolveActiveCatalogSource } from "./plot-active-catalog.mjs";
 
 export function createActivePlotCatalogService(options = {}) {
-  const source = options.loadSource || loadActivePlotCatalogSource;
+  const loadSource = options.loadSource || loadActivePlotCatalogSource;
   const loadCatalog = options.loadCatalog || loadCatalogManifest;
+  const source = async () => {
+    const [live, manifest] = await Promise.all([loadSource(), loadCatalog()]);
+    return resolveActiveCatalogSource(live, manifest.state?.activePlotCatalog?.lastValidSource);
+  };
   const start = options.start || startCatalogSnapshot;
   const commit = options.commit || commitCatalogSnapshot;
   const discard = options.discard || discardCatalogSnapshot;
@@ -14,6 +18,7 @@ export function createActivePlotCatalogService(options = {}) {
   async function preview() {
     const [data, manifest] = await Promise.all([source(), loadCatalog()]);
     if (!manifest.state) throw new Error("Der lokale Katalog fehlt.");
+    if (data?.excelAvailable === false) throw Object.assign(new Error("Excel momentan nicht erreichbar. Bitte erneut prüfen."), { httpStatus: 503 });
     const result = catalogCleanupPreview(manifest.state, data);
     const token = createHash("sha256").update(JSON.stringify([manifest.savedAt, manifest.state.plots, manifest.state.activePlotCatalog, data])).digest("hex");
     return { token, confirmed: Boolean(manifest.state.activePlotCatalog?.approvedAt), source: data,
