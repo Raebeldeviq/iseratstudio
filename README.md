@@ -6,7 +6,7 @@ Im Bereich „Grundstücke & Auswahl“ kann eine einzelne Excel-Master-Datei mi
 
 Nach der Vorbereitung von vier neuen Hausinseraten zeigt die App den aktiven Pool und den nächsten Pool an. Erst vier im Inseratestudio bestätigte Löschungen geben die Gegenseite frei. Premium und „Löschen sperren“ halten ihre bestehenden Lösch-Batches an. Die Veröffentlichung und die Löschung im Portal bleiben manuell. Historische Inserate exportieren weiterhin ihre beim Erstellen gespeicherte Adresse.
 
-Lokale macOS-Anwendung zum Verwalten von bis zu 22 Haustypen, Grundstücken und
+Lokale macOS-Anwendung zum Verwalten eigener Haustypen, Grundstücke und
 Inseratentwürfen sowie zum kontrollierten OpenImmo-Import in Immoprofessional.
 Die aktuell geöffnete Anwendungsversion steht dauerhaft dezent unten rechts.
 

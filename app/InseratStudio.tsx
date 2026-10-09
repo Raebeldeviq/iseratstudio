@@ -250,7 +250,6 @@ type PlotSyncStatus = {
 
 const MIN_HOUSE_IMAGES = 4;
 const MAX_HOUSE_IMAGES = 14;
-const MAX_HOUSE_TEMPLATES = 22;
 const MAX_PROMOTION_IMAGE_BYTES = 25 * 1024 * 1024;
 const HELPER_BASE_URL = "http://127.0.0.1:43182";
 const HOUSE_PRICE_ENTRIES = housePriceCatalogEntries();
@@ -1496,13 +1495,11 @@ export default function InseratStudio() {
   };
 
   const addHouse = () => {
-    if (state.houses.length >= MAX_HOUSE_TEMPLATES) {
-      setNotice(`Es sind bereits ${MAX_HOUSE_TEMPLATES} Haustypen angelegt.`);
-      return;
-    }
     const house = newHouse(state.houses.length + 1);
     setState((current) => ({ ...current, houses: [...current.houses, house] }));
     setActiveHouseId(house.id);
+    setSelectedMediaItems([]);
+    setNotice(`„${house.name}“ wurde angelegt und kann jetzt bearbeitet werden.`);
   };
 
   const removeHouse = () => {
@@ -3464,7 +3461,7 @@ export default function InseratStudio() {
         </div>
         <div className="workflow-summary">
           <div><b>{activePlotIds.size}</b><span>auswählbare Grundstücke</span></div>
-          <div><b>{state.houses.length}</b><span>von {MAX_HOUSE_TEMPLATES} Haustypen</span></div>
+          <div><b>{state.houses.length}</b><span>Haustypen in der Bibliothek</span></div>
           <div><b>{activeListingGroup?.variants.filter((variant) => variant.templateId).length || 0}</b><span>aktive Varianten</span></div>
         </div>
       </section>
@@ -3594,7 +3591,7 @@ export default function InseratStudio() {
         <section className="workspace two-column">
           <aside className="rail-card">
             <div className="section-heading compact">
-              <div><span className="eyebrow">Hausbibliothek</span><h2>Deine {MAX_HOUSE_TEMPLATES} Haustypen</h2></div>
+              <div><span className="eyebrow">Hausbibliothek</span><h2>Deine {state.houses.length} Haustypen</h2></div>
               <button className="icon-button" onClick={addHouse} aria-label="Haustyp hinzufügen">+</button>
             </div>
             <div className="house-list">
