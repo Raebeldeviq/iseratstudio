@@ -54,6 +54,8 @@ type Props = {
   selectedPlotIds: string[];
   defaultOwner: AddressOwner;
   helperOnline: boolean;
+  helperProblem?: string;
+  sourceError?: string;
   helperRequest: HelperRequest;
   linkedProjectCounts: Record<string, number>;
   selectionMeta: Record<string, { listingCount: number; regionLabel: string; uploadDate: string }>;
@@ -147,6 +149,8 @@ export default function PlotManagement({
   selectedPlotIds,
   defaultOwner,
   helperOnline,
+  helperProblem = "Der lokale Helfer ist nicht verbunden. Bitte Inseratestudio über den Startknopf auf dem Schreibtisch öffnen.",
+  sourceError = "",
   helperRequest,
   linkedProjectCounts,
   selectionMeta,
@@ -546,7 +550,11 @@ export default function PlotManagement({
 
         {message ? <div className="plot-inline-message" role="status">{message}</div> : null}
 
-        {source?.excelAvailable === false ? <div className="plot-source-warning" role="status">
+        {!helperOnline || !syncStatus?.activeCatalog ? <div className="plot-source-warning" role="status">
+          <strong>{!helperOnline ? "Verbindung zum lokalen Helfer fehlt" : "Excel-Status noch nicht bestätigt"}</strong>
+          <p>{!helperOnline ? helperProblem : sourceError || "Der Zugriff auf die Master-Excel wird geprüft. Die gespeicherten Grundstücke bleiben sichtbar."}</p>
+          <button className="secondary" disabled={sourceBusy} onClick={retrySource}>{sourceBusy ? "Wird geprüft …" : "Erneut prüfen"}</button>
+        </div> : source?.excelAvailable === false ? <div className="plot-source-warning" role="status">
           <strong>Excel momentan nicht erreichbar</strong>
           <p>Die Grundstücke werden aus dem letzten gespeicherten Stand angezeigt. Änderungen werden momentan nicht mit Excel synchronisiert.</p>
           <button className="secondary" disabled={sourceBusy} onClick={retrySource}>{sourceBusy ? "Wird geprüft …" : "Erneut prüfen"}</button>

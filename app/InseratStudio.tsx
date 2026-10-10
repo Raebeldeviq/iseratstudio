@@ -2,7 +2,8 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { INTERIOR_SET_IDS, INTERIOR_SET_ROLES, interiorSetStatus, assignNewInteriorListings, listingInteriorImages } from "../interior-sets.mjs";
-import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { probeHelperConnection } from "../helper-connection.mjs";
 import { AI_MODEL_OPTIONS, DEFAULT_AI_MODEL } from "../ai-models.mjs";
 import { isDraftListing, mergeListingCollection } from "../listing-catalog-view.mjs";
 import { filterManagedListingsByObjectNumber } from "../listing-manager-view.mjs";
@@ -799,6 +800,14 @@ export default function InseratStudio() {
   const [uploading, setUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState("");
   const [helperOnline, setHelperOnline] = useState(false);
+  const [helperProblem, setHelperProblem] = useState("Verbindung zum lokalen Helfer wird geprüft …");
+  const [plotSourceError, setPlotSourceError] = useState("");
+  const checkHelper = useCallback(async () => {
+    const result = await probeHelperConnection(helperFetch, Boolean(helperSessionToken()));
+    setHelperOnline(result.online);
+    setHelperProblem(result.message);
+    return result.online;
+  }, []);
   const [openAiKey, setOpenAiKey] = useState("");
   const [aiModel, setAiModel] = useState<AiModel>(DEFAULT_AI_MODEL);
   const [generatingAi, setGeneratingAi] = useState(false);
@@ -897,6 +906,7 @@ export default function InseratStudio() {
         if (!response.ok || !data.ok) throw new Error(data.message || "Synchronisationsstatus ist nicht verfügbar.");
         if (cancelled || refillOperation.current) return;
         setPlotSyncStatus(data);
+        setPlotSourceError("");
         setState(current => rememberActiveCatalogSource(current, data.activeCatalog));
         if (data.catalogSavedAt && data.catalogSavedAt !== knownDeviceCatalogSavedAt) {
           const snapshot = await loadDeviceCatalogSnapshot();
@@ -907,7 +917,10 @@ export default function InseratStudio() {
           setNotice("Der automatische Grundstücksabgleich wurde in die geöffnete App übernommen.");
         }
       } catch {
-        if (!cancelled) setPlotSyncStatus(null);
+        if (!cancelled) {
+          setPlotSyncStatus(null);
+          setPlotSourceError("Der aktuelle Excel-Status konnte nicht abgefragt werden. Bitte erneut prüfen.");
+        }
       }
     };
     void refresh();
@@ -947,15 +960,10 @@ export default function InseratStudio() {
         setSaveLabel("Katalog gesperrt · keine Speicherung");
       });
 
-    const checkHelper = () => {
-      helperFetch("/health")
-        .then((response) => setHelperOnline(response.ok))
-        .catch(() => setHelperOnline(false));
-    };
-    checkHelper();
+    const initialHealthCheck = window.setTimeout(checkHelper, 0);
     const healthTimer = window.setInterval(checkHelper, 5000);
-    return () => window.clearInterval(healthTimer);
-  }, []);
+    return () => { window.clearTimeout(initialHealthCheck); window.clearInterval(healthTimer); };
+  }, [checkHelper]);
 
   useEffect(() => {
     if (!helperOnline || credentialsReady) return;
@@ -1314,13 +1322,15 @@ export default function InseratStudio() {
   };
 
   const retryPlotSource = async () => {
+    if (!await checkHelper()) return;
     try {
       const response = await helperFetch("/plot-sync/status");
       const data = await response.json() as PlotSyncStatus & { ok?: boolean };
       if (!response.ok || !data.ok) throw new Error("Status nicht verfügbar");
       setPlotSyncStatus(data);
+      setPlotSourceError("");
       setState(current => rememberActiveCatalogSource(current, data.activeCatalog));
-    } catch { setPlotSyncStatus(null); }
+    } catch { setPlotSyncStatus(null); setPlotSourceError("Der aktuelle Excel-Status konnte nicht abgefragt werden. Bitte erneut prüfen."); }
   };
 
   const previewMaster = async () => {
@@ -3407,6 +3417,8 @@ export default function InseratStudio() {
           linkedProjectCounts={linkedProjectCounts}
           selectionMeta={plotSelectionMeta}
           syncStatus={plotSyncStatus}
+          helperProblem={helperProblem}
+          sourceError={plotSourceError}
           onRetrySource={retryPlotSource}
           onSelectionChange={updateCentralPlotSelection}
           onSave={savePlotRecords}

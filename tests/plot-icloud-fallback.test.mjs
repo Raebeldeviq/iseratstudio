@@ -159,6 +159,13 @@ test("UI shows 35 selectable / 16 reviews offline, disables Excel sync and remov
   const props = { plots: state.plots, catalogPolicy: state.activePlotCatalog, selectedPlotIds: [], defaultOwner: "pascal", helperOnline: true,
     rotationStatuses: {}, selectionMeta: {}, linkedProjectCounts: {}, onRetrySource: async () => {}, helperRequest: () => { throw Error("No requests during render"); } };
   const render = source => renderToStaticMarkup(createElement(Component, { ...props, syncStatus: { activeCatalog: source } }));
+  for (const connected of [false, true]) {
+    const pending = renderToStaticMarkup(createElement(Component, { ...props, helperOnline: connected, syncStatus: null }));
+    assert.doesNotMatch(pending, /Excel momentan nicht erreichbar/u);
+    assert.match(pending, connected ? /Excel-Status noch nicht bestätigt/u : /Verbindung zum lokalen Helfer fehlt/u);
+    assert.match(pending, /disabled=""[^>]*>Excel synchronisieren/u);
+    assert.match(pending, /Auswählbare Grundstücke \(35\)/u);
+  }
   const offline = render(failed);
   assert.match(offline, /Excel momentan nicht erreichbar/u);
   assert.match(offline, /Erneut prüfen/u);
