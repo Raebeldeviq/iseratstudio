@@ -1,3 +1,4 @@
+import { runCatalogManagementAction } from "./catalog-management-actions.mjs";
 import { correctListingInventory, assertInventoryUploadAllowed } from "./inventory-correction.mjs";
 import { listingInteriorImages } from "./interior-sets.mjs";
 import { Client } from "basic-ftp";
@@ -57,8 +58,8 @@ import { createUploadJobId } from "./batch-upload.mjs";
 import { eligiblePromotionHeroImages } from "./listing-creative-selection.mjs";
 import { assertCreativePayload } from "./listing-creative-payload-guard.mjs";
 import { assertOpenImmoExternalIdsInArchive } from "./openimmo-external-id-guard.mjs";
-import { assertDeleteBatchUploadReady, confirmDeleteBatch, deleteBatchTrafficLight, linkDeleteBatchListings } from "./delete-batches.mjs";
-import { recordRefillDeletions, assertSmartRefillUploadReady } from "./smart-refill.mjs";
+import { assertDeleteBatchUploadReady } from "./delete-batches.mjs";
+import { assertSmartRefillUploadReady } from "./smart-refill.mjs";
 import {
   assertProductionRuntime,
   loadHelperRuntimeProvenance,
@@ -719,6 +720,7 @@ const server = createServer(async (request, response) => {
   const isCatalogV2Commit = request.method === "POST" && pathname === "/catalog-v2/commit";
   const isCatalogV2ManifestLoad = request.method === "GET" && pathname === "/catalog-v2/manifest";
   const isCatalogV2ImageLoad = request.method === "GET" && pathname === "/catalog-v2/image";
+  const isManagerCleanup = request.method === "POST" && pathname === "/manager/cleanup";
   const isInventoryCorrection = request.method === "POST" && pathname === "/inventory/correct";
   const isDeleteBatchConfirm = request.method === "POST" && pathname === "/delete-batches/confirm";
   const isMediaLibraryList = request.method === "GET" && pathname === "/media-library";
@@ -738,7 +740,7 @@ const server = createServer(async (request, response) => {
   const isPlotMasterApply = request.method === "POST" && pathname === "/plot-master/apply";
   const isMailRuntimeProbe = request.method === "POST" && pathname === "/mail-runtime/probe";
   const isExactProductionDelete = request.method === "POST" && pathname === EXACT_PRODUCTION_DELETE_PATH;
-  if (!isInventoryCorrection && !isDeleteBatchConfirm && !isActivePlotCatalogPreview && !isActivePlotCatalogApply && !isPlotSyncSchedule && !isHealth && !isRuntimeProvenance && !isUpload && !isBinaryUpload && !isManualBatchResumption && !isLocalSave && !isTextGeneration && !isImageCaptionGeneration && !isOpenAiKeyValidation && !isCredentialLoad && !isCredentialSave && !isCatalogLoad && !isCatalogSave && !isCatalogV2Start && !isCatalogV2ImageSave && !isCatalogV2Commit && !isCatalogV2ManifestLoad && !isCatalogV2ImageLoad && !isMediaLibraryList && !isMediaLibrarySequence && !isMediaLibraryImage && !isPlotExposeAnalyze && !isPlotExposeCommit && !isPlotExposeLoad && !isPlotExposeArchive && !isPlotSyncStatus && !isPlotSyncRun && !isPlotSyncLog && !isPlotMasterPreview && !isPlotMasterApply && !isMailRuntimeProbe && !isExactProductionDelete) {
+  if (!isInventoryCorrection && !isManagerCleanup && !isDeleteBatchConfirm && !isActivePlotCatalogPreview && !isActivePlotCatalogApply && !isPlotSyncSchedule && !isHealth && !isRuntimeProvenance && !isUpload && !isBinaryUpload && !isManualBatchResumption && !isLocalSave && !isTextGeneration && !isImageCaptionGeneration && !isOpenAiKeyValidation && !isCredentialLoad && !isCredentialSave && !isCatalogLoad && !isCatalogSave && !isCatalogV2Start && !isCatalogV2ImageSave && !isCatalogV2Commit && !isCatalogV2ManifestLoad && !isCatalogV2ImageLoad && !isMediaLibraryList && !isMediaLibrarySequence && !isMediaLibraryImage && !isPlotExposeAnalyze && !isPlotExposeCommit && !isPlotExposeLoad && !isPlotExposeArchive && !isPlotSyncStatus && !isPlotSyncRun && !isPlotSyncLog && !isPlotMasterPreview && !isPlotMasterApply && !isMailRuntimeProbe && !isExactProductionDelete) {
     send(response, 404, { ok: false, message: "Nicht gefunden." }, origin);
     return;
   }
@@ -1141,23 +1143,14 @@ const server = createServer(async (request, response) => {
       return;
     }
 
-    if (isInventoryCorrection) {
-      const result = await catalogStateStore.update(state => correctListingInventory(state, body));
-      send(response, 200, { ok: true, savedAt: result.savedAt, changed: result.changed }, origin);
+    if (isManagerCleanup || isDeleteBatchConfirm) {
+      send(response, 200, await runCatalogManagementAction(catalogStateStore, pathname, body), origin);
       return;
     }
 
-    if (isDeleteBatchConfirm) {
-      const batchId = String(body.batchId || "");
-      const expectedCount = Number(body.expectedCount);
-      if (!batchId || !Number.isInteger(expectedCount) || expectedCount < 1) throw new Error("Ungültige Batchbestätigung.");
-      const result = await catalogStateStore.update((state) => {
-        const batch = deleteBatchTrafficLight(state).find((item) => item.id === batchId);
-        if (!batch || batch.active.length !== expectedCount) throw new Error("Der Batch hat sich seit der Anzeige geändert. Bitte die Lösch-Ampel neu laden.");
-        const confirmed = confirmDeleteBatch(state, batchId);
-        return { state: recordRefillDeletions(linkDeleteBatchListings(state), confirmed.state), result: { deletedCount: confirmed.deletedCount } };
-      });
-      send(response, 200, { ok: true, savedAt: result.savedAt, deletedCount: result.result.deletedCount }, origin);
+    if (isInventoryCorrection) {
+      const result = await catalogStateStore.update(state => correctListingInventory(state, body));
+      send(response, 200, { ok: true, savedAt: result.savedAt, changed: result.changed }, origin);
       return;
     }
 

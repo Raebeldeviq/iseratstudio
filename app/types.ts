@@ -342,6 +342,7 @@ export type InteriorSetId = "A" | "B" | "C";
 export type InteriorRoomRole = "living" | "kids" | "bedroom" | "kitchen" | "bathroom" | "office";
 
 export type GeneratedListing = {
+  managerCleanup?: { removedAt: string; operationId: string; reason: string; externalId: string; source: string };
   inventoryCorrection?: { active: boolean; reason: string; correctedAt: string; reversedAt: string;
     history: Array<{ action: string; at: string; reason: string; externalId: string }> };
   interiorSet?: InteriorSetId;

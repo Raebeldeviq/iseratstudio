@@ -6,7 +6,7 @@ import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "
 import { probeHelperConnection } from "../helper-connection.mjs";
 import { AI_MODEL_OPTIONS, DEFAULT_AI_MODEL } from "../ai-models.mjs";
 import { isDraftListing, mergeListingCollection } from "../listing-catalog-view.mjs";
-import { filterManagedListingsByObjectNumber } from "../listing-manager-view.mjs";
+import { filterManagedListings, MANAGER_STATUS_FILTERS } from "../listing-manager-view.mjs";
 import { activeWorkingListingCount } from "../active-listings.mjs";
 import { operationalCatalogPlots, rememberActiveCatalogSource, resolveActiveCatalogSource } from "../plot-active-catalog.mjs";
 import type { ActiveCatalogSource, ActiveCatalogPreview } from "../plot-active-catalog.mjs";
@@ -79,6 +79,8 @@ import { createVariantListing, existingOrAllocatedExternalId, prepareProjectList
 import { approveRefillPool, createSmartRefillUploadPlan, planSmartRefill, prepareSmartRefill, refillPoolFingerprint } from "../smart-refill.mjs";
 import type { RefillPool } from "../smart-refill.mjs";
 import { isInventoryHistorical } from "../inventory-correction.mjs";
+import { managerEntryKey, managerCleanupEligibility, managerCleanupRevision } from "../manager-cleanup.mjs";
+import ManagerBulkActions from "./components/ManagerBulkActions";
 import InventoryCorrectionActions from "./components/InventoryCorrectionActions";
 import SmartRefillPanel from "./components/SmartRefillPanel";
 import PlotManagement from "./components/PlotManagement";
@@ -841,6 +843,8 @@ export default function InseratStudio() {
   const [managerSortKey, setManagerSortKey] = useState<ManagerSortKey>("health");
   const [managerSortDirection, setManagerSortDirection] = useState<"asc" | "desc">("desc");
   const [groupManagerByPlot, setGroupManagerByPlot] = useState(false);
+  const [managerStatusFilter, setManagerStatusFilter] = useState("all");
+  const [managerSelection, setManagerSelection] = useState<string[]>([]);
   const [managerObjectNumberQuery, setManagerObjectNumberQuery] = useState("");
   const [expandedManagerListingKey, setExpandedManagerListingKey] = useState<string | null>(null);
   const [collapsedSingleManagerResultKey, setCollapsedSingleManagerResultKey] = useState<string | null>(null);
@@ -1195,7 +1199,7 @@ export default function InseratStudio() {
   ]);
   const managedListings = managerSources.flatMap(({ project, listings, listingGroup, archiveId }) => {
     const group = normalizeListingGroup(listingGroup, project.id) as ListingGroup;
-    return listings.map((listing) => {
+    return listings.filter(listing => !listing.managerCleanup?.removedAt).map((listing) => {
       const rotationPlan = planListingRotation(state, project.id, listing.id, {
         project,
         listing,
@@ -1232,7 +1236,9 @@ export default function InseratStudio() {
     const stable = compared || collator.compare(projectSelectionLabel(left.project), projectSelectionLabel(right.project)) || collator.compare(left.listing.id, right.listing.id);
     return managerSortDirection === "asc" ? stable : -stable;
   });
-  const visibleManagedListings = filterManagedListingsByObjectNumber(sortedManagedListings, managerObjectNumberQuery) as typeof sortedManagedListings;
+  const visibleManagedListings = filterManagedListings(sortedManagedListings, managerObjectNumberQuery, managerStatusFilter) as typeof sortedManagedListings;
+  const selectableManagerListings = visibleManagedListings.filter(entry => managerCleanupEligibility(state, entry).allowed);
+  const selectedManagerListings = selectableManagerListings.filter(entry => managerSelection.includes(managerEntryKey(entry)));
   const singleManagerSearchResult = Boolean(managerObjectNumberQuery.trim()) && visibleManagedListings.length === 1;
   const managerListingGroups = groupManagerByPlot
     ? [...new Map(visibleManagedListings.map((entry) => [entry.project.id, entry.project])).values()]
@@ -3115,6 +3121,30 @@ export default function InseratStudio() {
     void runRefillAction(current => approveRefillPool(current, plotId, pool, fingerprint), "Die angezeigten Pooldaten sind für den Nachschub freigegeben. Jede Datenänderung erfordert eine neue Freigabe.");
   };
 
+  const removeSelectedManagerListings = async () => {
+    if (refillOperation.current || uploading || !helperOnline || !selectedManagerListings.length) return;
+    const entries = selectedManagerListings.map(entry => ({ projectId: entry.project.id, archiveId: entry.archiveId,
+      listingId: entry.listing.id, externalId: entry.listing.externalId, expectedRevision: managerCleanupRevision(state, entry) }));
+    if (!window.confirm(`${entries.length} ausgewählte Inserate aus dem Manager entfernen?\n\n${entries.map(entry => entry.externalId || entry.listingId).join(", ")}\n\nUpload- und Löschhistorie bleiben erhalten. Keine Portallöschung und keine neuen Nachschubplätze.`)) return;
+    refillOperation.current = true;
+    setRefillBusy(true);
+    try {
+      await queueDeviceCatalogSnapshot(state, new Date().toISOString());
+      const response = await helperFetch("/manager/cleanup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ entries }) });
+      const result = await response.json() as { ok?: boolean; message?: string };
+      if (!response.ok || !result.ok) throw new Error(result.message || "Die Auswahl konnte nicht bereinigt werden.");
+      const snapshot = await loadDeviceCatalogSnapshot();
+      if (!snapshot) throw new Error("Bereinigung gespeichert. Bitte die App neu öffnen, um den aktuellen Katalog zu laden.");
+      acceptKnownDeviceCatalogSavedAt(snapshot.savedAt);
+      setState(snapshot.state);
+      await saveStudioState(snapshot.state, snapshot.savedAt);
+      setManagerSelection([]);
+      setNotice(`${entries.length} historische oder inaktive Inserate aus dem Manager entfernt. Historie erhalten, keine Nachschubplätze erzeugt.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Die Auswahl konnte nicht bereinigt werden.");
+    } finally { refillOperation.current = false; setRefillBusy(false); }
+  };
+
   const correctInventory = async (projectId: string, listing: GeneratedListing, action: "exclude" | "restore", archiveId = "") => {
     if (refillOperation.current || uploading || !helperOnline) return;
     const message = action === "exclude"
@@ -3964,18 +3994,34 @@ export default function InseratStudio() {
           <div className="content-card manager-list-card">
             <div className="section-heading compact"><div><span className="eyebrow">Alle Adressen</span><h3>{managedListings.length} verwaltete{managedListings.length === 1 ? "s" : ""} Inserat{managedListings.length === 1 ? "" : "e"}</h3></div></div>
             <div className="manager-view-controls">
-              <label className="field manager-search"><span>Objektnummer suchen</span><input type="search" placeholder="Objektnummer suchen …" value={managerObjectNumberQuery} onChange={(event) => { setManagerObjectNumberQuery(event.target.value); setExpandedManagerListingKey(null); setCollapsedSingleManagerResultKey(null); }} /></label>
+              <label className="field"><span>Statusfilter</span><select value={managerStatusFilter} onChange={event => { setManagerStatusFilter(event.target.value); setManagerSelection([]); }}>
+                {MANAGER_STATUS_FILTERS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select></label>
+              <label className="field manager-search"><span>Objektnummer suchen</span><input type="search" placeholder="Objektnummer suchen …" value={managerObjectNumberQuery} onChange={(event) => { setManagerObjectNumberQuery(event.target.value); setExpandedManagerListingKey(null); setCollapsedSingleManagerResultKey(null); setManagerSelection([]); }} /></label>
               <label className="field"><span>Sortieren nach</span><select value={managerSortKey} onChange={(event) => setManagerSortKey(event.target.value as ManagerSortKey)}><option value="city">Ort</option><option value="uploadDate">Upload-Datum</option><option value="lastUpdate">Letzte Aktualisierung</option><option value="nextUpdate">Nächste Aktualisierung</option><option value="health">Health Score</option><option value="status">Status</option></select></label>
               <button className="secondary" onClick={() => setManagerSortDirection((direction) => direction === "asc" ? "desc" : "asc")}>{managerSortDirection === "asc" ? "↑ Aufsteigend" : "↓ Absteigend"}</button>
               <label className="standard-package manager-group-toggle"><input type="checkbox" checked={groupManagerByPlot} onChange={(event) => setGroupManagerByPlot(event.target.checked)} /><span><b>Nach Grundstück gruppieren</b><small>Alle Inserate einer Adresse zusammen anzeigen.</small></span></label>
             </div>
             {managerObjectNumberQuery.trim() ? <p className="manager-search-count" role="status">{visibleManagedListings.length} Treffer für „{managerObjectNumberQuery.trim()}“</p> : null}
+            <ManagerBulkActions selectedCount={selectedManagerListings.length} selectableCount={selectableManagerListings.length}
+              disabled={refillBusy || uploading || !helperOnline} onSelectAll={() => setManagerSelection(selectableManagerListings.map(managerEntryKey))}
+              onClear={() => setManagerSelection([])} onRemove={() => void removeSelectedManagerListings()} />
             <div className="manager-table" role="table" aria-label="Verwaltete Inserate">
-              {managerListingGroups.map((managerGroup) => <section className="manager-property-group" key={managerGroup.id}>{groupManagerByPlot ? <header><b>{managerGroup.label}</b><span>{managerGroup.items.length} Inserate</span></header> : null}{managerGroup.items.map(({ project, listing, control, health, rotationPlan, nextHouse, archiveId }) => {
+              {managerListingGroups.map((managerGroup) => <section className="manager-property-group" key={managerGroup.id}>{groupManagerByPlot ? <header><b>{managerGroup.label}</b><span>{managerGroup.items.length} Inserate</span></header> : null}{managerGroup.items.map(({ project, listing, group, control, health, rotationPlan, nextHouse, archiveId }) => {
                 const listingKey = `${project.id}:${archiveId}:${listing.id}`;
+                const entry = { project, listing, group, archiveId };
+                const selectionKey = managerEntryKey(entry);
+                const cleanupEligibility = managerCleanupEligibility(state, entry);
                 const expanded = (singleManagerSearchResult && collapsedSingleManagerResultKey !== listingKey) || expandedManagerListingKey === listingKey;
                 return (
                 <article className={`manager-row${control.premiumPlacement || control.manualLock || listing.rotationArchivedAt ? " locked" : ""}`} key={listingKey}>
+                  <div className="manager-row-selectable">
+                  <label className="manager-row-select" title={cleanupEligibility.reason}>
+                    <input type="checkbox" aria-label={`Inserat ${listing.externalId || listing.id} auswählen`}
+                      disabled={!cleanupEligibility.allowed || refillBusy || uploading || !helperOnline}
+                      checked={cleanupEligibility.allowed && managerSelection.includes(selectionKey)}
+                      onChange={event => setManagerSelection(current => event.target.checked ? [...new Set([...current, selectionKey])] : current.filter(key => key !== selectionKey))} />
+                  </label>
                   <button type="button" className="manager-row-summary" aria-expanded={expanded} aria-controls={expanded ? `manager-details-${project.id}-${archiveId}-${listing.id}` : undefined} onClick={() => singleManagerSearchResult ? setCollapsedSingleManagerResultKey(expanded ? listingKey : null) : setExpandedManagerListingKey(expanded ? null : listingKey)}>
                     <b className="manager-summary-number">{listing.externalId || "Noch nicht hochgeladen"}</b>
                     <span className="manager-summary-house">{listing.templateName}</span>
@@ -3986,6 +4032,7 @@ export default function InseratStudio() {
                     {control.manualLock ? <span className="manager-summary-protection">Löschung gesperrt</span> : null}
                     <span className="manager-summary-chevron" aria-hidden="true">{expanded ? "▲" : "▼"}</span>
                   </button>
+                  </div>
                   {expanded ? <div id={`manager-details-${project.id}-${archiveId}-${listing.id}`} className="manager-row-details">
                   <div className="manager-row-main">
                     <div><span>Adresse</span><b>{listing.addressSnapshot ? `${listing.addressSnapshot.address.street} ${listing.addressSnapshot.address.houseNumber}, ${listing.addressSnapshot.address.postalCode} ${listing.addressSnapshot.address.city}` : projectSelectionLabel(project)}</b></div>
@@ -4020,7 +4067,7 @@ export default function InseratStudio() {
                 );
               })}</section>)}
               {!managedListings.length ? <div className="empty-state large"><b>Noch keine verwalteten Inserate</b><span>Im gespeicherten Katalog sind noch keine Inserate vorhanden.</span></div> : null}
-              {managedListings.length > 0 && visibleManagedListings.length === 0 ? <div className="empty-state large"><b>Keine passende Objektnummer</b><span>Bitte Suchbegriff prüfen oder die Suche löschen.</span></div> : null}
+              {managedListings.length > 0 && visibleManagedListings.length === 0 ? <div className="empty-state large"><b>Keine passenden Inserate</b><span>Bitte Statusfilter oder Objektnummernsuche anpassen.</span></div> : null}
             </div>
           </div>
         </section>

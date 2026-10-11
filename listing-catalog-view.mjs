@@ -1,10 +1,10 @@
-import { isInventoryHistorical, assertInventoryCorrectionTransition } from "./inventory-correction.mjs";
+import { isManagerRemoved, isInventoryHistorical, assertInventoryCorrectionTransition } from "./inventory-correction.mjs";
 import { assertSmartRefillTransition } from "./smart-refill.mjs";
 import { normalizeWorkflowStatus, WORKFLOW_STATUS } from './workflow-status.mjs';
 import { isHvObjectNumber } from './object-number-sequence.mjs';
 
 export function isDraftListing(listing) {
-  return !isInventoryHistorical(listing) && normalizeWorkflowStatus(listing?.status) === WORKFLOW_STATUS.DRAFT;
+  return !isInventoryHistorical(listing) && !isManagerRemoved(listing) && normalizeWorkflowStatus(listing?.status) === WORKFLOW_STATUS.DRAFT;
 }
 
 function conflict(id) {

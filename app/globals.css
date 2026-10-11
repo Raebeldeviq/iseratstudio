@@ -821,3 +821,11 @@ input:focus, textarea:focus, select:focus { border-color: #91bc47; box-shadow: 0
 .inventory-correction p, .inventory-correction ol { font-size: 0.85rem; overflow-wrap: anywhere; }
 fieldset.manager-controls { margin: 0; padding: 0; border: 0; min-width: 0; }
 fieldset.manager-controls:disabled { opacity: 0.6; }
+
+.manager-row-selectable { display: flex; align-items: stretch; }
+.manager-row-select { display: flex; align-items: center; padding: 0 0.65rem; background: #f7f9f5; }
+.manager-row-select input { width: 16px; height: 16px; accent-color: var(--accent-strong); }
+.manager-row-selectable .manager-row-summary { flex: 1; min-width: 0; }
+.manager-bulk-controls { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; margin: 0.8rem 0; }
+.manager-bulk-controls > small { color: var(--muted); }
+.manager-bulk-selection { display: flex; flex-wrap: wrap; gap: 0.65rem; align-items: center; width: 100%; padding: 0.7rem; background: #f1f7e8; border: 1px solid var(--line); border-radius: 12px; }

@@ -1,4 +1,4 @@
-import { isInventoryEntryHistorical, isInventoryHistorical, assertInventoryUploadAllowed } from "./inventory-correction.mjs";
+import { isInventoryEntryHistorical, isManagerRemoved, isInventoryHistorical, assertInventoryUploadAllowed } from "./inventory-correction.mjs";
 import { WORKFLOW_STATUS } from "./workflow-status.mjs";
 
 const PREFIX = "30460";
@@ -139,7 +139,7 @@ export function replanDeleteBatchesForUpload(state, listingIds, uploadDate = cal
   const ids = new Set(listingIds);
   for (const project of state.projects || []) {
     for (const listing of project.listings || []) {
-      if (!ids.has(listing.id) || isInventoryHistorical(listing)) continue;
+      if (!ids.has(listing.id) || isInventoryHistorical(listing) || isManagerRemoved(listing)) continue;
       const entry = batches(next).flatMap((batch) => batch.entries || []).find((item) => item.listingId === listing.id && item.externalId === listing.externalId);
       if (!entry || entry.status === "active" || entry.status === "paused" || entry.status === "deleted") continue;
       if (entry.status === "planned" && entry.uploadDate === uploadDate) continue;
