@@ -29,7 +29,7 @@ test("keeps the only plot selection beside the shared house pool", () => {
   assert.match(studioSource, /centralHousePoolPanel/);
   assert.match(studioSource, /selectedPlotIds\.flatMap/);
   // Working selection must not hide the global catalog/history in the manager.
-  assert.match(studioSource, /managedListings = state\.projects\.flatMap/);
+  assert.match(studioSource, /managerSources = state\.projects\.flatMap/);
   assert.doesNotMatch(studioSource, /runSafeLocalScheduler/);
   assert.doesNotMatch(schedulerServiceSource, /selectedPlotIds/);
   assert.match(helperSource, /listingRotationSchedulerService\.run/);

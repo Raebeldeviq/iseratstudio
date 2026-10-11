@@ -9,7 +9,7 @@ const listing = { id:'listing-1', externalId:'TEST-1', status:'published', listi
 
 test('manager integrates the full persisted catalog independently of the UI selection', async () => {
   const source = await readFile(new URL('../app/InseratStudio.tsx', import.meta.url), 'utf8');
-  assert.match(source, /const managedListings = state\.projects\.flatMap/);
+  assert.match(source, /const managerSources = state\.projects\.flatMap/);
   assert.doesNotMatch(source, /const managedListings = selectedWorkflowProjects/);
   assert.match(source, /Zeitplan konfiguriert · Helper-Freigabe erforderlich/);
   assert.doesNotMatch(source, /ein Fehler stoppt niemals andere Inserate/);

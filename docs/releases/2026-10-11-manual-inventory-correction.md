@@ -42,3 +42,18 @@ Unverändert zu erhalten: `30460-002007`, `30460-003007`, `30460-004007`, `30460
 - Fokussierte Regressionen: 38 Tests zu Korrektur, Rücknahme, Batchbestätigung, Nachschub, Poolabschluss, Persistenz und UI-Darstellung.
 - Exakter Fritz-Zubeil-Fall einschließlich Erhalt von Batch 002 als Regression abgedeckt.
 - Gesamtsuite: 745 bestanden, 1 übersprungen, 0 fehlgeschlagen (746 insgesamt). ESLint und Produktions-Build erfolgreich.
+
+## Ergänzung: acht ausdrücklich freigegebene Reset-Archiv-Einträge
+
+Die Abschlussprüfung fand zusätzlich acht aktive Batchverweise auf das Reset-Archiv `411bfe23-8a0e-4c23-ac33-54ac4c6e1df7`. Der Nutzer hat ihre Bestandskorrektur gesondert freigegeben:
+
+- `30460-001001`, `30460-001002`
+- `30460-002001`, `30460-002002`
+- `30460-003001`, `30460-003002`
+- `30460-004001`, `30460-004002`
+
+Die Korrekturaktion unterstützt deshalb zusätzlich die genaue Archiv-ID. Die Archiv-Inserate erhalten ausschließlich Korrekturmetadaten; ursprüngliche Inseratsdaten, Archivzeitpunkt und Batchbelege bleiben erhalten. Zugehörige Reset-Archive erscheinen im bestehenden Inseratsmanager und sind über die vorhandene Objektnummernsuche erreichbar. Die Korrektur ist dort rücknehmbar; normale Bearbeitungs- und Uploadaktionen bleiben für Reset-Archive gesperrt.
+
+Zusätzliche Regression prüft Archivkorrektur, falsche Archiv-ID, Rücknahme, unveränderte Stammdaten und Ausschluss aus der Löschbestätigung ohne Nachschubgutschrift. Fokussierte Prüfung: 39 bestanden.
+
+Abschlussprüfung der Ergänzung: Gesamtsuite 746 bestanden, 1 übersprungen, 0 fehlgeschlagen (747 insgesamt); ESLint und Produktions-Build erfolgreich. Bestehende Quelltext-Prüfungen des globalen Inseratsmanagers wurden auf die nun explizite gemeinsame Quelle aus aktuellen Inseraten und Reset-Archiven angepasst; die Grundstücksauswahl schränkt den Manager weiterhin nicht ein.

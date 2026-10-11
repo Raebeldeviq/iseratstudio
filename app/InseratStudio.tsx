@@ -1188,9 +1188,14 @@ export default function InseratStudio() {
   const selectedUploadIds = batchPlan.addresses.flatMap((address: { items: Array<{ listingId: string }> }) =>
     address.items.map((item) => item.listingId));
   const scheduler = normalizeListingScheduler(state.scheduler) as NonNullable<StudioState["scheduler"]>;
-  const managedListings = state.projects.flatMap((project) => {
-    const group = normalizeListingGroup(project.listingGroup, project.id) as ListingGroup;
-    return project.listings.map((listing) => {
+  const managerSources = state.projects.flatMap(project => [
+    { project, listings: project.listings, listingGroup: project.listingGroup, archiveId: "" },
+    ...(state.listingResetHistory || []).filter(archive => archive.projectId === project.id)
+      .map(archive => ({ project, listings: archive.listings, listingGroup: archive.listingGroup, archiveId: archive.id })),
+  ]);
+  const managedListings = managerSources.flatMap(({ project, listings, listingGroup, archiveId }) => {
+    const group = normalizeListingGroup(listingGroup, project.id) as ListingGroup;
+    return listings.map((listing) => {
       const rotationPlan = planListingRotation(state, project.id, listing.id, {
         project,
         listing,
@@ -1202,6 +1207,7 @@ export default function InseratStudio() {
         project,
         group,
         listing,
+        archiveId,
         control: listingControl(group, listing),
         health: listingHealthScore(group, listing, scheduler.settings),
         rotationPlan,
@@ -3109,7 +3115,7 @@ export default function InseratStudio() {
     void runRefillAction(current => approveRefillPool(current, plotId, pool, fingerprint), "Die angezeigten Pooldaten sind für den Nachschub freigegeben. Jede Datenänderung erfordert eine neue Freigabe.");
   };
 
-  const correctInventory = async (projectId: string, listing: GeneratedListing, action: "exclude" | "restore") => {
+  const correctInventory = async (projectId: string, listing: GeneratedListing, action: "exclude" | "restore", archiveId = "") => {
     if (refillOperation.current || uploading || !helperOnline) return;
     const message = action === "exclude"
       ? `Objekt ${listing.externalId}: als „Nicht im Portal vorhanden / Duplikat“ kennzeichnen? Es wird aus der aktiven Löschplanung genommen. Keine Portalaktion und keine Nachschubplätze.`
@@ -3120,7 +3126,7 @@ export default function InseratStudio() {
     try {
       await queueDeviceCatalogSnapshot(state, new Date().toISOString());
       const response = await helperFetch("/inventory/correct", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
-        projectId, listingId: listing.id, externalId: listing.externalId, action, expectedRevision: listing.inventoryCorrection?.history.length || 0,
+        projectId, archiveId, listingId: listing.id, externalId: listing.externalId, action, expectedRevision: listing.inventoryCorrection?.history.length || 0,
       }) });
       const result = await response.json() as { ok?: boolean; message?: string; savedAt?: string };
       if (!response.ok || !result.ok) throw new Error(result.message || "Die Bestandskorrektur konnte nicht gespeichert werden.");
@@ -3965,22 +3971,22 @@ export default function InseratStudio() {
             </div>
             {managerObjectNumberQuery.trim() ? <p className="manager-search-count" role="status">{visibleManagedListings.length} Treffer für „{managerObjectNumberQuery.trim()}“</p> : null}
             <div className="manager-table" role="table" aria-label="Verwaltete Inserate">
-              {managerListingGroups.map((managerGroup) => <section className="manager-property-group" key={managerGroup.id}>{groupManagerByPlot ? <header><b>{managerGroup.label}</b><span>{managerGroup.items.length} Inserate</span></header> : null}{managerGroup.items.map(({ project, listing, control, health, rotationPlan, nextHouse }) => {
-                const listingKey = `${project.id}:${listing.id}`;
+              {managerListingGroups.map((managerGroup) => <section className="manager-property-group" key={managerGroup.id}>{groupManagerByPlot ? <header><b>{managerGroup.label}</b><span>{managerGroup.items.length} Inserate</span></header> : null}{managerGroup.items.map(({ project, listing, control, health, rotationPlan, nextHouse, archiveId }) => {
+                const listingKey = `${project.id}:${archiveId}:${listing.id}`;
                 const expanded = (singleManagerSearchResult && collapsedSingleManagerResultKey !== listingKey) || expandedManagerListingKey === listingKey;
                 return (
-                <article className={`manager-row${control.premiumPlacement || control.manualLock || listing.rotationArchivedAt ? " locked" : ""}`} key={`${project.id}-${listing.id}`}>
-                  <button type="button" className="manager-row-summary" aria-expanded={expanded} aria-controls={expanded ? `manager-details-${project.id}-${listing.id}` : undefined} onClick={() => singleManagerSearchResult ? setCollapsedSingleManagerResultKey(expanded ? listingKey : null) : setExpandedManagerListingKey(expanded ? null : listingKey)}>
+                <article className={`manager-row${control.premiumPlacement || control.manualLock || listing.rotationArchivedAt ? " locked" : ""}`} key={listingKey}>
+                  <button type="button" className="manager-row-summary" aria-expanded={expanded} aria-controls={expanded ? `manager-details-${project.id}-${archiveId}-${listing.id}` : undefined} onClick={() => singleManagerSearchResult ? setCollapsedSingleManagerResultKey(expanded ? listingKey : null) : setExpandedManagerListingKey(expanded ? null : listingKey)}>
                     <b className="manager-summary-number">{listing.externalId || "Noch nicht hochgeladen"}</b>
                     <span className="manager-summary-house">{listing.templateName}</span>
                     {listing.addressSnapshot ? <span className="manager-summary-protection">POOL {listing.addressSnapshot.pool}</span> : null}
                     <span className="manager-summary-address">{listing.addressSnapshot ? `${listing.addressSnapshot.address.street} ${listing.addressSnapshot.address.houseNumber}, ${listing.addressSnapshot.address.postalCode} ${listing.addressSnapshot.address.city}` : projectSelectionLabel(project)}</span>
-                    <span className="manager-summary-status">{control.statusMessage || workflowStatusLabel(control.status)} · Health {health.score}</span>
+                    <span className="manager-summary-status">{archiveId ? "Reset-Archiv · " : ""}{control.statusMessage || workflowStatusLabel(control.status)} · Health {health.score}</span>
                     {control.premiumPlacement ? <span className="manager-summary-protection">Premium aktiv</span> : null}
                     {control.manualLock ? <span className="manager-summary-protection">Löschung gesperrt</span> : null}
                     <span className="manager-summary-chevron" aria-hidden="true">{expanded ? "▲" : "▼"}</span>
                   </button>
-                  {expanded ? <div id={`manager-details-${project.id}-${listing.id}`} className="manager-row-details">
+                  {expanded ? <div id={`manager-details-${project.id}-${archiveId}-${listing.id}`} className="manager-row-details">
                   <div className="manager-row-main">
                     <div><span>Adresse</span><b>{listing.addressSnapshot ? `${listing.addressSnapshot.address.street} ${listing.addressSnapshot.address.houseNumber}, ${listing.addressSnapshot.address.postalCode} ${listing.addressSnapshot.address.city}` : projectSelectionLabel(project)}</b></div>
                     <div><span>Objektnummer</span><b>{listing.externalId || "Noch nicht hochgeladen"}</b>{listing.importConfirmedAt ? <small>Immoprofessional: erfolgreich importiert · {localDateTime(listing.importConfirmedAt)}</small> : null}{listing.supersededByListingId ? <small>Ersetzt durch {project.listings.find((candidate) => candidate.id === listing.supersededByListingId)?.externalId || listing.supersededByListingId}</small> : null}</div>
@@ -3989,8 +3995,8 @@ export default function InseratStudio() {
                     <div><span>Letzte / nächste Aktualisierung</span><b>{localDateTime(control.lastSuccessAt || control.lastUpdatedAt)}</b><small>{localDateTime(control.nextUpdatedAt)}</small></div>
                     <div><span>Status / Health Score</span><b>{control.statusMessage || workflowStatusLabel(control.status)} · {health.score}</b><small>{listing.externalDeletionPending ? "Externe Löschung noch ausstehend" : control.lastError || `${Math.floor(health.daysSinceSuccess)} Tage seit Erfolg`}</small></div>
                   </div>
-                  <InventoryCorrectionActions listing={listing} disabled={refillBusy || uploading || !helperOnline} onCorrect={(action) => void correctInventory(project.id, listing, action)} />
-                  <fieldset className="manager-controls" disabled={isInventoryHistorical(listing)}>
+                  <InventoryCorrectionActions listing={listing} disabled={refillBusy || uploading || !helperOnline} onCorrect={(action) => void correctInventory(project.id, listing, action, archiveId)} />
+                  <fieldset className="manager-controls" disabled={Boolean(archiveId) || isInventoryHistorical(listing)}>
                     <label><input type="checkbox" checked={control.automaticUpdateEnabled} onChange={(event) => updateManagedListingControl(project.id, listing.id, { automaticUpdateEnabled: event.target.checked })} /> Automatik</label>
                     <label><input type="checkbox" checked={control.premiumPlacement} onChange={(event) => updateManagedListingControl(project.id, listing.id, { premiumPlacement: event.target.checked })} /> Premium{control.premiumPlacement ? <small> aktiv · Rotation und Löschung geschützt</small> : null}</label>
                     <label><input type="checkbox" checked={control.manualLock} onChange={(event) => updateManagedListingControl(project.id, listing.id, { manualLock: event.target.checked })} /> Löschen sperren{control.manualLock ? <small> · Rotation und Löschung gesperrt</small> : null}</label>

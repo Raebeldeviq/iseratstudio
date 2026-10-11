@@ -172,3 +172,29 @@ test("helper accepts correction and existing batch confirmation routes through i
   assert.match(routeGuard, /!isDeleteBatchConfirm/u);
   assert.match(source, /catalogStateStore.update\(state => correctListingInventory\(state, body\)\)/u);
 });
+
+test("reset-archive correction excludes exact old references, preserves archive facts, and is reversible", () => {
+  const original = fixture(2);
+  original.listingResetHistory = [{ id: "archive", projectId: "p", kind: "plot-listing-reset", resetAt: at, listings: [original.projects[0].listings[0]], listingGroup: { variants: [{ listing: original.projects[0].listings[0] }] } }];
+  original.projects[0].listings = original.projects[0].listings.slice(1);
+  original.projects[0].listingGroup.variants = original.projects[0].listingGroup.variants.slice(1);
+  const listing = original.listingResetHistory[0].listings[0];
+  const request = { projectId: "p", archiveId: "archive", listingId: listing.id, externalId: listing.externalId, action: "exclude", expectedRevision: 0 };
+  assert.throws(() => correctListingInventory(original, { ...request, archiveId: "wrong" }), /nicht eindeutig/u);
+  const corrected = correctListingInventory(original, request, at);
+  assert.equal(visible(corrected), 1);
+  assert.deepEqual(corrected.projects, original.projects);
+  assert.deepEqual(corrected.deleteBatches, original.deleteBatches);
+  const { inventoryCorrection, ...facts } = corrected.listingResetHistory[0].listings[0];
+  assert.deepEqual(facts, listing);
+  assert.equal(inventoryCorrection.active, true);
+  assert.equal(planSmartRefill(corrected).free, 0);
+  assert.throws(() => assertBrowserCatalogTransition(corrected, original), /Korrekturaktion/u);
+  assert.doesNotThrow(() => assertBrowserCatalogTransition(corrected, structuredClone(corrected)));
+  const confirmed = confirmDeleteBatch(corrected, corrected.deleteBatches[0].id, at).state;
+  assert.equal(recordRefillDeletions(corrected, confirmed).smartRefill.credits.length, 1);
+  assert.equal(confirmed.deleteBatches[0].entries.find(e=>e.listingId===listing.id).status, "active");
+  const restored = correctListingInventory(corrected, { ...request, action: "restore", expectedRevision: 1 }, at);
+  assert.equal(visible(restored), 2);
+  assert.equal(restored.listingResetHistory[0].listings[0].inventoryCorrection.history.length, 2);
+});

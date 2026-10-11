@@ -2,8 +2,11 @@ export const INVENTORY_HISTORICAL_LABEL = "HISTORISCH / NICHT IM PORTAL";
 export const isInventoryHistorical = listing => listing?.inventoryCorrection?.active === true;
 
 export function isInventoryEntryHistorical(state, entry) {
-  return isInventoryHistorical(state.projects?.find(project => project.id === entry.projectId)?.listings
-    ?.find(listing => listing.id === entry.listingId && listing.externalId === entry.externalId));
+  const listings = [
+    ...(state.projects?.find(project => project.id === entry.projectId)?.listings || []),
+    ...(state.listingResetHistory || []).filter(archive => archive.projectId === entry.projectId).flatMap(archive => archive.listings || []),
+  ];
+  return listings.some(listing => listing.id === entry.listingId && listing.externalId === entry.externalId && isInventoryHistorical(listing));
 }
 
 export function assertInventoryUploadAllowed(listing) {
@@ -14,7 +17,9 @@ export function assertInventoryUploadAllowed(listing) {
 export function correctListingInventory(state, input, at = new Date().toISOString()) {
   if (!["exclude", "restore"].includes(input.action)) throw new Error("Unbekannte Bestandskorrektur.");
   const project = state.projects?.find(item => item.id === input.projectId);
-  const matches = project?.listings?.filter(item => item.id === input.listingId && item.externalId === input.externalId) || [];
+  const archive = input.archiveId ? state.listingResetHistory?.find(item => item.id === input.archiveId && item.projectId === input.projectId) : null;
+  const owner = input.archiveId ? archive : project;
+  const matches = owner?.listings?.filter(item => item.id === input.listingId && item.externalId === input.externalId) || [];
   if (matches.length !== 1) throw new Error("Inserats-ID und Objektnummer stimmen nicht eindeutig überein.");
   const listing = matches[0];
   const previous = listing.inventoryCorrection;
@@ -28,11 +33,13 @@ export function correctListingInventory(state, input, at = new Date().toISOStrin
     correctedAt: active ? at : previous.correctedAt, reversedAt: active ? "" : at,
     history: [...(previous?.history || []), { action: input.action, at, reason, externalId: listing.externalId }] };
   const updated = { ...listing, inventoryCorrection };
-  return { ...state, projects: state.projects.map(item => item.id !== project.id ? item : { ...item,
+  const updateOwner = item => ({ ...item,
     listings: item.listings.map(old => old.id === listing.id ? updated : old),
     ...(item.listingGroup ? { listingGroup: { ...item.listingGroup,
-      variants: (item.listingGroup.variants || []).map(variant => variant.listing?.id === listing.id ? { ...variant, listing: updated } : variant) } } : {}),
-  }) };
+      variants: (item.listingGroup.variants || []).map(variant => variant.listing?.id === listing.id ? { ...variant, listing: { ...variant.listing, inventoryCorrection } } : variant) } } : {}),
+  });
+  return archive ? { ...state, listingResetHistory: state.listingResetHistory.map(item => item === archive ? updateOwner(item) : item) }
+    : { ...state, projects: state.projects.map(item => item === project ? updateOwner(item) : item) };
 }
 
 export function assertInventoryCorrectionTransition(current, next) {
