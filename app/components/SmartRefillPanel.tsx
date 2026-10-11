@@ -42,8 +42,8 @@ export default function SmartRefillPanel({ plan, state, busy, online, uploading,
             const listing = project?.listings.find(item => item.id === id);
             const snapshot = listing?.addressSnapshot;
             return <span key={id}>{cycle.sourceHouseName || cycle.sourceHouseId} → {listing?.templateName}
-              <small>{snapshot?.address.street} {snapshot?.address.houseNumber}, {snapshot?.address.postalCode} {snapshot?.address.city} · Innenraum-Set {listing?.interiorSet || "Hausbilder"} · Hausposition {snapshot?.housePosition} · Löschung geplant: {snapshot?.plannedDeletionDate}</small>
-              <small>{listing?.texts?.title}</small></span>;
+              <small style={{ display: "block" }}>{snapshot?.address.street} {snapshot?.address.houseNumber}, {snapshot?.address.postalCode} {snapshot?.address.city} · Innenraum-Set {listing?.interiorSet || "Hausbilder"} · Hausposition {snapshot?.housePosition} · Löschung geplant: {snapshot?.plannedDeletionDate}</small>
+              <small style={{ display: "block" }}>{listing?.texts?.title}</small></span>;
           })}</div>;
       })}
     </div></details> : null}

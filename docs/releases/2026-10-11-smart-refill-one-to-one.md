@@ -7,6 +7,7 @@
 - Haustypen werden mit der vorhandenen Katalogvalidierung und Gewichtung gewählt. Quellhaus, aktive Häuser und gleichzeitig reservierte Häuser sind ausgeschlossen.
 - Der bestehende Generator unterstützt einzelne Ersatzpositionen und verwendet weiterhin Texte, Bildreihenfolge, Hausvarianten, Innenraum-Sets und Compliance. OpenImmo übernimmt Fläche und Grundstückspreis aus dem jeweiligen Inserat-Snapshot.
 - Die bestehende Nachschubvorschau zeigt Quellnummer → Nachfolgernummer, Adresse, Pools, Häuser, Innenraum-Set, Hausposition und Löschtermin.
+- Die abschließende Sichtprüfung trennt Adresse/Planung und Titel in eigene kompakte Zeilen, damit diese Angaben nicht direkt an den Haustyp oder das Datum anschließen.
 - Neue Reservierungen enthalten genau eine Kredit-ID und eine neue listingId. Alte Viererreservierungen bleiben als Audit erhalten; kontrolliertes Verwerfen ist ausschließlich eine geprüfte administrative Transaktion.
 - Pascals ausdrücklich erteilte Freigabe der vorhandenen Pooldaten wird einmalig auf die aktuellen Fakten-Fingerprints übertragen. Spätere Datenänderungen erhalten diese Freigabe nicht automatisch.
 
