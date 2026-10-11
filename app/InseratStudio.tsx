@@ -3107,17 +3107,17 @@ export default function InseratStudio() {
   };
 
   const prepareRefill = () => runRefillAction(current => prepareSmartRefill(current,
-    (input, projectIds, distribution) => prepareProjectListings(input, projectIds, distribution,
-      project => enrichProjectWithPostalRegion(project, postalRegionIndex), { initialPoolAOnly: true }).state),
+    (input, projectIds, distribution, replacements) => prepareProjectListings(input, projectIds, distribution,
+      project => enrichProjectWithPostalRegion(project, postalRegionIndex), { replacements }).state),
   "Nachschub dauerhaft vorbereitet. Bitte die Vorschau prüfen und den Sammelupload ausdrücklich starten.");
 
   const approveRefillFacts = (plotId: string, pool: RefillPool) => {
     const plot = state.plots?.find(item => item.id === plotId);
-    const candidate = refillPlan.blocked.find(item => item.plotId === plotId);
+    const candidate = refillPlan.blocked.find(item => item.plotId === plotId && item.pool === pool);
     if (!plot || !candidate) return;
     const facts = candidate.facts;
     if (!window.confirm(`Pool ${pool}: ${facts.street} ${facts.houseNumber}, ${facts.postalCode} ${facts.city} · ${facts.plotSizeSqm} m² · ${euro(facts.purchasePrice)}.\n\nIch bestätige, dass diese Adresse, Fläche und dieser Preis fachlich geprüft und zutreffend sind. Automatisch berechnete Werte allein sind keine reale Grundstücksgrundlage.`)) return;
-    const fingerprint = refillPoolFingerprint(plot, pool);
+    const fingerprint = refillPoolFingerprint(plot, pool, state);
     void runRefillAction(current => approveRefillPool(current, plotId, pool, fingerprint), "Die angezeigten Pooldaten sind für den Nachschub freigegeben. Jede Datenänderung erfordert eine neue Freigabe.");
   };
 

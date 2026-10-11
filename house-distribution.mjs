@@ -500,3 +500,25 @@ export function recordHouseRotation(distributionValue, houses, projects, project
   };
   return appendUsage(distribution, projectId, [addedHouseId], at, activeHouseIds);
 }
+
+// A deletion credit replaces one house, including when the other slots are still online.
+// Reuse the catalogue validation, weights and persistent usage history of the normal allocator.
+export function planSingleHouseReplacement(value, houses, projects, projectId, options = {}) {
+  const distribution = normalizeHouseDistribution(value, houses, projects);
+  const record = distribution.projects.find(item => item.projectId === projectId);
+  const excluded = new Set([...(options.excludedHouseIds || []), ...(record?.excludedHouseIds || [])]);
+  const at = options.now || nowIso();
+  const activeCounts = new Map(distribution.houseUsage.map(usage => [usage.houseId, usage.activeProjectIds.length]));
+  const random = seededRandom(options.seed || projectId);
+  const candidates = distribution.poolHouseIds.filter(id => !excluded.has(id)
+    && houses.some(house => house.id === id && !houseDataIssues(house).length));
+  const scored = candidates.map(houseId => ({ houseId,
+    score: houseSelectionWeight(distribution, record, houseId, activeCounts, at) + random() }))
+    .sort((a, b) => b.score - a.score || a.houseId.localeCompare(b.houseId));
+  const houseId = scored[0]?.houseId || "";
+  const activeHouseIds = uniqueStrings([...(options.activeHouseIds || []), houseId]).slice(0, HOUSES_PER_PROJECT);
+  const updated = { ...distribution, projects: distribution.projects.map(item => item.projectId === projectId
+    ? { ...item, activeHouseIds, previewHouseIds: activeHouseIds, lastAddedHouseId: houseId, updatedAt: at } : item) };
+  return { houseId, distribution: houseId
+    ? appendUsage(updated, projectId, [houseId], at, activeHouseIds) : distribution };
+}

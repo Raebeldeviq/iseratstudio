@@ -342,6 +342,8 @@ export type InteriorSetId = "A" | "B" | "C";
 export type InteriorRoomRole = "living" | "kids" | "bedroom" | "kitchen" | "bathroom" | "office";
 
 export type GeneratedListing = {
+  refillSourceCreditId?: string;
+  refillDiscard?: { cycleId: string; at: string; reason: string };
   managerCleanup?: { removedAt: string; operationId: string; reason: string; externalId: string; source: string };
   inventoryCorrection?: { active: boolean; reason: string; correctedAt: string; reversedAt: string;
     history: Array<{ action: string; at: string; reason: string; externalId: string }> };
@@ -354,7 +356,7 @@ export type GeneratedListing = {
     pool: "A" | "B";
     cycle: number;
     housePosition: number;
-    address: PublicationAddress;
+    address: PublicationAddress & { plotSizeSqm?: number; purchasePrice?: number };
     batchId: string;
     plannedDeletionDate: string;
   };

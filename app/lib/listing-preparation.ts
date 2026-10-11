@@ -10,6 +10,7 @@ import { normalizeListingGroup, addListingGroupVariant, setListingGroupVariantAc
 import { latestResetListingFacts } from "../../plot-listing-reset.mjs";
 import { completeListingTexts, totalPrice } from "./text-generator.ts";
 import type { GeneratedListing, HouseTemplate, ProjectInput, ProviderSettings, HouseDistributionState, ListingGroup, StudioState } from "../types";
+import type { RefillCandidate } from "../../smart-refill.mjs";
 const uid = () => crypto.randomUUID();
 export function createVariantListing(
   house: HouseTemplate,
@@ -73,8 +74,43 @@ export function prepareProjectListings(
   projectIds: string[],
   distribution: HouseDistributionState,
   enrich: (project: ProjectInput) => ProjectInput = project => project,
-  options: { initialPoolAOnly?: boolean; now?: string } = {},
+  options: { initialPoolAOnly?: boolean; now?: string; replacements?: RefillCandidate[] } = {},
 ) {
+  if (options.replacements) {
+    let preparedState: StudioState = { ...state, houseDistribution: distribution };
+    for (const replacement of options.replacements) {
+      const project = preparedState.projects.find(item => item.id === replacement.projectId);
+      const house = preparedState.houses.find(item => item.id === replacement.houseIds[0] && item.approved !== false);
+      if (!project || !house || project.plotId !== replacement.plotId) throw new Error("Nachfolger: Grundstück oder freigegebenes Haus fehlt.");
+      const facts = replacement.facts;
+      const projectForListing = enrich({ ...project, street: facts.street, houseNumber: facts.houseNumber,
+        zip: facts.postalCode, city: facts.city, district: "", federalState: "", county: "",
+        plotArea: facts.plotSizeSqm, plotPrice: facts.purchasePrice });
+      const allocation = allocateDeleteBatchNumber(preparedState, { projectId: project.id,
+        housePosition: replacement.housePosition, reserveHistoricalNumbers: true,
+        ...(options.now ? { uploadDate: options.now.slice(0, 10) } : {}) });
+      const temporaryGroup = normalizeListingGroup(null, project.id, { now: options.now }) as ListingGroup;
+      const variant = temporaryGroup.variants[0];
+      const entry = (allocation.state as StudioState).deleteBatches?.flatMap(batch => batch.entries).find(entry => entry.externalId === allocation.externalId);
+      if (!entry) throw new Error("Der neue Nachfolger besitzt keinen geplanten Lösch-Batch.");
+      const listing = { ...createVariantListing(house, projectForListing, state.provider, variant.id,
+        replacement.housePosition, null, allocation.externalId, latestResetListingFacts(state, project.id, house.id)),
+        rotationSourceListingId: replacement.sourceListingId, refillSourceCreditId: replacement.creditId,
+        addressSnapshot: { plotId: replacement.plotId, pool: replacement.pool, cycle: replacement.cycle,
+          housePosition: replacement.housePosition, address: { ...facts }, batchId: entry.batchId,
+          plannedDeletionDate: entry.plannedDeletionDate } } as GeneratedListing;
+      const assigned = assignListingGroupVariant(temporaryGroup, 1, house, listing, { now: options.now }) as ListingGroup;
+      const group = project.listingGroup || normalizeListingGroup(null, project.id, { now: options.now }) as ListingGroup;
+      const nextProject = { ...project, listings: [...project.listings, assigned.variants[0].listing as GeneratedListing],
+        listingGroup: { ...group, updatedAt: options.now || new Date().toISOString(),
+          variants: [...group.variants, { ...assigned.variants[0], order: group.variants.length + 1 }],
+          listingControls: [...group.listingControls, ...assigned.listingControls] } };
+      preparedState = { ...allocation.state, projects: preparedState.projects.map(item => item.id === project.id ? nextProject : item) } as StudioState;
+    }
+    preparedState = linkDeleteBatchListings(preparedState) as StudioState;
+    return { state: assignNewInteriorListings(state, preparedState) as StudioState,
+      preparedListings: options.replacements.length, issues: [] as string[] };
+  }
   const committed = commitHouseDistributionPreviews(
     distribution,
     state.houses,

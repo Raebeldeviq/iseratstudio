@@ -285,7 +285,9 @@ function listingXml(
   if (listing.addressSnapshot) {
     const address = listing.addressSnapshot.address;
     project = { ...project, street: address.street, houseNumber: address.houseNumber,
-      zip: address.postalCode, city: address.city, district: "", federalState: "", county: "" };
+      zip: address.postalCode, city: address.city, district: "", federalState: "", county: "",
+      ...(address.plotSizeSqm ? { plotArea: address.plotSizeSqm } : {}),
+      ...(address.purchasePrice ? { plotPrice: address.purchasePrice } : {}) };
   }
   const decimal = new Intl.NumberFormat("en-US", {
     useGrouping: false,

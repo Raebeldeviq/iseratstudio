@@ -86,6 +86,11 @@ export function allocateDeleteBatchNumber(state, input) {
   const plannedDeletionDate = addCalendarDays(uploadDate, position + 8);
   const records = batches(state);
   const used = activeExternalIds(state);
+  if (input.reserveHistoricalNumbers === true) {
+    for (const project of state.projects || []) for (const listing of project.listings || []) used.add(listing.externalId);
+    for (const archive of state.listingResetHistory || []) for (const listing of archive.listings || []) used.add(listing.externalId);
+    for (const batch of records) for (const entry of batch.entries || []) used.add(entry.externalId);
+  }
   for (const batch of records) {
     for (const entry of batch.entries || []) if (entry.status !== "deleted" && entry.status !== "void") used.add(entry.externalId);
   }
@@ -144,7 +149,8 @@ export function replanDeleteBatchesForUpload(state, listingIds, uploadDate = cal
       if (!entry || entry.status === "active" || entry.status === "paused" || entry.status === "deleted") continue;
       if (entry.status === "planned" && entry.uploadDate === uploadDate) continue;
       next = { ...next, deleteBatches: batches(next).map((batch) => ({ ...batch, entries: batch.entries.map((item) => item === entry ? { ...item, status: "void" } : item) })) };
-      const allocated = allocateDeleteBatchNumber(next, { listingId: listing.id, projectId: project.id, housePosition: entry.housePosition, uploadDate });
+      const allocated = allocateDeleteBatchNumber(next, { listingId: listing.id, projectId: project.id, housePosition: entry.housePosition, uploadDate,
+        reserveHistoricalNumbers: Boolean(listing.refillSourceCreditId) });
       const allocatedEntry = allocated.state.deleteBatches.flatMap((batch) => batch.entries)
         .find((item) => item.listingId === listing.id && item.externalId === allocated.externalId);
       const updatedListing = (item) => ({ ...item, externalId: allocated.externalId,

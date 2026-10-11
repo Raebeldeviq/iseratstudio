@@ -1,226 +1,328 @@
-import { isInventoryHistorical, isInventoryEntryHistorical } from "./inventory-correction.mjs";
-import { addressRotationStatus } from "./address-rotation.mjs";
+import { isInventoryHistorical, isInventoryEntryHistorical, isManagerRemoved } from "./inventory-correction.mjs";
 import { operationalCatalogPlots } from "./plot-active-catalog.mjs";
 import { plotAddressSelection } from "./plot-selection.mjs";
-import { createProjectFromPlot, plotAddressKey } from "./plot-records.mjs";
-import { generateWeightedDistribution } from "./house-distribution.mjs";
+import { plotAddressKey } from "./plot-records.mjs";
+import { rowFromPlot, rowFromPlotB } from "./plot-master-sync.mjs";
+import { planSingleHouseReplacement } from "./house-distribution.mjs";
 import { createBatchUploadPlan } from "./batch-upload.mjs";
 
-const ledger = state => state?.smartRefill || { version: 1, credits: [], cycles: [], poolApprovals: [] };
+const ledger = state => ({ version: 2, credits: [], cycles: [], poolApprovals: [], cancellations: [], ...state?.smartRefill });
 const entries = state => (state.deleteBatches || []).flatMap(batch => batch.entries || []);
 const listings = state => (state.projects || []).flatMap(project => (project.listings || []).map(listing => ({ project, listing })));
+const allListings = state => [...listings(state), ...(state.listingResetHistory || []).flatMap(archive =>
+  (archive.listings || []).map(listing => ({ project: state.projects?.find(project => project.id === archive.projectId), archive, listing })))];
 const creditKey = entry => JSON.stringify([entry.batchId, entry.projectId, entry.listingId, entry.externalId]);
+const sourceKey = entry => JSON.stringify([entry.projectId, entry.listingId]);
 const transferred = listing => Boolean(listing?.transferredAt || listing?.lastUploadedAt || listing?.importConfirmedAt
-  || ["published", "transferred_pending_import", "uploading", "queued"].includes(listing?.status));
+  || ["published", "transferred_pending_import", "uploading", "queued", "processing"].includes(listing?.status));
+const historical = listing => isInventoryHistorical(listing) || isManagerRemoved(listing) || Boolean(listing?.refillDiscard);
 const finished = listing => listing?.status === "deleted" && !listing.externalDeletionPending;
+const occupied = listing => !historical(listing) && !finished(listing)
+  && (listing.status !== "archived" || transferred(listing) || listing.externalDeletionPending);
+const activeCycles = state => ledger(state).cycles.filter(cycle => !ledger(state).cancellations.some(item => item.cycleId === cycle.id));
 const now = () => new Date().toISOString();
+const context = state => state.activePlotCatalog ? { source: state.activePlotCatalog.lastValidSource, policy: state.activePlotCatalog } : undefined;
 
-// Called only inside the existing manual batch-confirmation transaction.
+// Only the existing manual deletion-confirmation transaction may create credits.
 export function recordRefillDeletions(before, after) {
   const previous = new Map(entries(before).map(entry => [creditKey(entry), entry]));
   const stored = ledger(before);
-  const known = new Set(stored.credits.map(credit => credit.id));
+  const known = new Set(stored.credits.map(sourceKey));
   const added = [];
   for (const entry of entries(after)) {
-    const id = creditKey(entry);
-    if (isInventoryEntryHistorical(before, entry) || isInventoryEntryHistorical(after, entry) || entry.status !== "deleted" || !entry.deletedAt || previous.get(id)?.status !== "active" || known.has(id)) continue;
-    known.add(id);
-    added.push({ id, batchId: entry.batchId, projectId: entry.projectId,
-      listingId: entry.listingId, externalId: entry.externalId, deletedAt: entry.deletedAt });
+    if (isInventoryEntryHistorical(before, entry) || isInventoryEntryHistorical(after, entry)
+      || entry.status !== "deleted" || !entry.deletedAt || previous.get(creditKey(entry))?.status !== "active" || known.has(sourceKey(entry))) continue;
+    known.add(sourceKey(entry));
+    const resolved = resolveSource(before, entry);
+    added.push({ id: creditKey(entry), batchId: entry.batchId, projectId: entry.projectId,
+      listingId: entry.listingId, externalId: entry.externalId, deletedAt: entry.deletedAt,
+      ...(resolved ? { plotId: resolved.plot.id, sourcePool: resolved.sourcePool, housePosition: resolved.housePosition,
+        sourceHouseId: resolved.listing.templateId } : {}) });
   }
   return added.length ? { ...after, smartRefill: { ...stored, credits: [...stored.credits, ...added] } } : after;
 }
 
-export function refillPoolFacts(plot, pool) {
-  const address = pool === "B" ? plot?.addressRotation?.poolB : plot?.addressRotation?.poolA || plot;
-  const details = pool === "B" ? plot?.addressRotation?.poolBDetails : plot;
-  return { street: String(address?.street || ""), houseNumber: String(address?.houseNumber || ""),
-    postalCode: String(address?.postalCode || ""), city: String(address?.city || ""),
-    plotSizeSqm: Number(details?.plotSizeSqm) || 0, purchasePrice: Number(details?.purchasePrice) || 0 };
+// Use the existing pool representation displayed in the plot catalogue. Saved master
+// facts fill legacy plots that have not yet received their addressRotation metadata.
+function effectivePoolPlot(plot, state) {
+  if (plot?.addressRotation?.poolB) return plot;
+  const saved = state?.activePlotCatalog?.lastValidSource?.masterPlots?.find(item => item.id === plot?.id);
+  return saved?.addressRotation?.poolB ? { ...plot, addressRotation: {
+    ...plot.addressRotation, poolA: plot.addressRotation?.poolA || rowFromPlot(plot),
+    poolB: saved.addressRotation.poolB, poolBDetails: saved.addressRotation.poolBDetails,
+  } } : plot;
 }
-
-export function refillPoolFingerprint(plot, pool) {
-  return JSON.stringify([plot.id, pool, refillPoolFacts(plot, pool)]);
+export function refillPoolFacts(plot, pool, state) {
+  const effective = effectivePoolPlot(plot, state);
+  const row = pool === "B" ? rowFromPlotB(effective) : rowFromPlot(effective);
+  const address = pool === "A" ? effective.addressRotation?.poolA || row : row;
+  return { street: String(address.street || ""), houseNumber: String(address.houseNumber || ""),
+    postalCode: String(address.postalCode || ""), city: String(address.city || ""),
+    plotSizeSqm: Number(row.plotSizeSqm) || 0, purchasePrice: Number(row.purchasePrice) || 0 };
 }
-
+export function refillPoolFingerprint(plot, pool, state) {
+  return JSON.stringify([plot.id, pool, refillPoolFacts(plot, pool, state)]);
+}
 function poolIssue(state, plot, pool) {
-  const facts = refillPoolFacts(plot, pool);
+  const facts = refillPoolFacts(plot, pool, state);
   const address = plotAddressSelection(facts);
-  if (!address.selectable || address.houseNumberUnconfirmed || facts.plotSizeSqm <= 0 || facts.purchasePrice <= 0) return "Adresse, Fläche oder Preis unvollständig – Grundstück bearbeiten.";
-  if (pool === "B" && plot.addressRotation?.poolBDetails?.status === "POOL_B_PRÜFEN") return "Pool B besitzt einen offenen Prüffall – Grundstück bearbeiten.";
-  const needsApproval = pool === "B" || plotAddressKey(facts) !== plotAddressKey(plot);
-  if (needsApproval && !ledger(state).poolApprovals.some(approval => approval.plotId === plot.id
-    && approval.pool === pool && approval.fingerprint === refillPoolFingerprint(plot, pool))) return "Pooldaten fachlich freigeben";
+  if (!address.selectable || address.houseNumberUnconfirmed || facts.plotSizeSqm <= 0 || facts.purchasePrice <= 0)
+    return "Adresse, Fläche oder Preis unvollständig – Grundstück bearbeiten.";
+  if (pool === "B" && rowFromPlotB(effectivePoolPlot(plot, state)).status === "POOL_B_PRÜFEN")
+    return "Pool B besitzt einen offenen Prüffall – Grundstück bearbeiten.";
+  if (!ledger(state).poolApprovals.some(approval => approval.plotId === plot.id
+    && approval.pool === pool && approval.fingerprint === refillPoolFingerprint(plot, pool, state))) return "Pooldaten fachlich freigeben";
   return "";
 }
-
 export function approveRefillPool(state, plotId, pool, fingerprint, at = now()) {
   const plot = state.plots?.find(item => item.id === plotId);
-  if (!plot || !["A", "B"].includes(pool) || fingerprint !== refillPoolFingerprint(plot, pool)) throw new Error("Die Pooldaten haben sich geändert. Bitte erneut prüfen.");
+  if (!plot || !["A", "B"].includes(pool) || fingerprint !== refillPoolFingerprint(plot, pool, state))
+    throw new Error("Die Pooldaten haben sich geändert. Bitte erneut prüfen.");
   const issue = poolIssue(state, plot, pool);
   if (issue && issue !== "Pooldaten fachlich freigeben") throw new Error(issue);
   const stored = ledger(state);
-  const approval = { plotId, pool, fingerprint, approvedAt: at };
-  return { ...state, smartRefill: { ...stored, poolApprovals: [...stored.poolApprovals.filter(item => item.plotId !== plotId || item.pool !== pool), approval] } };
+  return { ...state, smartRefill: { ...stored, poolApprovals: [...stored.poolApprovals.filter(item => item.plotId !== plotId || item.pool !== pool),
+    { plotId, pool, fingerprint, approvedAt: at }] } };
+}
+// Explicit one-time adoption of Pascal's approval. Future changes do not inherit it.
+export function adoptApprovedRefillPools(state, at = now()) {
+  let next = state;
+  for (const plot of state.plots || []) for (const pool of ["A", "B"]) {
+    const issue = poolIssue(next, plot, pool);
+    if (!issue || issue === "Pooldaten fachlich freigeben")
+      next = approveRefillPool(next, plot.id, pool, refillPoolFingerprint(plot, pool, next), at);
+  }
+  return next;
 }
 
-function initialRotation(plot) {
-  return plot.addressRotation || { poolA: refillPoolFacts(plot, "A"), poolB: null, currentPool: "", cycle: 0, listingIds: [], lastUsedA: "", lastUsedB: "" };
+function resolveSource(state, credit) {
+  const matches = allListings(state).filter(({ project, archive, listing }) => (project?.id || archive?.projectId) === credit.projectId
+    && listing.id === credit.listingId && listing.externalId === credit.externalId);
+  if (!matches.length) return null;
+  const source = matches.find(item => !item.archive) || matches[0];
+  const { project, listing, archive } = source;
+  const plotId = listing.addressSnapshot?.plotId || archive?.plotId || project?.plotId;
+  const plot = state.plots?.find(item => item.id === plotId);
+  if (!plot || !project || project.plotId !== plotId || matches.some(item => JSON.stringify(item.listing) !== JSON.stringify(listing))) return null;
+  let sourcePool = listing.addressSnapshot?.pool || credit.sourcePool;
+  if (sourcePool && !["A", "B"].includes(sourcePool)) return null;
+  if (!sourcePool) {
+    const history = (state.uploadHistory || []).filter(item => item.projectId === project.id && item.listingId === listing.id && item.externalId === listing.externalId);
+    const address = history.at(-1)?.address;
+    const projectFacts = { ...project, postalCode: project.zip };
+    const pools = ["A", "B"].filter(pool => {
+      const facts = refillPoolFacts(plot, pool, state);
+      const matchingAddress = address ? address === `${facts.street} ${facts.houseNumber} ${facts.postalCode} ${facts.city}`
+        : plotAddressKey(projectFacts) === plotAddressKey(facts);
+      return matchingAddress;
+    });
+    if (pools.length === 1) sourcePool = pools[0];
+    else if (pools.length === 2) {
+      const matchingFacts = pools.filter(pool => { const facts = refillPoolFacts(plot, pool, state);
+        return project.plotArea === facts.plotSizeSqm && project.plotPrice === facts.purchasePrice; });
+      if (matchingFacts.length === 1) sourcePool = matchingFacts[0];
+    }
+  }
+  const entry = entries(state).find(item => item.batchId === credit.batchId && item.projectId === credit.projectId
+    && item.listingId === credit.listingId && item.externalId === credit.externalId);
+  const variantIndex = project.listingGroup?.variants?.findIndex(item => item.listing?.id === listing.id);
+  const housePosition = listing.addressSnapshot?.housePosition || credit.housePosition || entry?.housePosition
+    || (variantIndex >= 0 && variantIndex < 4 ? variantIndex + 1 : 0);
+  if (!sourcePool || !Number.isInteger(housePosition) || housePosition < 1 || housePosition > 4 || !listing.templateId) return null;
+  return { project, listing, archive, plot, sourcePool, housePosition };
 }
-
-function reviewIssue(state, plotId, projects) {
-  const projectIds = new Set(projects.map(project => project.id));
-  const listingIds = new Set(projects.flatMap(project => project.listings || []).map(listing => listing.id));
-  const reviews = [...(state.catalogRepairReview?.unresolved || []), ...(state.importReportReviews || [])];
-  return reviews.some(review => review.plotId === plotId || projectIds.has(review.projectId) || listingIds.has(review.listingId));
+function protectedSource(project, listingId) {
+  return (project.listingGroup?.listingControls || []).some(control => control.listingId === listingId
+    && (control.premiumPlacement || (control.manualLock && !(control.status === "deleted"
+      && control.updateMode === "blocked" && control.automaticUpdateEnabled === false
+      && !control.lockReason && !control.lockedUntil))));
 }
-
-function candidateForPlot(state, plot) {
-  const projects = state.projects.filter(project => project.plotId === plot.id);
-  const rotation = initialRotation(plot);
-  const pool = rotation.currentPool === "A" ? "B" : "A";
-  const facts = refillPoolFacts(plot, pool);
-  const blocked = reason => ({ plotId: plot.id, label: `${plot.street} ${plot.houseNumber}, ${plot.city}`, pool, facts, reason });
-  if (projects.length > 1) return blocked("Mehrere Projekte für dieselbe plotId – Zuordnung prüfen.");
-  if (plot.isActive === false || projects.some(project => project.isActive === false)) return blocked("Grundstück ist inaktiv.");
-  if (reviewIssue(state, plot.id, projects)) return blocked("Offener relevanter Prüffall.");
-  if (projects.some(project => (project.listingGroup?.listingControls || []).some(control => !isInventoryHistorical(project.listings?.find(listing => listing.id === control.listingId)) && (control.premiumPlacement
-    || (control.manualLock && !finished(project.listings?.find(listing => listing.id === control.listingId))))))) return blocked("Premium oder Löschschutz aktiv.");
-  const history = [...projects.flatMap(project => project.listings || []), ...(state.listingResetHistory || [])
-    .filter(archive => archive.plotId === plot.id || projects.some(project => project.id === archive.projectId)).flatMap(archive => archive.listings || [])];
-  if (history.some(listing => !isInventoryHistorical(listing) && !finished(listing) && (listing.status !== "archived" || transferred(listing) || listing.externalDeletionPending))) return blocked("Inserate des Grundstücks sind noch aktiv, vorbereitet oder ungeklärt.");
-  const status = addressRotationStatus({ ...state, plots: state.plots.map(item => item.id === plot.id ? { ...item, addressRotation: rotation } : item) }, plot.id, { initialPoolAOnly: true });
-  if (status.state !== "ready") return blocked(`${status.remaining}/4 Inserate noch offen oder nächster Pool unvollständig.`);
-  if (history.length && !rotation.currentPool) return blocked("Historischer Zyklus ohne eindeutige Poolzuordnung – zuerst prüfen.");
-  const issue = poolIssue(state, plot, pool);
+function reviewIssue(state, plotId, project) {
+  return [...(state.catalogRepairReview?.unresolved || []), ...(state.importReportReviews || [])]
+    .some(review => review.plotId === plotId || review.projectId === project.id
+      || (project.listings || []).some(listing => listing.id === review.listingId));
+}
+function candidateForCredit(state, credit) {
+  const source = resolveSource(state, credit);
+  const base = { creditId: credit.id, sourceListingId: credit.listingId, sourceExternalId: credit.externalId,
+    plotId: source?.plot.id || "", projectId: credit.projectId, label: source ? `${source.plot.street} ${source.plot.houseNumber}, ${source.plot.city}` : credit.externalId,
+    sourcePool: source?.sourcePool || "", sourceHouseId: source?.listing.templateId || "", sourceHouseName: source?.listing.templateName || "",
+    pool: source?.sourcePool === "A" ? "B" : "A", housePosition: source?.housePosition || 0,
+    facts: source ? refillPoolFacts(source.plot, source.sourcePool === "A" ? "B" : "A", state) : {}, reason: "" };
+  const blocked = reason => ({ ...base, reason });
+  if (!source) return blocked("Ursprüngliches Inserat, Pool oder Hausposition nicht eindeutig zugeordnet.");
+  if (!finished(source.listing) || historical(source.listing)) return blocked("Keine bestätigte tatsächliche Portallöschung.");
+  const batchEntry = entries(state).find(entry => creditKey(entry) === credit.id);
+  if (batchEntry && batchEntry.status !== "deleted") return blocked("Löschbestätigung stimmt nicht mehr mit dem freien Platz überein.");
+  if (source.plot.isActive === false || source.project.isActive === false
+    || !operationalCatalogPlots([source.plot], context(state)).length) return blocked("Ursprüngliches Grundstück ist nicht verfügbar.");
+  if (protectedSource(source.project, source.listing.id)) return blocked("Premium oder Löschschutz aktiv.");
+  if (reviewIssue(state, source.plot.id, source.project)) return blocked("Offener relevanter Prüffall.");
+  const issue = poolIssue(state, source.plot, base.pool);
   if (issue) return blocked(issue);
-  const project = projects[0] || createProjectFromPlot(plot, { createId: () => `refill-${plot.id}`, owner: plot.owner, now: plot.createdAt || "1970-01-01T00:00:00.000Z" });
-  if (!projects.length && state.projects.some(item => item.id === project.id)) return blocked("Projekt-ID bereits belegt.");
-  return { plotId: plot.id, projectId: project.id, label: `${plot.street} ${plot.houseNumber}, ${plot.city}`, pool, cycle: status.cycle + 1,
-    facts, fingerprint: refillPoolFingerprint(plot, pool), project, priority: status.cycle > 0 ? 0 : 1,
-    lastUsedAt: rotation.lastUsedA || rotation.lastUsedB || "", reason: "" };
+  return { ...base, project: source.project, fingerprint: refillPoolFingerprint(source.plot, base.pool, state),
+    cycle: (source.listing.addressSnapshot?.cycle || 0) + 1 };
 }
 
 export function planSmartRefill(state, options = {}) {
-  const stored = ledger(state);
-  const consumed = new Set(stored.cycles.flatMap(cycle => cycle.creditIds));
+  const stored = ledger(state), cycles = activeCycles(state);
+  const consumed = new Set(cycles.flatMap(cycle => cycle.creditIds));
   const availableCredits = stored.credits.filter(credit => !consumed.has(credit.id));
-  const context = options.catalogContext || (state.activePlotCatalog ? { source: state.activePlotCatalog.lastValidSource, policy: state.activePlotCatalog } : undefined);
-  const available = operationalCatalogPlots(state.plots || [], context);
-  const blocked = [], eligible = [];
-  for (const plot of available) {
-    const candidate = candidateForPlot(state, plot);
-    (candidate.reason ? blocked : eligible).push(candidate);
+  const selected = options.creditIds ? new Set(options.creditIds) : null;
+  const blocked = [], candidates = [];
+  const occupiedByPlot = new Map();
+  for (const { project, archive, listing } of allListings(state)) if (occupied(listing)) {
+    const plotId = listing.addressSnapshot?.plotId || archive?.plotId || project?.plotId;
+    const set = occupiedByPlot.get(plotId) || new Set(); set.add(listing.templateId); occupiedByPlot.set(plotId, set);
   }
-  eligible.sort((a, b) => a.priority - b.priority || a.lastUsedAt.localeCompare(b.lastUsedAt) || a.plotId.localeCompare(b.plotId));
   let distribution = state.houseDistribution;
-  const projects = [...state.projects];
-  const suitable = [];
-  for (const candidate of eligible) {
-    if (!projects.some(project => project.id === candidate.projectId)) projects.push(candidate.project);
-    const preview = generateWeightedDistribution(distribution, state.houses, [candidate.projectId], { projects, seed: `refill:${candidate.plotId}:${candidate.cycle}`, now: options.now || now() });
-    if (!preview.ok) { blocked.push({ ...candidate, reason: preview.diagnostics.join(" · ") || "Keine vier freigegebenen unterschiedlichen Häuser verfügbar." }); continue; }
+  for (const credit of availableCredits) {
+    if (selected && !selected.has(credit.id)) continue;
+    const candidate = candidateForCredit(state, credit);
+    if (candidate.reason) { blocked.push(candidate); continue; }
+    const used = occupiedByPlot.get(candidate.plotId) || new Set();
+    const preview = planSingleHouseReplacement(distribution, state.houses, state.projects, candidate.projectId,
+      { excludedHouseIds: [...used, candidate.sourceHouseId], activeHouseIds: [...used], seed: credit.id, now: options.now || now() });
+    if (!preview.houseId) { blocked.push({ ...candidate, reason: "Kein anderer freigegebener Haustyp ohne Doppelung verfügbar." }); continue; }
     distribution = preview.distribution;
-    suitable.push({ ...candidate, houseIds: preview.assignments[candidate.projectId] });
+    used.add(preview.houseId); occupiedByPlot.set(candidate.plotId, used);
+    candidates.push({ ...candidate, houseIds: [preview.houseId], houseName: state.houses.find(house => house.id === preview.houseId)?.name || preview.houseId });
   }
-  const candidates = suitable.slice(0, Math.floor(availableCredits.length / 4));
-  const recordedListings = new Map(listings(state).map(item => [item.listing.id, item.listing]));
-  const preparedListingIds = stored.cycles.flatMap(cycle => cycle.listingIds).filter(id => {
-    const listing = recordedListings.get(id);
-    return listing && !isInventoryHistorical(listing) && ["draft", "prepared"].includes(listing.status) && !transferred(listing) && !listing.listingResetAt && !listing.rotationArchivedAt;
+  const recorded = new Map(listings(state).map(item => [item.listing.id, item.listing]));
+  const preparedListingIds = cycles.filter(cycle => cycle.kind === "listing-replacement").flatMap(cycle => cycle.listingIds).filter(id => {
+    const listing = recorded.get(id);
+    return listing && !historical(listing) && ["draft", "prepared"].includes(listing.status) && !transferred(listing) && !listing.listingResetAt && !listing.rotationArchivedAt;
   });
-  const occupied = listings(state).filter(({ listing }) => !isInventoryHistorical(listing) && !finished(listing) && transferred(listing));
   return { released: stored.credits.length, free: availableCredits.length, reserved: consumed.size,
-    activeCount: new Set(occupied.map(item => item.listing.id)).size,
-    readyCount: candidates.length * 4, remaining: availableCredits.length - candidates.length * 4,
-    availablePlotCount: suitable.length, candidates, blocked, availableCredits, distribution, preparedListingIds,
-    cycles: stored.cycles };
+    activeCount: new Set(listings(state).filter(({ listing }) => occupied(listing) && transferred(listing)).map(item => item.listing.id)).size,
+    readyCount: candidates.length, remaining: availableCredits.length - candidates.length,
+    availablePlotCount: new Set(candidates.map(candidate => candidate.plotId)).size, candidates, blocked, availableCredits,
+    distribution, preparedListingIds, cycles };
 }
-
 export function prepareSmartRefill(state, generate, options = {}) {
-  const plan = planSmartRefill(state, options);
-  if (!plan.candidates.length) throw new Error("Derzeit ist keine vollständige zulässige Vierergruppe für die freien Plätze verfügbar.");
-  const candidateByPlot = new Map(plan.candidates.map(candidate => [candidate.plotId, candidate]));
-  let next = { ...state, plots: state.plots.map(plot => candidateByPlot.has(plot.id) ? { ...plot, addressRotation: initialRotation(plot) } : plot), projects: [...state.projects] };
-  for (const candidate of plan.candidates) {
-    const facts = candidate.facts;
-    const project = { ...candidate.project, street: facts.street, houseNumber: facts.houseNumber, zip: facts.postalCode, city: facts.city,
-      plotArea: facts.plotSizeSqm, plotPrice: facts.purchasePrice };
-    next.projects = next.projects.some(item => item.id === project.id) ? next.projects.map(item => item.id === project.id ? project : item) : [...next.projects, project];
-  }
-  next = generate(next, plan.candidates.map(candidate => candidate.projectId), plan.distribution);
   const at = options.now || now();
-  const cycles = plan.candidates.map((candidate, index) => {
-    const plot = next.plots.find(item => item.id === candidate.plotId);
-    const ids = plot.addressRotation.listingIds;
-    if (ids.length !== 4 || new Set(ids).size !== 4 || ids.some(id => listings(state).some(item => item.listing.id === id))) throw new Error("Die Vorbereitung hat keine vier neuen Inserate erzeugt.");
-    return { id: `refill:${candidate.plotId}:${candidate.cycle}`, plotId: candidate.plotId, projectId: candidate.projectId,
-      pool: candidate.pool, cycle: candidate.cycle, fingerprint: candidate.fingerprint,
-      listingIds: ids, creditIds: plan.availableCredits.slice(index * 4, index * 4 + 4).map(credit => credit.id), preparedAt: at };
+  const plan = planSmartRefill(state, { ...options, now: at });
+  if (!plan.candidates.length) throw new Error("Derzeit ist kein eindeutig zugeordneter Nachfolger für die freien Plätze vorbereitbar.");
+  if (options.creditIds && plan.candidates.length !== new Set(options.creditIds).size) throw new Error("Mindestens ein angeforderter Nachfolger ist nicht vorbereitbar.");
+  let next = generate(state, [...new Set(plan.candidates.map(candidate => candidate.projectId))], plan.distribution, plan.candidates);
+  const oldIds = new Set(allListings(state).map(item => item.listing.id));
+  const added = listings(next).filter(item => !oldIds.has(item.listing.id));
+  if (added.length !== plan.candidates.length) throw new Error("Die Vorbereitung muss genau ein neues Inserat je Löschung erzeugen.");
+  const cycles = plan.candidates.map(candidate => {
+    const matching = added.filter(({ project, listing }) => project.id === candidate.projectId && listing.refillSourceCreditId === candidate.creditId);
+    if (matching.length !== 1) throw new Error("Nachfolger ist nicht eindeutig mit seinem freien Platz verbunden.");
+    return { id: `refill-single:${candidate.sourceListingId}:${1 + ledger(state).cycles.filter(cycle => cycle.sourceListingId === candidate.sourceListingId).length}`, kind: "listing-replacement", plotId: candidate.plotId, projectId: candidate.projectId,
+      pool: candidate.pool, sourcePool: candidate.sourcePool, sourceListingId: candidate.sourceListingId, sourceExternalId: candidate.sourceExternalId,
+      sourceHouseId: candidate.sourceHouseId, sourceHouseName: candidate.sourceHouseName, housePosition: candidate.housePosition,
+      cycle: candidate.cycle, fingerprint: candidate.fingerprint, listingIds: [matching[0].listing.id], creditIds: [candidate.creditId], preparedAt: at };
   });
-  next = { ...next, smartRefill: { ...ledger(state), cycles: [...ledger(state).cycles, ...cycles] } };
+  next = { ...next, smartRefill: { ...ledger(state), version: 2, cycles: [...ledger(state).cycles, ...cycles] } };
   assertSmartRefillTransition(state, next);
   return next;
 }
 
-// Called by the existing optimistic catalog save at start AND commit.
+// Dedicated administrative transaction; never accepted through a browser catalogue save.
+// Upload jobs are required so a stale draft cannot hide a completed/in-flight transfer.
+export function discardUntransferredRefill(state, cycleId, expectedExternalIds, uploadJobs, at = now()) {
+  const stored = ledger(state);
+  if (stored.cancellations.some(item => item.cycleId === cycleId)) return state;
+  const cycle = stored.cycles.find(item => item.id === cycleId);
+  if (!cycle || !Array.isArray(uploadJobs) || !expectedExternalIds?.length) throw new Error("Vorbereitung oder Uploadnachweis fehlt.");
+  const targets = cycle.listingIds.map(id => listings(state).find(item => item.listing.id === id));
+  const exact = values => [...values].sort().join("|");
+  if (targets.some(item => !item) || exact(targets.map(item => item.listing.externalId)) !== exact(expectedExternalIds)) throw new Error("Die verworfene Vorbereitung stimmt nicht exakt mit dem Auftrag überein.");
+  const ids = new Set(cycle.listingIds), numbers = new Set(expectedExternalIds);
+  if (targets.some(({ listing, project }) => !["draft", "prepared"].includes(listing.status) || transferred(listing) || protectedSource(project, listing.id))
+    || uploadJobs.some(job => ids.has(job.listingId) || [...numbers].some(number => String(job.jobId || "").includes(number)))
+    || (state.uploadHistory || []).some(item => ids.has(item.listingId) || numbers.has(item.externalId))
+    || entries(state).some(entry => ids.has(entry.listingId) && entry.status !== "planned")) throw new Error("Mindestens ein Inserat ist übertragen, geschützt oder besitzt einen Uploadvorgang. Verwerfen gesperrt.");
+  const reason = "Falsche grundstücksfremde Vierer-Nachbefüllung verworfen; ursprüngliche Löschplätze freigegeben.";
+  const discard = listing => !ids.has(listing.id) ? listing : { ...listing, status: "archived", statusMessage: "Verworfene Nachschubvorbereitung",
+    refillDiscard: { cycleId, at, reason }, managerCleanup: { removedAt: at, operationId: `discard:${cycleId}`, reason,
+      externalId: listing.externalId, source: "discarded-refill" } };
+  // A never-uploaded first legacy cycle did not actually use either pool.
+  // Retain its factual pool data, but remove the cancelled preparation's occupancy.
+  const plots = (state.plots || []).map(plot => {
+    const rotation = plot.addressRotation;
+    if (plot.id !== cycle.plotId || cycle.kind === "listing-replacement" || cycle.cycle !== 1
+      || rotation?.cycle !== 1 || exact(rotation.listingIds || []) !== exact(cycle.listingIds)) return plot;
+    if (allListings(state).some(item => (item.listing.addressSnapshot?.plotId || item.archive?.plotId || item.project?.plotId) === plot.id
+      && !ids.has(item.listing.id) && transferred(item.listing))) return plot;
+    return { ...plot, addressRotation: { ...rotation, currentPool: "", cycle: 0, listingIds: [], lastUsedA: "", lastUsedB: "" } };
+  });
+  return { ...state, smartRefill: { ...stored, version: 2, cancellations: [...stored.cancellations,
+    { cycleId, at, reason, listingIds: [...ids], externalIds: [...numbers] }] },
+    plots,
+    projects: state.projects.map(project => !(project.listings || []).some(listing => ids.has(listing.id)) ? project : {
+      ...project, listings: project.listings.map(discard), listingGroup: project.listingGroup ? { ...project.listingGroup,
+        variants: project.listingGroup.variants.map(variant => !ids.has(variant.listing?.id) ? variant : { ...variant, active: false, listing: discard(variant.listing) }) } : project.listingGroup }),
+    deleteBatches: (state.deleteBatches || []).map(batch => ({ ...batch, entries: batch.entries.map(entry => ids.has(entry.listingId) ? { ...entry, status: "void" } : entry) })) };
+}
+
 export function assertSmartRefillTransition(current, next) {
   const before = ledger(current), after = ledger(next);
   if (JSON.stringify(before.credits) !== JSON.stringify(after.credits)) throw new Error("Freie Plätze dürfen nur durch die manuelle Batchbestätigung entstehen.");
+  if (JSON.stringify(before.cancellations) !== JSON.stringify(after.cancellations)) throw new Error("Nachschubvorbereitungen dürfen nur in einer geprüften Verwaltungstransaktion verworfen werden.");
   for (const cycle of before.cycles) if (!after.cycles.some(item => JSON.stringify(item) === JSON.stringify(cycle))) throw new Error("Eine gespeicherte Nachschub-Zuordnung darf nicht entfernt oder verändert werden.");
-  const used = new Set(), cycleIds = new Set(), listingIds = new Set();
+  const cycleIds = new Set(), listingIds = new Set(), used = new Set();
   for (const cycle of after.cycles) {
-    if (cycleIds.has(cycle.id) || cycle.creditIds.length !== 4 || cycle.listingIds.length !== 4) throw new Error("Ungültige oder doppelte Nachschubgruppe.");
+    const size = cycle.kind === "listing-replacement" ? 1 : 4;
+    if (cycleIds.has(cycle.id) || cycle.creditIds.length !== size || cycle.listingIds.length !== size) throw new Error("Ungültige oder doppelte Nachschubzuordnung.");
     cycleIds.add(cycle.id);
-    for (const id of cycle.creditIds) {
-      if (used.has(id) || !before.credits.some(credit => credit.id === id)) throw new Error("Freier Platz wurde mehrfach belegt.");
-      used.add(id);
+    if (!after.cancellations.some(item => item.cycleId === cycle.id)) for (const id of cycle.creditIds) {
+      if (used.has(id) || !before.credits.some(credit => credit.id === id)) throw new Error("Freier Platz wurde mehrfach belegt."); used.add(id);
     }
     for (const id of cycle.listingIds) { if (listingIds.has(id)) throw new Error("Inserat mehrfach reserviert."); listingIds.add(id); }
   }
   const added = after.cycles.filter(cycle => !before.cycles.some(item => item.id === cycle.id));
   if (!added.length) return;
-  const plan = planSmartRefill(current);
+  const plan = planSmartRefill(current, { creditIds: added.flatMap(cycle => cycle.creditIds), now: added[0].preparedAt });
+  const oldListings = allListings(current);
+  const newIds = new Set(added.flatMap(cycle => cycle.listingIds));
+  if (listings(next).filter(item => !oldListings.some(old => old.listing.id === item.listing.id)).length !== newIds.size) throw new Error("Zusätzliche grundstücksfremde Inserate sind nicht zulässig.");
+  for (const { project, listing } of listings(current)) {
+    const retained = next.projects.find(item => item.id === project.id)?.listings.find(item => item.id === listing.id);
+    if (JSON.stringify(retained) !== JSON.stringify(listing)) throw new Error("Bestehende Inserate dürfen durch Nachschub nicht verändert werden.");
+  }
   for (const cycle of added) {
-    const candidate = plan.candidates.find(item => item.plotId === cycle.plotId && item.projectId === cycle.projectId && item.pool === cycle.pool && item.cycle === cycle.cycle && item.fingerprint === cycle.fingerprint);
-    if (!candidate) throw new Error("Nachschubkandidat ist nicht mehr freigegeben. Bitte erneut prüfen.");
+    const candidate = plan.candidates.find(item => item.creditId === cycle.creditIds[0]);
+    if (cycle.kind !== "listing-replacement" || !candidate || ["plotId", "projectId", "pool", "sourcePool", "sourceListingId", "sourceExternalId", "sourceHouseId", "housePosition", "cycle", "fingerprint"].some(key => cycle[key] !== candidate[key])) throw new Error("Nachschubkandidat ist nicht mehr eindeutig freigegeben. Bitte erneut prüfen.");
     const project = next.projects.find(item => item.id === cycle.projectId);
-    const group = cycle.listingIds.map(id => project?.listings.find(listing => listing.id === id));
-    if (group.some(listing => !listing || !["draft", "prepared"].includes(listing.status) || transferred(listing))
-      || new Set(group.map(listing => listing.templateId)).size !== 4) throw new Error("Nachschub benötigt vier neue unterschiedliche Hausinserate.");
-    for (const listing of group) {
-      if (listings(current).some(item => item.listing.id === listing.id || item.listing.externalId === listing.externalId)) throw new Error("Nachschub verwendet eine bestehende Inserats- oder Objektnummer.");
-      if (!/^30460-\d{6}$/u.test(listing.externalId)) throw new Error("Ungültige neue Objektnummer.");
-      const snapshot = listing.addressSnapshot;
-      if (!snapshot || snapshot.pool !== cycle.pool || snapshot.cycle !== cycle.cycle || snapshot.plotId !== cycle.plotId) throw new Error("Pool-Snapshot fehlt.");
-      if (!entries(next).some(entry => entry.listingId === listing.id && entry.externalId === listing.externalId && entry.batchId === snapshot.batchId && entry.status === "planned")) throw new Error("Neuer Lösch-Batch fehlt.");
-    }
-    assertSmartRefillUploadReady(next, group[0]);
+    const listing = project?.listings.find(item => item.id === cycle.listingIds[0]);
+    if (!listing || listing.templateId !== candidate.houseIds[0] || listing.refillSourceCreditId !== candidate.creditId || listing.rotationSourceListingId !== candidate.sourceListingId
+      || oldListings.some(item => item.listing.id === listing.id || item.listing.externalId === listing.externalId)
+      || entries(current).some(entry => entry.externalId === listing.externalId) || !/^30460-\d{6}$/u.test(listing.externalId)) throw new Error("Ungültiger Nachfolger, Haustyp oder wiederverwendete Objektnummer.");
+    const snapshot = listing.addressSnapshot;
+    if (!snapshot || snapshot.pool !== cycle.pool || snapshot.cycle !== cycle.cycle || snapshot.plotId !== cycle.plotId || snapshot.housePosition !== cycle.housePosition
+      || !entries(next).some(entry => entry.listingId === listing.id && entry.externalId === listing.externalId && entry.batchId === snapshot.batchId
+        && entry.housePosition === cycle.housePosition && entry.status === "planned")) throw new Error("Pool-Snapshot oder neuer Lösch-Batch fehlt.");
+    assertSmartRefillUploadReady(next, listing);
   }
 }
-
 export function assertSmartRefillUploadReady(state, listing) {
   const cycle = ledger(state).cycles.find(item => item.listingIds.includes(listing?.id));
   if (!cycle) return;
-  const plot = state.plots?.find(item => item.id === cycle.plotId);
-  const project = state.projects.find(item => item.id === cycle.projectId);
-  if (isInventoryHistorical(listing) || !plot || !project || !["draft", "prepared"].includes(listing.status) || transferred(listing)) throw new Error("Nachschubinserat ist nicht mehr für einen neuen Upload verfügbar.");
-  const context = state.activePlotCatalog ? { source: state.activePlotCatalog.lastValidSource, policy: state.activePlotCatalog } : undefined;
-  if (!operationalCatalogPlots([plot], context).length || plot.isActive === false || project.isActive === false) throw new Error("Nachschubgrundstück ist nicht mehr verfügbar.");
-  if (cycle.fingerprint !== refillPoolFingerprint(plot, cycle.pool) || poolIssue(state, plot, cycle.pool)) throw new Error("Die freigegebenen Pooldaten haben sich geändert. Bitte vor Upload prüfen.");
-  if (reviewIssue(state, plot.id, [project])) throw new Error("Offener Prüffall verhindert den Nachschubupload.");
-  if ((project.listingGroup?.listingControls || []).some(control => control.premiumPlacement || (control.manualLock && !finished(project.listings.find(item => item.id === control.listingId))))) throw new Error("Premium oder Löschschutz verhindert den Nachschubupload.");
-  if (plot.addressRotation?.currentPool !== cycle.pool || plot.addressRotation?.cycle !== cycle.cycle
-    || JSON.stringify(plot.addressRotation?.listingIds) !== JSON.stringify(cycle.listingIds)) throw new Error("Der reservierte Grundstückszyklus stimmt nicht mehr.");
-  const facts = refillPoolFacts(plot, cycle.pool);
-  if (plotAddressKey(project) !== plotAddressKey(facts) || project.plotArea !== facts.plotSizeSqm || project.plotPrice !== facts.purchasePrice
-    || plotAddressKey(listing.addressSnapshot?.address) !== plotAddressKey(facts)) throw new Error("Inserat und freigegebene Grundstücksdaten stimmen nicht überein.");
-  if (project.listings.some(item => !isInventoryHistorical(item) && !cycle.listingIds.includes(item.id) && !finished(item) && (item.status !== "archived" || transferred(item)))) throw new Error("Ein anderer Grundstückszyklus ist noch offen.");
+  const plot = state.plots?.find(item => item.id === cycle.plotId), project = state.projects.find(item => item.id === cycle.projectId);
+  if (cycle.kind !== "listing-replacement" || !activeCycles(state).some(item => item.id === cycle.id) || historical(listing)
+    || !plot || !project || !["draft", "prepared"].includes(listing.status) || transferred(listing)) throw new Error("Nachschubinserat ist nicht mehr für einen neuen Upload verfügbar.");
+  if (!operationalCatalogPlots([plot], context(state)).length || plot.isActive === false || project.isActive === false) throw new Error("Nachschubgrundstück ist nicht mehr verfügbar.");
+  if (cycle.fingerprint !== refillPoolFingerprint(plot, cycle.pool, state) || poolIssue(state, plot, cycle.pool)) throw new Error("Die freigegebenen Pooldaten haben sich geändert. Bitte vor Upload prüfen.");
+  const credit = ledger(state).credits.find(item => item.id === cycle.creditIds[0]);
+  const source = credit && resolveSource(state, credit);
+  if (!source || !finished(source.listing) || historical(source.listing) || source.sourcePool !== cycle.sourcePool
+    || source.plot.id !== cycle.plotId || source.housePosition !== cycle.housePosition || source.listing.templateId === listing.templateId
+    || protectedSource(source.project, source.listing.id) || protectedSource(project, listing.id)) throw new Error("Die ursprüngliche Löschung oder der Löschschutz verhindert den Nachschubupload.");
+  if (reviewIssue(state, plot.id, project)) throw new Error("Offener Prüffall verhindert den Nachschubupload.");
+  const facts = refillPoolFacts(plot, cycle.pool, state), snapshot = listing.addressSnapshot;
+  if (project.plotId !== cycle.plotId || snapshot?.plotId !== cycle.plotId || snapshot.pool !== cycle.pool || snapshot.cycle !== cycle.cycle
+    || snapshot.housePosition !== cycle.housePosition || JSON.stringify(snapshot.address) !== JSON.stringify(facts)
+    || listing.refillSourceCreditId !== credit.id || listing.rotationSourceListingId !== source.listing.id) throw new Error("Inserat und freigegebene Grundstücksdaten stimmen nicht überein.");
+  if (allListings(state).some(item => item.listing.id !== listing.id && (item.listing.addressSnapshot?.plotId || item.archive?.plotId || item.project?.plotId) === cycle.plotId
+    && occupied(item.listing) && item.listing.templateId === listing.templateId)) throw new Error("Ein anderer aktiver oder reservierter Nachfolger verwendet denselben Haustyp.");
 }
-
 export function createSmartRefillUploadPlan(state, options = {}) {
   const pending = new Set(planSmartRefill(state).preparedListingIds);
-  const projectIds = [...new Set(ledger(state).cycles.filter(cycle => cycle.listingIds.some(id => pending.has(id))).map(cycle => cycle.projectId))];
+  const projectIds = [...new Set(activeCycles(state).filter(cycle => cycle.listingIds.some(id => pending.has(id))).map(cycle => cycle.projectId))];
   for (const { listing } of listings(state)) if (pending.has(listing.id)) assertSmartRefillUploadReady(state, listing);
   const excludedListingIds = listings(state).filter(item => !pending.has(item.listing.id)).map(item => item.listing.id);
   return { projectIds, excludedListingIds, plan: createBatchUploadPlan(state, projectIds, { ...options, excludedListingIds }) };
