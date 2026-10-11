@@ -815,3 +815,9 @@ input:focus, textarea:focus, select:focus { border-color: #91bc47; box-shadow: 0
 .refill-details > div { display: grid; gap: 0.25rem; padding: 0.65rem; border: 1px solid var(--line); border-radius: 8px; }
 .refill-details span, .refill-details small { color: var(--muted); font-size: 0.75rem; overflow-wrap: anywhere; }
 .refill-details button { justify-self: start; }
+
+.inventory-correction { margin: 0.75rem 0; padding: 0.75rem; border: 1px solid var(--line, #dbe3df); border-radius: 12px; }
+.inventory-correction summary { cursor: pointer; font-weight: 700; }
+.inventory-correction p, .inventory-correction ol { font-size: 0.85rem; overflow-wrap: anywhere; }
+fieldset.manager-controls { margin: 0; padding: 0; border: 0; min-width: 0; }
+fieldset.manager-controls:disabled { opacity: 0.6; }

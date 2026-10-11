@@ -342,6 +342,8 @@ export type InteriorSetId = "A" | "B" | "C";
 export type InteriorRoomRole = "living" | "kids" | "bedroom" | "kitchen" | "bathroom" | "office";
 
 export type GeneratedListing = {
+  inventoryCorrection?: { active: boolean; reason: string; correctedAt: string; reversedAt: string;
+    history: Array<{ action: string; at: string; reason: string; externalId: string }> };
   interiorSet?: InteriorSetId;
   interiorSetSource?: "automatic" | "manual";
   interiorAssetIds?: Record<InteriorRoomRole, string>;

@@ -1,3 +1,4 @@
+import { isInventoryHistorical, INVENTORY_HISTORICAL_LABEL } from "./inventory-correction.mjs";
 import {
   fillMissingProjectingDefaults,
   IMMOPROFESSIONAL_DEFAULTS,
@@ -429,7 +430,9 @@ export function listingControl(groupValue, listing) {
     variantId: listing.listingGroupVariantId || "",
     ...(stored || {}),
   }, groupValue.projectId);
-  return normalized;
+  return isInventoryHistorical(listing) ? { ...normalized, status: WORKFLOW_STATUS.ARCHIVED,
+    statusMessage: INVENTORY_HISTORICAL_LABEL, manualLock: true, automaticUpdateEnabled: false,
+    automaticDeletionEnabled: false, updateMode: "blocked" } : normalized;
 }
 
 export function updateListingControl(groupValue, listing, patch, options = {}) {

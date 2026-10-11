@@ -1,9 +1,10 @@
+import { isInventoryHistorical, assertInventoryCorrectionTransition } from "./inventory-correction.mjs";
 import { assertSmartRefillTransition } from "./smart-refill.mjs";
 import { normalizeWorkflowStatus, WORKFLOW_STATUS } from './workflow-status.mjs';
 import { isHvObjectNumber } from './object-number-sequence.mjs';
 
 export function isDraftListing(listing) {
-  return normalizeWorkflowStatus(listing?.status) === WORKFLOW_STATUS.DRAFT;
+  return !isInventoryHistorical(listing) && normalizeWorkflowStatus(listing?.status) === WORKFLOW_STATUS.DRAFT;
 }
 
 function conflict(id) {
@@ -70,6 +71,7 @@ export function mergeListingCollection(existing = [], updates = [], options = {}
 }
 
 export function assertBrowserCatalogTransition(current, next) {
+  assertInventoryCorrectionTransition(current, next);
   assertSmartRefillTransition(current, next);
   if (current?.catalogRepairReview && JSON.stringify(current.catalogRepairReview) !== JSON.stringify(next?.catalogRepairReview)) throw conflict('Produktionsfreigabe');
   const protectedFields = ['externalId','listingOrigin','status','version','rotationSourceListingId',

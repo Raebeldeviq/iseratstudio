@@ -1,3 +1,4 @@
+import { isInventoryHistorical } from "./inventory-correction.mjs";
 import { normalizeWorkflowStatus, WORKFLOW_STATUS } from "./workflow-status.mjs";
 
 const BATCH_ELIGIBLE_STATUSES = new Set([
@@ -7,7 +8,7 @@ const BATCH_ELIGIBLE_STATUSES = new Set([
 
 export function isActiveWorkingListing(listing) {
   if (!listing || typeof listing !== "object") return false;
-  if (listing.rotationArchivedAt || listing.listingResetAt) return false;
+  if (isInventoryHistorical(listing) || listing.rotationArchivedAt || listing.listingResetAt) return false;
   const status = normalizeWorkflowStatus(listing.status, WORKFLOW_STATUS.DRAFT);
   return ![
     WORKFLOW_STATUS.PUBLISHED,

@@ -1,3 +1,4 @@
+import { isInventoryEntryHistorical, isInventoryHistorical, assertInventoryUploadAllowed } from "./inventory-correction.mjs";
 import { WORKFLOW_STATUS } from "./workflow-status.mjs";
 
 const PREFIX = "30460";
@@ -138,7 +139,7 @@ export function replanDeleteBatchesForUpload(state, listingIds, uploadDate = cal
   const ids = new Set(listingIds);
   for (const project of state.projects || []) {
     for (const listing of project.listings || []) {
-      if (!ids.has(listing.id)) continue;
+      if (!ids.has(listing.id) || isInventoryHistorical(listing)) continue;
       const entry = batches(next).flatMap((batch) => batch.entries || []).find((item) => item.listingId === listing.id && item.externalId === listing.externalId);
       if (!entry || entry.status === "active" || entry.status === "paused" || entry.status === "deleted") continue;
       if (entry.status === "planned" && entry.uploadDate === uploadDate) continue;
@@ -160,6 +161,7 @@ export function replanDeleteBatchesForUpload(state, listingIds, uploadDate = cal
 }
 
 export function assertDeleteBatchUploadReady(state, listing, uploadDate = calendarDate()) {
+  assertInventoryUploadAllowed(listing);
   const entry = batches(linkDeleteBatchListings(state)).flatMap((batch) => batch.entries || []).find((item) => item.listingId === listing?.id && item.externalId === listing?.externalId);
   if (!entry) return;
   if (entry.status === "paused") return;
@@ -170,24 +172,25 @@ export function assertDeleteBatchUploadReady(state, listing, uploadDate = calend
 
 export function deleteBatchTrafficLight(state, today = calendarDate()) {
   return batches(linkDeleteBatchListings(state)).map((batch) => {
-    const active = batch.entries.filter((entry) => entry.status === "active");
-    const paused = batch.entries.filter((entry) => entry.status === "paused");
-    const deleted = batch.entries.filter((entry) => entry.status === "deleted");
+    const visibleEntries = batch.entries.filter(entry => !isInventoryEntryHistorical(state, entry));
+    const active = visibleEntries.filter((entry) => entry.status === "active");
+    const paused = visibleEntries.filter((entry) => entry.status === "paused");
+    const deleted = visibleEntries.filter((entry) => entry.status === "deleted");
     if (!active.length && !deleted.length) return null;
     const days = Math.round((Date.parse(`${batch.plannedDeletionDate}T12:00:00Z`) - Date.parse(`${today}T12:00:00Z`)) / 86400000);
-    return { ...batch, active, paused, deleted, signal: active.length ? days <= 0 ? "red" : days === 1 ? "yellow" : "green" : "gray", days };
+    return { ...batch, entries: visibleEntries, active, paused, deleted, signal: active.length ? days <= 0 ? "red" : days === 1 ? "yellow" : "green" : "gray", days };
   }).filter(Boolean).sort((a, b) => Number(a.signal === "gray") - Number(b.signal === "gray") || a.plannedDeletionDate.localeCompare(b.plannedDeletionDate) || a.cycle - b.cycle || a.number - b.number);
 }
 
 export function confirmDeleteBatch(state, batchId, deletedAt = new Date().toISOString()) {
   const batch = batches(linkDeleteBatchListings(state)).find((item) => item.id === batchId);
   if (!batch) throw new Error("Lösch-Batch nicht gefunden.");
-  const active = batch.entries.filter((entry) => entry.status === "active");
+  const active = batch.entries.filter((entry) => entry.status === "active" && !isInventoryEntryHistorical(state, entry));
   if (!active.length) throw new Error("Dieser Batch enthält keine übertragenen, offenen Inserate.");
   const activeIds = new Set(active.map((entry) => entry.listingId));
   const reconciled = linkDeleteBatchListings(state);
   const next = { ...reconciled,
-    deleteBatches: batches(reconciled).map((item) => item.id !== batchId ? item : { ...item, completedAt: deletedAt, entries: item.entries.map((entry) => entry.status === "active" && activeIds.has(entry.listingId) ? { ...entry, status: "deleted", deletedAt } : entry.status === "planned" ? { ...entry, status: "void" } : entry) }),
+    deleteBatches: batches(reconciled).map((item) => item.id !== batchId ? item : { ...item, completedAt: deletedAt, entries: item.entries.map((entry) => entry.status === "active" && activeIds.has(entry.listingId) ? { ...entry, status: "deleted", deletedAt } : entry.status === "planned" && !isInventoryEntryHistorical(state, entry) ? { ...entry, status: "void" } : entry) }),
     projects: state.projects.map((project) => ({ ...project,
       listings: project.listings.map((listing) => activeIds.has(listing.id) ? { ...listing, status: WORKFLOW_STATUS.DELETED, statusMessage: "Manuell in Immoprofessional gelöscht", externalDeletionPending: false, deletedAt } : listing),
       listingGroup: project.listingGroup ? { ...project.listingGroup,

@@ -78,6 +78,8 @@ import {
 import { createVariantListing, existingOrAllocatedExternalId, prepareProjectListings } from "./lib/listing-preparation";
 import { approveRefillPool, createSmartRefillUploadPlan, planSmartRefill, prepareSmartRefill, refillPoolFingerprint } from "../smart-refill.mjs";
 import type { RefillPool } from "../smart-refill.mjs";
+import { isInventoryHistorical } from "../inventory-correction.mjs";
+import InventoryCorrectionActions from "./components/InventoryCorrectionActions";
 import SmartRefillPanel from "./components/SmartRefillPanel";
 import PlotManagement from "./components/PlotManagement";
 import { workspaceProject } from "./lib/workspace-selection";
@@ -3107,6 +3109,32 @@ export default function InseratStudio() {
     void runRefillAction(current => approveRefillPool(current, plotId, pool, fingerprint), "Die angezeigten Pooldaten sind für den Nachschub freigegeben. Jede Datenänderung erfordert eine neue Freigabe.");
   };
 
+  const correctInventory = async (projectId: string, listing: GeneratedListing, action: "exclude" | "restore") => {
+    if (refillOperation.current || uploading || !helperOnline) return;
+    const message = action === "exclude"
+      ? `Objekt ${listing.externalId}: als „Nicht im Portal vorhanden / Duplikat“ kennzeichnen? Es wird aus der aktiven Löschplanung genommen. Keine Portalaktion und keine Nachschubplätze.`
+      : `Objekt ${listing.externalId}: Bestandskorrektur rückgängig machen und wieder nach seinem ursprünglichen Status berücksichtigen?`;
+    if (!window.confirm(message)) return;
+    refillOperation.current = true;
+    setRefillBusy(true);
+    try {
+      await queueDeviceCatalogSnapshot(state, new Date().toISOString());
+      const response = await helperFetch("/inventory/correct", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+        projectId, listingId: listing.id, externalId: listing.externalId, action, expectedRevision: listing.inventoryCorrection?.history.length || 0,
+      }) });
+      const result = await response.json() as { ok?: boolean; message?: string; savedAt?: string };
+      if (!response.ok || !result.ok) throw new Error(result.message || "Die Bestandskorrektur konnte nicht gespeichert werden.");
+      const snapshot = await loadDeviceCatalogSnapshot();
+      if (!snapshot) throw new Error("Korrektur gespeichert. Bitte die App neu öffnen, um den aktuellen Katalog zu laden.");
+      acceptKnownDeviceCatalogSavedAt(snapshot.savedAt);
+      setState(snapshot.state);
+      await saveStudioState(snapshot.state, snapshot.savedAt);
+      setNotice(action === "exclude" ? `Objekt ${listing.externalId} ist als historisch gekennzeichnet. Keine Nachschubplätze erzeugt.` : `Bestandskorrektur für Objekt ${listing.externalId} rückgängig gemacht.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Die Bestandskorrektur konnte nicht gespeichert werden.");
+    } finally { refillOperation.current = false; setRefillBusy(false); }
+  };
+
   const markDeletionBatch = async (batchId: string) => {
     if (refillOperation.current || uploading) return;
     const batch = deletionBatches.find((item) => item.id === batchId);
@@ -3961,7 +3989,8 @@ export default function InseratStudio() {
                     <div><span>Letzte / nächste Aktualisierung</span><b>{localDateTime(control.lastSuccessAt || control.lastUpdatedAt)}</b><small>{localDateTime(control.nextUpdatedAt)}</small></div>
                     <div><span>Status / Health Score</span><b>{control.statusMessage || workflowStatusLabel(control.status)} · {health.score}</b><small>{listing.externalDeletionPending ? "Externe Löschung noch ausstehend" : control.lastError || `${Math.floor(health.daysSinceSuccess)} Tage seit Erfolg`}</small></div>
                   </div>
-                  <div className="manager-controls">
+                  <InventoryCorrectionActions listing={listing} disabled={refillBusy || uploading || !helperOnline} onCorrect={(action) => void correctInventory(project.id, listing, action)} />
+                  <fieldset className="manager-controls" disabled={isInventoryHistorical(listing)}>
                     <label><input type="checkbox" checked={control.automaticUpdateEnabled} onChange={(event) => updateManagedListingControl(project.id, listing.id, { automaticUpdateEnabled: event.target.checked })} /> Automatik</label>
                     <label><input type="checkbox" checked={control.premiumPlacement} onChange={(event) => updateManagedListingControl(project.id, listing.id, { premiumPlacement: event.target.checked })} /> Premium{control.premiumPlacement ? <small> aktiv · Rotation und Löschung geschützt</small> : null}</label>
                     <label><input type="checkbox" checked={control.manualLock} onChange={(event) => updateManagedListingControl(project.id, listing.id, { manualLock: event.target.checked })} /> Löschen sperren{control.manualLock ? <small> · Rotation und Löschung gesperrt</small> : null}</label>
@@ -3979,7 +4008,7 @@ export default function InseratStudio() {
                     </select></label>
                     <button className="primary" disabled={Boolean(listing.rotationArchivedAt)} onClick={() => prepareManagedListing(project.id, listing.id, control.updateMode === "full-auto" ? "full-auto" : control.updateMode === "copy-without-delete" ? "copy-without-delete" : "prepare-only")}>Jetzt aktualisieren</button>
                     <button className="secondary" disabled={Boolean(listing.rotationArchivedAt)} onClick={() => prepareManagedListing(project.id, listing.id, "copy-without-delete")}>Nur kopieren</button>
-                  </div>
+                  </fieldset>
                   </div> : null}
                 </article>
                 );

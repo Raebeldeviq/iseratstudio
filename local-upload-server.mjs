@@ -1,3 +1,4 @@
+import { correctListingInventory, assertInventoryUploadAllowed } from "./inventory-correction.mjs";
 import { listingInteriorImages } from "./interior-sets.mjs";
 import { Client } from "basic-ftp";
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
@@ -430,6 +431,7 @@ async function automaticRotationUpload({ state, project, listing, runId, batchOv
       effectiveMaxRunItems,
     });
   }
+  assertInventoryUploadAllowed(listing);
   const jobId = createUploadJobId(project, listing);
   const uploadJob = {
     jobId,
@@ -717,6 +719,7 @@ const server = createServer(async (request, response) => {
   const isCatalogV2Commit = request.method === "POST" && pathname === "/catalog-v2/commit";
   const isCatalogV2ManifestLoad = request.method === "GET" && pathname === "/catalog-v2/manifest";
   const isCatalogV2ImageLoad = request.method === "GET" && pathname === "/catalog-v2/image";
+  const isInventoryCorrection = request.method === "POST" && pathname === "/inventory/correct";
   const isDeleteBatchConfirm = request.method === "POST" && pathname === "/delete-batches/confirm";
   const isMediaLibraryList = request.method === "GET" && pathname === "/media-library";
   const isMediaLibrarySequence = request.method === "GET" && pathname === "/media-library/sequence";
@@ -735,7 +738,7 @@ const server = createServer(async (request, response) => {
   const isPlotMasterApply = request.method === "POST" && pathname === "/plot-master/apply";
   const isMailRuntimeProbe = request.method === "POST" && pathname === "/mail-runtime/probe";
   const isExactProductionDelete = request.method === "POST" && pathname === EXACT_PRODUCTION_DELETE_PATH;
-  if (!isActivePlotCatalogPreview && !isActivePlotCatalogApply && !isPlotSyncSchedule && !isHealth && !isRuntimeProvenance && !isUpload && !isBinaryUpload && !isManualBatchResumption && !isLocalSave && !isTextGeneration && !isImageCaptionGeneration && !isOpenAiKeyValidation && !isCredentialLoad && !isCredentialSave && !isCatalogLoad && !isCatalogSave && !isCatalogV2Start && !isCatalogV2ImageSave && !isCatalogV2Commit && !isCatalogV2ManifestLoad && !isCatalogV2ImageLoad && !isMediaLibraryList && !isMediaLibrarySequence && !isMediaLibraryImage && !isPlotExposeAnalyze && !isPlotExposeCommit && !isPlotExposeLoad && !isPlotExposeArchive && !isPlotSyncStatus && !isPlotSyncRun && !isPlotSyncLog && !isPlotMasterPreview && !isPlotMasterApply && !isMailRuntimeProbe && !isExactProductionDelete) {
+  if (!isInventoryCorrection && !isDeleteBatchConfirm && !isActivePlotCatalogPreview && !isActivePlotCatalogApply && !isPlotSyncSchedule && !isHealth && !isRuntimeProvenance && !isUpload && !isBinaryUpload && !isManualBatchResumption && !isLocalSave && !isTextGeneration && !isImageCaptionGeneration && !isOpenAiKeyValidation && !isCredentialLoad && !isCredentialSave && !isCatalogLoad && !isCatalogSave && !isCatalogV2Start && !isCatalogV2ImageSave && !isCatalogV2Commit && !isCatalogV2ManifestLoad && !isCatalogV2ImageLoad && !isMediaLibraryList && !isMediaLibrarySequence && !isMediaLibraryImage && !isPlotExposeAnalyze && !isPlotExposeCommit && !isPlotExposeLoad && !isPlotExposeArchive && !isPlotSyncStatus && !isPlotSyncRun && !isPlotSyncLog && !isPlotMasterPreview && !isPlotMasterApply && !isMailRuntimeProbe && !isExactProductionDelete) {
     send(response, 404, { ok: false, message: "Nicht gefunden." }, origin);
     return;
   }
@@ -1135,6 +1138,12 @@ const server = createServer(async (request, response) => {
     if (isCatalogSave) {
       const result = await saveCatalogSnapshot(body);
       send(response, 200, { ok: true, stored: true, ...result }, origin);
+      return;
+    }
+
+    if (isInventoryCorrection) {
+      const result = await catalogStateStore.update(state => correctListingInventory(state, body));
+      send(response, 200, { ok: true, savedAt: result.savedAt, changed: result.changed }, origin);
       return;
     }
 

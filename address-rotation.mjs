@@ -1,3 +1,4 @@
+import { isInventoryHistorical } from "./inventory-correction.mjs";
 const text = (value) => String(value ?? "").trim();
 
 export function parseAddressPoolRows(rows, pool) {
@@ -79,7 +80,7 @@ export function addressRotationStatus(state, plotId, options = {}) {
     const listing = project?.listings?.find((item) => item.id === id);
     const entry = entries.find((item) => item.listingId === id && item.externalId === listing?.externalId && item.status !== "void");
     const control = project?.listingGroup?.listingControls?.find((item) => item.listingId === id);
-    return !listing || !entry || entry.status !== "deleted" || control?.premiumPlacement || (control?.manualLock && listing.status !== "deleted");
+    return !listing || isInventoryHistorical(listing) || !entry || entry.status !== "deleted" || control?.premiumPlacement || (control?.manualLock && listing.status !== "deleted");
   }).length;
   return { state: ids.length === 4 && remaining === 0 && nextAddress && readyPair ? "ready" : "active",
     currentPool, nextPool, remaining, cycle: Number(rotation.cycle) || 0 };

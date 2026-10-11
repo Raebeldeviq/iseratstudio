@@ -1,3 +1,4 @@
+import { isInventoryHistorical, isInventoryEntryHistorical } from "./inventory-correction.mjs";
 import { addressRotationStatus } from "./address-rotation.mjs";
 import { operationalCatalogPlots } from "./plot-active-catalog.mjs";
 import { plotAddressSelection } from "./plot-selection.mjs";
@@ -22,7 +23,7 @@ export function recordRefillDeletions(before, after) {
   const added = [];
   for (const entry of entries(after)) {
     const id = creditKey(entry);
-    if (entry.status !== "deleted" || !entry.deletedAt || previous.get(id)?.status !== "active" || known.has(id)) continue;
+    if (isInventoryEntryHistorical(before, entry) || isInventoryEntryHistorical(after, entry) || entry.status !== "deleted" || !entry.deletedAt || previous.get(id)?.status !== "active" || known.has(id)) continue;
     known.add(id);
     added.push({ id, batchId: entry.batchId, projectId: entry.projectId,
       listingId: entry.listingId, externalId: entry.externalId, deletedAt: entry.deletedAt });
@@ -83,11 +84,11 @@ function candidateForPlot(state, plot) {
   if (projects.length > 1) return blocked("Mehrere Projekte für dieselbe plotId – Zuordnung prüfen.");
   if (plot.isActive === false || projects.some(project => project.isActive === false)) return blocked("Grundstück ist inaktiv.");
   if (reviewIssue(state, plot.id, projects)) return blocked("Offener relevanter Prüffall.");
-  if (projects.some(project => (project.listingGroup?.listingControls || []).some(control => control.premiumPlacement
-    || (control.manualLock && !finished(project.listings?.find(listing => listing.id === control.listingId)))))) return blocked("Premium oder Löschschutz aktiv.");
+  if (projects.some(project => (project.listingGroup?.listingControls || []).some(control => !isInventoryHistorical(project.listings?.find(listing => listing.id === control.listingId)) && (control.premiumPlacement
+    || (control.manualLock && !finished(project.listings?.find(listing => listing.id === control.listingId))))))) return blocked("Premium oder Löschschutz aktiv.");
   const history = [...projects.flatMap(project => project.listings || []), ...(state.listingResetHistory || [])
     .filter(archive => archive.plotId === plot.id || projects.some(project => project.id === archive.projectId)).flatMap(archive => archive.listings || [])];
-  if (history.some(listing => !finished(listing) && (listing.status !== "archived" || transferred(listing) || listing.externalDeletionPending))) return blocked("Inserate des Grundstücks sind noch aktiv, vorbereitet oder ungeklärt.");
+  if (history.some(listing => !isInventoryHistorical(listing) && !finished(listing) && (listing.status !== "archived" || transferred(listing) || listing.externalDeletionPending))) return blocked("Inserate des Grundstücks sind noch aktiv, vorbereitet oder ungeklärt.");
   const status = addressRotationStatus({ ...state, plots: state.plots.map(item => item.id === plot.id ? { ...item, addressRotation: rotation } : item) }, plot.id, { initialPoolAOnly: true });
   if (status.state !== "ready") return blocked(`${status.remaining}/4 Inserate noch offen oder nächster Pool unvollständig.`);
   if (history.length && !rotation.currentPool) return blocked("Historischer Zyklus ohne eindeutige Poolzuordnung – zuerst prüfen.");
@@ -126,9 +127,9 @@ export function planSmartRefill(state, options = {}) {
   const recordedListings = new Map(listings(state).map(item => [item.listing.id, item.listing]));
   const preparedListingIds = stored.cycles.flatMap(cycle => cycle.listingIds).filter(id => {
     const listing = recordedListings.get(id);
-    return listing && ["draft", "prepared"].includes(listing.status) && !transferred(listing) && !listing.listingResetAt && !listing.rotationArchivedAt;
+    return listing && !isInventoryHistorical(listing) && ["draft", "prepared"].includes(listing.status) && !transferred(listing) && !listing.listingResetAt && !listing.rotationArchivedAt;
   });
-  const occupied = listings(state).filter(({ listing }) => !finished(listing) && transferred(listing));
+  const occupied = listings(state).filter(({ listing }) => !isInventoryHistorical(listing) && !finished(listing) && transferred(listing));
   return { released: stored.credits.length, free: availableCredits.length, reserved: consumed.size,
     activeCount: new Set(occupied.map(item => item.listing.id)).size,
     readyCount: candidates.length * 4, remaining: availableCredits.length - candidates.length * 4,
@@ -203,7 +204,7 @@ export function assertSmartRefillUploadReady(state, listing) {
   if (!cycle) return;
   const plot = state.plots?.find(item => item.id === cycle.plotId);
   const project = state.projects.find(item => item.id === cycle.projectId);
-  if (!plot || !project || !["draft", "prepared"].includes(listing.status) || transferred(listing)) throw new Error("Nachschubinserat ist nicht mehr für einen neuen Upload verfügbar.");
+  if (isInventoryHistorical(listing) || !plot || !project || !["draft", "prepared"].includes(listing.status) || transferred(listing)) throw new Error("Nachschubinserat ist nicht mehr für einen neuen Upload verfügbar.");
   const context = state.activePlotCatalog ? { source: state.activePlotCatalog.lastValidSource, policy: state.activePlotCatalog } : undefined;
   if (!operationalCatalogPlots([plot], context).length || plot.isActive === false || project.isActive === false) throw new Error("Nachschubgrundstück ist nicht mehr verfügbar.");
   if (cycle.fingerprint !== refillPoolFingerprint(plot, cycle.pool) || poolIssue(state, plot, cycle.pool)) throw new Error("Die freigegebenen Pooldaten haben sich geändert. Bitte vor Upload prüfen.");
@@ -214,7 +215,7 @@ export function assertSmartRefillUploadReady(state, listing) {
   const facts = refillPoolFacts(plot, cycle.pool);
   if (plotAddressKey(project) !== plotAddressKey(facts) || project.plotArea !== facts.plotSizeSqm || project.plotPrice !== facts.purchasePrice
     || plotAddressKey(listing.addressSnapshot?.address) !== plotAddressKey(facts)) throw new Error("Inserat und freigegebene Grundstücksdaten stimmen nicht überein.");
-  if (project.listings.some(item => !cycle.listingIds.includes(item.id) && !finished(item) && (item.status !== "archived" || transferred(item)))) throw new Error("Ein anderer Grundstückszyklus ist noch offen.");
+  if (project.listings.some(item => !isInventoryHistorical(item) && !cycle.listingIds.includes(item.id) && !finished(item) && (item.status !== "archived" || transferred(item)))) throw new Error("Ein anderer Grundstückszyklus ist noch offen.");
 }
 
 export function createSmartRefillUploadPlan(state, options = {}) {
