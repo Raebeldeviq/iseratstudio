@@ -6,6 +6,8 @@ Die vorhandene Vorschau erhält einzelne Checkboxen, eine Suche nach neuer Objek
 
 Der Uploadbutton nennt die konkrete Anzahl. Ein modaler Bestätigungsdialog listet die Objektnummern und bietet Abbrechen oder Upload starten. Archivkonflikte werden aus den weiterhin ungeklärten, früher übertragenen Resetarchiven abgeleitet. Die Sammelauswahl überspringt betroffene Inserate. Bewusste Einzelauswahl bleibt möglich und der Hinweis steht ebenfalls in der Bestätigung.
 
+Die abschließende Sichtprüfung umfasst den zentrierten nativen Dialog sowie die Anzeige „4 ausgewählt / 86 nicht ausgewählt“. Der Dialog wurde abgebrochen; es fand kein produktiver Upload statt.
+
 Die bestehende Uploadplanung benötigt für Nachschub nun eine explizite, nicht leere Liste vorbereiteter listingIds. Unbekannte, doppelte und bereits übertragene IDs werden zurückgewiesen. Dieselbe Auswahl begrenzt die Wiederaufnahme und die vorhandene sequenzielle Uploadpipeline. Eine zusätzliche Prüfung vor dem Worker weist eine breitere oder doppelte Warteschlange zurück. Der bisherige FTPS-Transport und die persistente Job-Idempotenz werden weiterverwendet.
 
 Die Transferverbuchung berücksichtigt bestätigte Nachschubquellen: Sie bleiben gelöscht und werden weder als veröffentlicht gekennzeichnet noch mit einem ausstehenden Rotationsauftrag versehen. Der neue Uploadhistorieneintrag verwendet die tatsächlich übertragene Pool-Adresse. Die bestehenden Reservierungen, Gutschriften und historischen Daten bleiben erhalten. FTPS-Erfolg bleibt `transferred_pending_import` und bedeutet keine Portalimportbestätigung.
