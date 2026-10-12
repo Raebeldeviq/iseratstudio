@@ -87,14 +87,17 @@ export function reconcileCompletedManualBatchTransferInState(state, input = {}) 
   if (!jobId.startsWith(expectedJobPrefix) || jobId.length <= expectedJobPrefix.length) {
     throw new Error("Der abgeschlossene Upload-Job passt nicht zur gespeicherten Inseratsversion.");
   }
+  const refill = Boolean(listing.refillSourceCreditId);
+  const archivedSources = refill ? (state.listingResetHistory || []).filter(archive => archive.projectId === project.id)
+    .flatMap(archive => archive.listings || []).filter(candidate => candidate.id === listing.rotationSourceListingId) : [];
   const source = listing.rotationSourceListingId
     ? project.listings.find((candidate) => candidate.id === listing.rotationSourceListingId)
+      || (archivedSources.length === 1 ? archivedSources[0] : null)
     : null;
   if (listing.rotationSourceListingId && !source) {
     throw new Error("Die Quelle der übertragenen Rotationskopie ist nicht mehr vorhanden.");
   }
   const sourceStatus = source ? text(source.status) : "";
-  const refill = Boolean(listing.refillSourceCreditId);
   const sourceControlBefore = source ? listingControl(project.listingGroup, source) : null;
   if (source && !refill && sourceControlBefore?.status !== WORKFLOW_STATUS.PUBLISHED) {
     throw new Error("Die Quelle der übertragenen Rotationskopie ist nicht mehr veröffentlicht.");

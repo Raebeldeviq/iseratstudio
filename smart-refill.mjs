@@ -96,10 +96,10 @@ export function adoptApprovedRefillPools(state, at = now()) {
   return next;
 }
 
-function resolveSource(state, credit) {
+function resolveSource(state, credit, reservation) {
   const matches = allListings(state).filter(({ project, archive, listing }) => (project?.id || archive?.projectId) === credit.projectId
     && listing.id === credit.listingId && listing.externalId === credit.externalId);
-  if (!matches.length) return null;
+  if (!matches.length || (reservation && matches.length !== 1)) return null;
   const source = matches.find(item => !item.archive) || matches[0];
   const { project, listing, archive } = source;
   const plotId = listing.addressSnapshot?.plotId || archive?.plotId || project?.plotId;
@@ -124,13 +124,49 @@ function resolveSource(state, credit) {
       if (matchingFacts.length === 1) sourcePool = matchingFacts[0];
     }
   }
+  if (!sourcePool) sourcePool = reservation?.sourcePool;
   const entry = entries(state).find(item => item.batchId === credit.batchId && item.projectId === credit.projectId
     && item.listingId === credit.listingId && item.externalId === credit.externalId);
   const variantIndex = project.listingGroup?.variants?.findIndex(item => item.listing?.id === listing.id);
   const housePosition = listing.addressSnapshot?.housePosition || credit.housePosition || entry?.housePosition
-    || (variantIndex >= 0 && variantIndex < 4 ? variantIndex + 1 : 0);
+    || (variantIndex >= 0 && variantIndex < 4 ? variantIndex + 1 : 0) || reservation?.housePosition;
   if (!sourcePool || !Number.isInteger(housePosition) || housePosition < 1 || housePosition > 4 || !listing.templateId) return null;
   return { project, listing, archive, plot, sourcePool, housePosition };
+}
+
+// Manager removal is a visibility change. A reserved replacement can keep using its
+// deleted source only when the independent deletion receipt and identities still agree.
+function validReservedDeletionSource(state, source, credit, cycle) {
+  const listing = source.listing;
+  if (isInventoryHistorical(listing) || listing.refillDiscard || listing.externalDeletionPending) return false;
+  const deletedAt = Date.parse(credit.deletedAt);
+  if (!Number.isFinite(deletedAt) || listing.deletedAt !== credit.deletedAt) return false;
+  if (!isManagerRemoved(listing) && finished(listing)) return true;
+  if (!['deleted', 'archived'].includes(listing.status)) return false;
+  const preparedAt = Date.parse(cycle.preparedAt);
+  if (!Number.isFinite(preparedAt) || preparedAt < deletedAt || cycle.sourceListingId !== credit.listingId
+    || cycle.sourceExternalId !== credit.externalId || cycle.projectId !== credit.projectId
+    || cycle.sourceHouseId !== listing.templateId) return false;
+  if (isManagerRemoved(listing)) {
+    const cleanup = listing.managerCleanup;
+    if (cleanup.source !== 'manual-manager-bulk-cleanup' || !cleanup.operationId || cleanup.externalId !== credit.externalId
+      || !Number.isFinite(Date.parse(cleanup.removedAt)) || Date.parse(cleanup.removedAt) < preparedAt) return false;
+  }
+  const batchMatches = entries(state).filter(entry => entry.batchId === credit.batchId && entry.projectId === credit.projectId
+    && entry.listingId === credit.listingId && entry.externalId === credit.externalId);
+  if (batchMatches.length) return batchMatches.length === 1 && batchMatches[0].status === 'deleted'
+    && batchMatches[0].deletedAt === credit.deletedAt && credit.id === creditKey(batchMatches[0]);
+  const evidence = listing.externalDeletionEvidence;
+  const receipts = (state.deleteReports || []).filter(receipt => receipt.projectId === credit.projectId
+    && receipt.sourceListingId === credit.listingId);
+  return credit.source === 'user-supplied-export-report' && /^[a-f0-9]{64}$/u.test(credit.reportHash || '')
+    && credit.batchId === `external-report:${credit.reportHash}` && credit.id === creditKey(credit)
+    && listing.deleteConfirmedAt === credit.deletedAt && evidence?.source === credit.source
+    && evidence.reportHash === credit.reportHash && evidence.confirmedAt === credit.deletedAt
+    && receipts.length === 1 && receipts[0].reportId === evidence.reportId && receipts[0].rawHash === credit.reportHash
+    && receipts[0].externalObjectNumber === credit.externalId && receipts[0].plotId === cycle.plotId
+    && receipts[0].processedAt === credit.deletedAt && receipts[0].result === 'success'
+    && receipts[0].confirmationSource === credit.source;
 }
 function protectedSource(project, listingId) {
   return (project.listingGroup?.listingControls || []).some(control => control.listingId === listingId
@@ -309,10 +345,11 @@ export function assertSmartRefillUploadReady(state, listing) {
   if (!operationalCatalogPlots([plot], context(state)).length || plot.isActive === false || project.isActive === false) throw new Error("Nachschubgrundstück ist nicht mehr verfügbar.");
   if (cycle.fingerprint !== refillPoolFingerprint(plot, cycle.pool, state) || poolIssue(state, plot, cycle.pool)) throw new Error("Die freigegebenen Pooldaten haben sich geändert. Bitte vor Upload prüfen.");
   const credit = ledger(state).credits.find(item => item.id === cycle.creditIds[0]);
-  const source = credit && resolveSource(state, credit);
-  if (!source || !finished(source.listing) || historical(source.listing) || source.sourcePool !== cycle.sourcePool
+  const source = credit && resolveSource(state, credit, cycle);
+  if (!source || !validReservedDeletionSource(state, source, credit, cycle) || source.sourcePool !== cycle.sourcePool
     || source.plot.id !== cycle.plotId || source.housePosition !== cycle.housePosition || source.listing.templateId === listing.templateId
-    || protectedSource(source.project, source.listing.id) || protectedSource(project, listing.id)) throw new Error("Die ursprüngliche Löschung oder der Löschschutz verhindert den Nachschubupload.");
+    || protectedSource(source.project, source.listing.id) || (source.archive && protectedSource(source.archive, source.listing.id))
+    || protectedSource(project, listing.id)) throw new Error("Die ursprüngliche Löschung oder der Löschschutz verhindert den Nachschubupload.");
   if (reviewIssue(state, plot.id, project)) throw new Error("Offener Prüffall verhindert den Nachschubupload.");
   const facts = refillPoolFacts(plot, cycle.pool, state), snapshot = listing.addressSnapshot;
   if (project.plotId !== cycle.plotId || snapshot?.plotId !== cycle.plotId || snapshot.pool !== cycle.pool || snapshot.cycle !== cycle.cycle

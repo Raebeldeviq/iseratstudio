@@ -11,6 +11,8 @@ import { recordRefillDeletions, planSmartRefill, prepareSmartRefill, adoptApprov
   createSmartRefillUploadPlan, assertSmartRefillTransition, assertSmartRefillUploadReady, discardUntransferredRefill } from "../smart-refill.mjs";
 import { assertBrowserCatalogTransition } from "../listing-catalog-view.mjs";
 import { startCatalogSnapshot, commitCatalogSnapshot, saveCatalogImage, loadCatalogManifest } from "../catalog-store.mjs";
+import { removeManagerListings, managerCleanupRevision } from '../manager-cleanup.mjs';
+import { reconcileCompletedManualBatchTransferInState } from '../manual-batch-upload.mjs';
 const at = "2026-10-11T12:00:00.000Z";
 const address = (n = "10") => ({ street: "Teststraße", houseNumber: n, postalCode: "14469", city: "Potsdam" });
 const generate = (state, ids, distribution, replacements) => prepareProjectListings(state, ids, distribution, project => project, { replacements, now: at }).state;
@@ -52,6 +54,117 @@ function fixture(count = 1, sourcePool = "A", positions = [1]) {
 }
 function newly(state) { const ids = new Set(state.smartRefill.cycles.filter(c => c.kind === "listing-replacement").flatMap(c => c.listingIds));
   return state.projects.flatMap(p => p.listings).filter(l => ids.has(l.id)); }
+
+function cleanedReservedFixture(exportReport = false) {
+  let state = prepare(fixture());
+  const project = state.projects[0], source = project.listings[0], cycle = state.smartRefill.cycles[0], credit = state.smartRefill.credits[0];
+  if (exportReport) {
+    const hash = 'a'.repeat(64), batchId = `external-report:${hash}`;
+    Object.assign(credit, { batchId, source: 'user-supplied-export-report', reportHash: hash });
+    credit.id = JSON.stringify([batchId, project.id, source.id, source.externalId]); cycle.creditIds = [credit.id];
+    for (const listing of project.listings) if (listing.rotationSourceListingId === source.id) listing.refillSourceCreditId = credit.id;
+    for (const variant of project.listingGroup.variants) if (variant.listing?.rotationSourceListingId === source.id) variant.listing.refillSourceCreditId = credit.id;
+    source.deleteConfirmedAt = credit.deletedAt;
+    source.externalDeletionEvidence = { reportId: 'export-receipt', reportHash: hash, confirmedAt: credit.deletedAt, source: credit.source };
+    state.deleteReports = [{ reportId: 'export-receipt', sourceListingId: source.id, projectId: project.id, plotId: project.plotId,
+      externalObjectNumber: source.externalId, rawHash: hash, processedAt: credit.deletedAt, result: 'success', confirmationSource: credit.source }];
+    state.deleteBatches = state.deleteBatches.map(batch => ({ ...batch, entries: batch.entries.filter(entry => entry.listingId !== source.id) }));
+  }
+  const entry = { project, listing: source, group: project.listingGroup };
+  return removeManagerListings(state, { entries: [{ projectId: project.id, listingId: source.id, externalId: source.externalId,
+    expectedRevision: managerCleanupRevision(state, entry) }] }, '2026-10-12T12:00:00.000Z');
+}
+
+test('manager removal of a confirmed batch source keeps its reserved successor eligible without mutating any facts', () => {
+  const state = cleanedReservedFixture(), before = structuredClone(state), listing = newly(state)[0];
+  assert.ok(state.projects[0].listings[0].managerCleanup);
+  assert.doesNotThrow(() => assertSmartRefillUploadReady(state, listing));
+  assert.equal(createSmartRefillUploadPlan(state, { selectedListingIds: [listing.id] }).plan.totalListings, 1);
+  assert.deepEqual(state, before); assert.equal(planSmartRefill(state).reserved, 1); assert.equal(planSmartRefill(state).free, 0);
+});
+test('manager removal of a legacy source keeps the exact export-report receipt valid', () => {
+  const state = cleanedReservedFixture(true), before = structuredClone(state);
+  assert.doesNotThrow(() => assertSmartRefillUploadReady(state, newly(state)[0]));
+  assert.deepEqual(state, before);
+});
+test('missing deletion time remains blocked even when the source has not been manager-removed', () => {
+  for (const kind of ['credit', 'source']) {
+    const state = prepare(fixture());
+    if (kind === 'credit') state.smartRefill.credits[0].deletedAt = '';
+    else state.projects[0].listings[0].deletedAt = '';
+    assert.throws(() => assertSmartRefillUploadReady(state, newly(state)[0]), /Löschung/u);
+  }
+});
+test('removed batch source still blocks missing, reverted or mismatching deletion confirmations', () => {
+  const mutations = [
+    s => { s.smartRefill.credits[0].deletedAt = ''; },
+    s => { s.projects[0].listings[0].deletedAt = ''; },
+    s => { s.projects[0].listings[0].externalDeletionPending = true; },
+    s => { s.projects[0].listings[0].status = 'draft'; },
+    s => { s.deleteBatches.flatMap(b => b.entries).find(e => e.listingId === 'listing-0-1').status = 'active'; },
+    s => { s.deleteBatches.flatMap(b => b.entries).find(e => e.listingId === 'listing-0-1').deletedAt = ''; },
+    s => { s.deleteBatches = s.deleteBatches.map(b => ({ ...b, entries: b.entries.filter(e => e.listingId !== 'listing-0-1') })); },
+    s => { s.smartRefill.cycles[0].sourceListingId = 'other-source'; },
+    s => { s.smartRefill.cycles[0].sourceExternalId = '30460-999999'; },
+    s => { s.smartRefill.cycles[0].sourceHouseId = 'different-house'; },
+    s => { s.projects[0].listings[0].managerCleanup.externalId = '30460-999999'; },
+    s => { s.projects[0].listings[0].managerCleanup.source = 'discarded-refill'; },
+    s => { s.projects[0].listings[0].managerCleanup.removedAt = '2026-10-10T12:00:00Z'; },
+    s => { s.smartRefill.cycles[0].preparedAt = '2026-10-10T12:00:00Z'; },
+  ];
+  for (const mutate of mutations) { const state = cleanedReservedFixture(); mutate(state); assert.throws(() => assertSmartRefillUploadReady(state, newly(state)[0]), /Löschung|Snapshot/u); }
+});
+test('removed legacy source still blocks missing, duplicate and conflicting report receipts', () => {
+  const mutations = [
+    s => { s.deleteReports = []; },
+    s => { s.deleteReports.push(structuredClone(s.deleteReports[0])); },
+    s => { s.deleteReports[0].result = 'failed'; },
+    s => { s.deleteReports[0].rawHash = 'b'.repeat(64); },
+    s => { s.deleteReports[0].plotId = 'another-plot'; },
+    s => { s.deleteReports[0].externalObjectNumber = '30460-999999'; },
+    s => { s.deleteReports[0].processedAt = '2026-10-12T10:00:00Z'; },
+    s => { s.deleteReports[0].sourceListingId = 'different'; },
+    s => { s.projects[0].listings[0].externalDeletionEvidence = undefined; },
+    s => { s.projects[0].listings[0].deleteConfirmedAt = ''; },
+  ];
+  for (const mutate of mutations) { const state = cleanedReservedFixture(true); mutate(state); assert.throws(() => assertSmartRefillUploadReady(state, newly(state)[0]), /Löschung/u); }
+});
+test('source or successor Premium and genuine manual locks remain effective after manager removal', () => {
+  for (const id of ['listing-0-1', 'successor']) for (const lock of [{ premiumPlacement: true }, { manualLock: true, lockReason: 'Manuell geschützt' }, { manualLock: true, lockedUntil: '2027-01-01T12:00:00Z' }]) {
+    const state = cleanedReservedFixture(), listing = newly(state)[0];
+    state.projects[0].listingGroup.listingControls.push({ listingId: id === 'successor' ? listing.id : id, status: 'deleted', updateMode: 'blocked', automaticUpdateEnabled: false, ...lock });
+    assert.throws(() => assertSmartRefillUploadReady(state, listing), /Löschschutz/u);
+  }
+});
+test('a duplicate inventory correction remains blocked even when an old reservation exists', () => {
+  const state = cleanedReservedFixture(true); state.projects[0].listings[0].inventoryCorrection = { active: true };
+  assert.throws(() => assertSmartRefillUploadReady(state, newly(state)[0]), /Löschung/u);
+});
+test('retained archived source resolves from its fixed reservation and transfers without reactivating the archive', () => {
+  const state = cleanedReservedFixture(true), project = state.projects[0], source = project.listings[0], listing = newly(state)[0];
+  source.status = 'archived'; delete source.addressSnapshot;
+  delete state.smartRefill.credits[0].sourcePool; delete state.smartRefill.credits[0].housePosition;
+  project.listings = project.listings.filter(l => l.id !== source.id);
+  project.listingGroup.variants = project.listingGroup.variants.filter(v => v.listing?.id !== source.id);
+  state.listingResetHistory = [{ id: 'retained-source', kind: 'plot-listing-reset', projectId: project.id, plotId: project.plotId, listings: [source], listingGroup: { listingControls: [] } }];
+  const before = structuredClone(state); assert.doesNotThrow(() => assertSmartRefillUploadReady(state, listing));
+  const item = createSmartRefillUploadPlan(state, { selectedListingIds: [listing.id] }).plan.addresses[0].items[0];
+  const next = reconcileCompletedManualBatchTransferInState(state, { ...item, ledgerStatus: 'transferred_pending_import', transferredAt: '2026-10-12T13:00:00Z' });
+  assert.equal(next.projects[0].listings.find(l => l.id === listing.id).status, 'transferred_pending_import');
+  assert.deepEqual(next.listingResetHistory, before.listingResetHistory); assert.deepEqual(next.smartRefill, before.smartRefill); assert.deepEqual(state, before);
+  state.listingResetHistory[0].listingGroup.listingControls.push({ listingId: source.id, premiumPlacement: true });
+  assert.throws(() => assertSmartRefillUploadReady(state, listing), /Löschschutz/u);
+});
+test('hard-missing source and already transferred successors remain blocked after cleanup', () => {
+  const state = cleanedReservedFixture(), listing = newly(state)[0];
+  const missing = structuredClone(state); missing.projects[0].listings = missing.projects[0].listings.filter(l => l.id !== 'listing-0-1');
+  assert.throws(() => assertSmartRefillUploadReady(missing, newly(missing)[0]), /Löschung/u);
+  const duplicate = structuredClone(state); duplicate.listingResetHistory = [{ projectId: state.projects[0].id, plotId: state.projects[0].plotId, listings: [structuredClone(state.projects[0].listings[0])] }];
+  assert.throws(() => assertSmartRefillUploadReady(duplicate, newly(duplicate)[0]), /Löschung/u);
+  listing.status = 'transferred_pending_import'; listing.transferredAt = '2026-10-12T13:00:00Z';
+  assert.throws(() => assertSmartRefillUploadReady(state, listing), /neuen Upload/u);
+  assert.throws(() => createSmartRefillUploadPlan(state, { selectedListingIds: [listing.id] }), /bereits übertragen/u);
+});
 
 test("one Pool A deletion produces exactly one same-plot Pool B successor and preserves three online listings", () => {
   const state = fixture(), old = structuredClone(state.projects[0].listings), prepared = prepare(state), added = newly(prepared);
