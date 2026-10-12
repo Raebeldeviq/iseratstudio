@@ -130,14 +130,14 @@ test("deletion stagger retains source slots +9/+10/+11/+12 including replan befo
   assert.deepEqual(added.map(l => l.addressSnapshot.plannedDeletionDate), ["2026-10-20", "2026-10-21", "2026-10-22", "2026-10-23"]);
   state = replanDeleteBatchesForUpload(state, added.map(l => l.id), "2026-10-15");
   assert.deepEqual(newly(state).map(l => l.addressSnapshot.plannedDeletionDate), ["2026-10-24", "2026-10-25", "2026-10-26", "2026-10-27"]);
-  assert.doesNotThrow(() => createSmartRefillUploadPlan(state));
+  assert.doesNotThrow(() => createSmartRefillUploadPlan(state, { selectedListingIds: newly(state).map(l => l.id) }));
 });
 test("source premium or lock blocks replacement; protected neighbours remain unchanged and do not block another slot", () => {
   const state = fixture(); state.projects[0].listingGroup.listingControls.push({ listingId: "listing-0-1", premiumPlacement: true });
   assert.equal(planSmartRefill(state).readyCount, 0);
   state.projects[0].listingGroup.listingControls = [{ listingId: "listing-0-2", premiumPlacement: true }];
   const prepared = prepare(state); assert.deepEqual(prepared.projects[0].listings[1], state.projects[0].listings[1]);
-  assert.doesNotThrow(() => createSmartRefillUploadPlan(prepared));
+  assert.doesNotThrow(() => createSmartRefillUploadPlan(prepared, { selectedListingIds: newly(prepared).map(l => l.id) }));
 });
 test("historical corrections, manager removal and archives do not become replacement sources or credits", () => {
   for (const metadata of [{ inventoryCorrection: { active: true } }, { managerCleanup: { removedAt: at } }]) {
@@ -180,11 +180,11 @@ test("discard fails closed on transfer metadata, upload history, a queued job, a
 });
 test("transferred successors never reappear in upload scope and changed pool facts block upload", () => {
   const state = prepare(fixture()), listing = newly(state)[0];
-  assert.equal(createSmartRefillUploadPlan(state).plan.totalListings, 1);
+  assert.equal(createSmartRefillUploadPlan(state, { selectedListingIds: [listing.id] }).plan.totalListings, 1);
   const changed = structuredClone(state); changed.plots[0].addressRotation.poolBDetails.purchasePrice++;
   assert.throws(() => assertSmartRefillUploadReady(changed, newly(changed)[0]), /geändert/u);
   listing.transferredAt = at; listing.status = "transferred_pending_import";
-  assert.equal(createSmartRefillUploadPlan(state).plan.totalListings, 0);
+  assert.throws(() => createSmartRefillUploadPlan(state, { selectedListingIds: [listing.id] }), /bereits übertragen/u);
 });
 test("reservations persist atomically and simultaneous preparations cannot consume the same credit", async context => {
   const directory = await mkdtemp(join(tmpdir(), "smart-refill-single-")); context.after(() => rm(directory, { recursive: true, force: true }));
@@ -201,7 +201,7 @@ test("rendered existing dashboard shows source→successor, pools, houses, numbe
   const ts = await import("typescript"), { createElement } = await import("react"), { renderToStaticMarkup } = await import("react-dom/server");
   const source = await readFile(new URL("../app/components/SmartRefillPanel.tsx", import.meta.url), "utf8");
   const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 } }).outputText;
-  const resolved = compiled.replace(/from (["'])([^"']+)\1/g, (_, quote, specifier) => `from ${JSON.stringify(import.meta.resolve(specifier))}`);
+  const resolved = compiled.replace(/from (["'])([^"']+)\1/g, (_, quote, specifier) => `from ${JSON.stringify(specifier.startsWith('.') ? new URL(specifier, new URL('../app/components/SmartRefillPanel.tsx', import.meta.url)).href : import.meta.resolve(specifier))}`);
   const { default: Component } = await import("data:text/javascript;base64," + Buffer.from(resolved).toString("base64"));
   const state = prepare(fixture()), listing = newly(state)[0];
   const html = renderToStaticMarkup(createElement(Component, { state, plan: planSmartRefill(state), online: true, busy: false, uploading: false, onCheck() {}, onPrepare() {}, onUpload() {}, onApprove() {} }));

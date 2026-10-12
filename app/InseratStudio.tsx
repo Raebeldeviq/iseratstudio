@@ -2849,21 +2849,21 @@ export default function InseratStudio() {
     }
   };
 
-  const uploadPackage = async (refillOnly = false) => {
+  const uploadPackage = async (refillListingIds?: string[]) => {
     if (refillOperation.current || uploading) return;
     refillOperation.current = true;
     setRefillBusy(true);
     try {
-      await performUploadPackage(refillOnly);
+      await performUploadPackage(refillListingIds ? [...refillListingIds] : undefined);
     } finally {
       refillOperation.current = false;
       setRefillBusy(false);
     }
   };
 
-  const performUploadPackage = async (refillOnly: boolean) => {
+  const performUploadPackage = async (refillListingIds?: string[]) => {
     let scope;
-    try { scope = refillOnly ? createSmartRefillUploadPlan(state, { promotionOverrides }) : null; }
+    try { scope = refillListingIds ? createSmartRefillUploadPlan(state, { selectedListingIds: refillListingIds, promotionOverrides }) : null; }
     catch (error) { setNotice(error instanceof Error ? error.message : "Nachschubupload gesperrt."); return; }
     const uploadPlan = scope?.plan || batchPlan;
     const uploadProjectIds = scope?.projectIds || effectiveBatchProjectIds;
@@ -2936,7 +2936,7 @@ export default function InseratStudio() {
       return;
     }
     const estimatedMinutes = Math.max(1, Math.ceil(runPlan.estimatedSeconds / 60));
-    const confirmed = window.confirm(
+    const confirmed = Boolean(scope) || window.confirm(
       `${runPlan.totalAddresses} Adresse(n) mit insgesamt ${runPlan.totalListings} offenen Inseraten jetzt nacheinander an ${ftpHost} übertragen?\n\n${protectedListingIds.length} bereits übertragene Inserat(e) werden idempotent übersprungen. Geschätzte Laufzeit: ca. ${estimatedMinutes} Minute(n). Fehler einzelner Inserate werden protokolliert und die Warteschlange läuft weiter. Die Weitergabe an Portale ist im Paket deaktiviert.${ftpSecure === "none" ? "\n\nWARNUNG: Der Transport ist unverschlüsselt konfiguriert." : ""}`,
     );
     if (!confirmed) return;
@@ -3012,6 +3012,7 @@ export default function InseratStudio() {
           request.send(packageResult.blob);
         });
       }, {
+        allowedListingIds: scope?.selectedListingIds,
         onItemStart: ({ address, item, addressIndex, listingIndex, processed, successful, failed }: {
           address: { items: unknown[] };
           item: { listingId: string; templateName: string };
@@ -4104,7 +4105,7 @@ export default function InseratStudio() {
           </div>
           <SmartRefillPanel plan={refillPlan} state={state} busy={refillBusy} online={helperOnline} uploading={uploading}
             onCheck={() => { void runRefillAction(current => current, "Nachschub anhand des gespeicherten Katalogs geprüft."); }}
-            onPrepare={() => { void prepareRefill(); }} onUpload={() => { void uploadPackage(true); }} onApprove={approveRefillFacts} />
+            onPrepare={() => { void prepareRefill(); }} onUpload={ids => { void uploadPackage(ids); }} onApprove={approveRefillFacts} />
         </section>
       ) : null}
 

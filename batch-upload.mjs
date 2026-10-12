@@ -132,7 +132,18 @@ export function createBatchUploadPlan(state, projectIds, options = {}) {
   };
 }
 
+export function assertBatchUploadScope(plan, allowedListingIds) {
+  if (allowedListingIds === undefined) return;
+  if (!Array.isArray(allowedListingIds) || !allowedListingIds.length) throw new Error('Für diesen Upload fehlen ausdrücklich ausgewählte Inserate.');
+  const allowed = new Set(allowedListingIds), seen = new Set();
+  for (const item of plan.addresses.flatMap(address => address.items)) {
+    if (!allowed.has(item.listingId) || seen.has(item.listingId)) throw new Error('Die Uploadwarteschlange überschreitet die bestätigte Inseratsauswahl.');
+    seen.add(item.listingId);
+  }
+}
+
 export async function runSequentialBatchUpload(plan, worker, hooks = {}) {
+  assertBatchUploadScope(plan, hooks.allowedListingIds);
   const results = [];
   let processed = 0;
   let successful = 0;

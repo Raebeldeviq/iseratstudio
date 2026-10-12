@@ -5,6 +5,7 @@ import { plotAddressKey } from "./plot-records.mjs";
 import { rowFromPlot, rowFromPlotB } from "./plot-master-sync.mjs";
 import { planSingleHouseReplacement } from "./house-distribution.mjs";
 import { createBatchUploadPlan } from "./batch-upload.mjs";
+import { requireRefillUploadSelection } from './smart-refill-selection.mjs';
 
 const ledger = state => ({ version: 2, credits: [], cycles: [], poolApprovals: [], cancellations: [], ...state?.smartRefill });
 const entries = state => (state.deleteBatches || []).flatMap(batch => batch.entries || []);
@@ -321,9 +322,10 @@ export function assertSmartRefillUploadReady(state, listing) {
     && occupied(item.listing) && item.listing.templateId === listing.templateId)) throw new Error("Ein anderer aktiver oder reservierter Nachfolger verwendet denselben Haustyp.");
 }
 export function createSmartRefillUploadPlan(state, options = {}) {
-  const pending = new Set(planSmartRefill(state).preparedListingIds);
+  const selectedListingIds = requireRefillUploadSelection(planSmartRefill(state).preparedListingIds, options.selectedListingIds);
+  const pending = new Set(selectedListingIds);
   const projectIds = [...new Set(activeCycles(state).filter(cycle => cycle.listingIds.some(id => pending.has(id))).map(cycle => cycle.projectId))];
   for (const { listing } of listings(state)) if (pending.has(listing.id)) assertSmartRefillUploadReady(state, listing);
   const excludedListingIds = listings(state).filter(item => !pending.has(item.listing.id)).map(item => item.listing.id);
-  return { projectIds, excludedListingIds, plan: createBatchUploadPlan(state, projectIds, { ...options, excludedListingIds }) };
+  return { selectedListingIds, projectIds, excludedListingIds, plan: createBatchUploadPlan(state, projectIds, { ...options, excludedListingIds }) };
 }

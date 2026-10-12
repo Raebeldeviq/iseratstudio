@@ -18,4 +18,4 @@ export function prepareSmartRefill(state: StudioState, generate: (state: StudioS
 export function discardUntransferredRefill(state: StudioState, cycleId: string, expectedExternalIds: string[], uploadJobs: object[], at?: string): StudioState;
 export function assertSmartRefillTransition(current: StudioState, next: StudioState): void;
 export function assertSmartRefillUploadReady(state: StudioState, listing: GeneratedListing): void;
-export function createSmartRefillUploadPlan(state: StudioState, options?: object): { projectIds: string[]; excludedListingIds: string[]; plan: ReturnType<typeof import("./batch-upload.mjs").createBatchUploadPlan> };
+export function createSmartRefillUploadPlan(state: StudioState, options: { selectedListingIds: string[]; promotionOverrides?: object; random?: () => number }): { selectedListingIds: string[]; projectIds: string[]; excludedListingIds: string[]; plan: ReturnType<typeof import("./batch-upload.mjs").createBatchUploadPlan> };

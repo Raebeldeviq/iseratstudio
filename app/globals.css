@@ -815,6 +815,16 @@ input:focus, textarea:focus, select:focus { border-color: #91bc47; box-shadow: 0
 .refill-details > div { display: grid; gap: 0.25rem; padding: 0.65rem; border: 1px solid var(--line); border-radius: 8px; }
 .refill-details span, .refill-details small { color: var(--muted); font-size: 0.75rem; overflow-wrap: anywhere; }
 .refill-details button { justify-self: start; }
+.refill-selection-controls { display: grid; gap: 0.6rem; margin-top: 0.8rem; }
+.refill-selection-controls label { display: grid; gap: 0.3rem; max-width: 34rem; }
+.refill-selection-controls p { margin: 0; }
+.refill-selection-controls > small { color: var(--muted); }
+.refill-details > .refill-selectable-row { grid-template-columns: 1.2rem minmax(0, 1fr); align-items: start; gap: 0.7rem; }
+.refill-selectable-row > input { margin-top: 0.2rem; width: 1rem; height: 1rem; }
+.refill-selectable-row > div { display: grid; gap: 0.25rem; }
+.refill-selectable-row .refill-archive-warning { color: #886126; font-weight: 650; }
+.refill-upload-dialog { width: min(32rem, calc(100vw - 2rem)); max-height: 80vh; overflow: auto; padding: 1.5rem; border: 1px solid var(--line); border-radius: 12px; color: var(--ink); }
+.refill-upload-dialog::backdrop { background: rgba(12, 30, 24, 0.4); }
 
 .inventory-correction { margin: 0.75rem 0; padding: 0.75rem; border: 1px solid var(--line, #dbe3df); border-radius: 12px; }
 .inventory-correction summary { cursor: pointer; font-weight: 700; }

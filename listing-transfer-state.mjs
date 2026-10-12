@@ -31,7 +31,7 @@ export function updatePreparedCopyAfterUpload(state, projectId, copyId, result, 
     lastError: succeeded ? "" : String(result.error || "FTPS-Übertragung fehlgeschlagen."),
     processLease: null,
   }, { now: at });
-  if (source) {
+  if (source && !copy.refillSourceCreditId) {
     group = updateListingControl(group, source, {
       status: repairSourceStatus || WORKFLOW_STATUS.PUBLISHED,
       statusMessage: repairSourceStatus
@@ -60,7 +60,9 @@ export function updatePreparedCopyAfterUpload(state, projectId, copyId, result, 
     jobId: String(result.jobId || ""),
     batchId: String(result.runId || ""),
     projectId: project.id,
-    address: [project.street, project.houseNumber, project.zip, project.city].filter(Boolean).join(" "),
+    address: copy.addressSnapshot
+      ? [copy.addressSnapshot.address.street, copy.addressSnapshot.address.houseNumber, copy.addressSnapshot.address.postalCode, copy.addressSnapshot.address.city].filter(Boolean).join(' ')
+      : [project.street, project.houseNumber, project.zip, project.city].filter(Boolean).join(" "),
     listingId: copy.id,
     externalId: copy.externalId,
     houseVariant: copy.templateName,
@@ -76,7 +78,8 @@ export function updatePreparedCopyAfterUpload(state, projectId, copyId, result, 
     ...replaceProject(state, {
       ...project,
       listings: project.listings.map((listing) => listing.id === copy.id ? updatedCopy : listing),
-      listingGroup: group,
+      listingGroup: copy.refillSourceCreditId ? { ...group, variants: group.variants.map(variant => variant.listing?.id === copy.id
+        ? { ...variant, listing: updatedCopy, updatedAt: at } : variant) } : group,
     }),
     uploadHistory: [...(state.uploadHistory || []), uploadLog].slice(-5000),
   };

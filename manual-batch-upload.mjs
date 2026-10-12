@@ -4,6 +4,7 @@ import { listingControl } from "./listing-groups.mjs";
 import { updatePreparedCopyAfterUpload } from "./listing-transfer-state.mjs";
 import { WORKFLOW_STATUS } from "./workflow-status.mjs";
 import { linkDeleteBatchListings } from "./delete-batches.mjs";
+import { assertSmartRefillUploadReady } from './smart-refill.mjs';
 
 export const UPLOAD_ORIGIN = Object.freeze({
   AUTOMATIC_ROTATION: "automatic-rotation",
@@ -93,21 +94,26 @@ export function reconcileCompletedManualBatchTransferInState(state, input = {}) 
     throw new Error("Die Quelle der übertragenen Rotationskopie ist nicht mehr vorhanden.");
   }
   const sourceStatus = source ? text(source.status) : "";
+  const refill = Boolean(listing.refillSourceCreditId);
   const sourceControlBefore = source ? listingControl(project.listingGroup, source) : null;
-  if (source && sourceControlBefore?.status !== WORKFLOW_STATUS.PUBLISHED) {
+  if (source && !refill && sourceControlBefore?.status !== WORKFLOW_STATUS.PUBLISHED) {
     throw new Error("Die Quelle der übertragenen Rotationskopie ist nicht mehr veröffentlicht.");
   }
   const status = text(listing.status);
   if (status === WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT) {
     const existingLog = (state.uploadHistory || []).find((entry) => entry.jobId === jobId);
     const sourceControl = source ? listingControl(project.listingGroup, source) : null;
-    if (existingLog && (!source || (
+    if (existingLog && (refill || !source || (
       sourceControl?.pendingRotationListingId === listing.id
       && sourceControl?.pendingRotationJobId === jobId
     ))) return state;
   }
   if (![WORKFLOW_STATUS.DRAFT, WORKFLOW_STATUS.PREPARED, WORKFLOW_STATUS.FAILED, WORKFLOW_STATUS.TRANSFERRED_PENDING_IMPORT].includes(status)) {
     throw new Error("Der abgeschlossene Upload-Job darf den aktuellen Inseratsstatus nicht überschreiben.");
+  }
+  if (refill) {
+    if (!state.smartRefill?.cycles.some(cycle => cycle.listingIds.includes(listing.id))) throw new Error('Die Nachschubreservierung fehlt.');
+    assertSmartRefillUploadReady(state, { ...listing, status: 'draft', transferredAt: undefined, lastUploadedAt: undefined, importConfirmedAt: undefined });
   }
   const nextState = updatePreparedCopyAfterUpload(state, project.id, listing.id, {
     ok: true,
@@ -126,7 +132,7 @@ export function reconcileCompletedManualBatchTransferInState(state, input = {}) 
   if (nextSource && (
     text(nextSource.status) !== sourceStatus
     || text(nextSource.rotationArchivedAt) !== text(source.rotationArchivedAt)
-    || nextSourceControl?.status !== WORKFLOW_STATUS.PUBLISHED
+    || (refill ? JSON.stringify(nextSourceControl) !== JSON.stringify(sourceControlBefore) : nextSourceControl?.status !== WORKFLOW_STATUS.PUBLISHED)
   )) {
     throw new Error("Die veröffentlichte Quelle würde vor der Importbestätigung verändert.");
   }
