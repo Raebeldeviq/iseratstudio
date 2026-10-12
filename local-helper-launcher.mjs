@@ -1,7 +1,9 @@
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { APPLICATION_DATA_DIRECTORY } from "./platform-paths.mjs";
+import { retainHealthyRuntimeAfterStartup } from "./helper-runtime-retention.mjs";
 
 const sessionPath = join(APPLICATION_DATA_DIRECTORY, "helper-session");
 const sessionToken = String(await readFile(sessionPath, "utf8")).trim();
@@ -10,3 +12,4 @@ if (!/^[a-f0-9]{64}$/u.test(sessionToken)) {
 }
 process.env.FPI_SESSION_TOKEN = sessionToken;
 await import("./local-upload-server.mjs");
+void retainHealthyRuntimeAfterStartup({ runtimePath: dirname(fileURLToPath(import.meta.url)) });
