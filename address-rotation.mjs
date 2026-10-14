@@ -1,5 +1,110 @@
-import { isInventoryHistorical } from "./inventory-correction.mjs";
+import { isInventoryHistorical, isManagerRemoved } from "./inventory-correction.mjs";
 const text = (value) => String(value ?? "").trim();
+
+function poolIssue(rotation, pool) {
+  const address = pool === "A" ? rotation?.poolA : rotation?.poolB;
+  if (!address) return `Pool ${pool} fehlt. Bitte vollständige, fachlich geprüfte Grundstücksdaten hinterlegen.`;
+  for (const [field, label] of [["street", "Straße"], ["houseNumber", "Hausnummer"], ["postalCode", "PLZ"], ["city", "Ort"]]) {
+    if (!text(address[field])) return `Pool ${pool} unvollständig: ${label} fehlt.`;
+  }
+  if (!/^\d{5}$/u.test(text(address.postalCode))) return `Pool ${pool} unvollständig: PLZ ist ungültig.`;
+  if (pool === "B" && rotation.poolBDetails?.status === "POOL_B_PRÜFEN") return "Pool B besitzt einen offenen Prüffall. Grundstücksdaten fachlich prüfen.";
+  return "";
+}
+
+// Identity comes from plot/project IDs, never from similar street or house numbers.
+function plotListingRecords(state, plotId) {
+  const projects = (state.projects || []).filter(project => project.plotId === plotId);
+  const projectIds = new Set(projects.map(project => project.id));
+  const records = new Map();
+  const add = (owner, projectId, listing) => {
+    if (!listing?.id) return;
+    const key = JSON.stringify([projectId, listing.id]);
+    if (!records.has(key)) records.set(key, { owner, projectId, listing,
+      identityMismatch: Boolean(listing.addressSnapshot?.plotId && listing.addressSnapshot.plotId !== plotId) });
+  };
+  for (const project of projects) {
+    for (const listing of project.listings || []) add(project, project.id, listing);
+    for (const variant of project.listingGroup?.variants || []) add(project, project.id, variant.listing);
+  }
+  for (const archive of state.listingResetHistory || []) {
+    if (archive.plotId === plotId || (!archive.plotId && projectIds.has(archive.projectId))) {
+      for (const listing of archive.listings || []) add(archive, archive.projectId, listing);
+    }
+  }
+  return [...records.values()];
+}
+
+function confirmedClosed(state, record, plotId) {
+  const { listing, projectId } = record;
+  if (!["deleted", "archived"].includes(listing.status) || listing.externalDeletionPending
+    || !Number.isFinite(Date.parse(listing.deletedAt))) return false;
+  const entries = (state.deleteBatches || []).flatMap(batch => batch.entries || []).filter(entry =>
+    entry.projectId === projectId && entry.listingId === listing.id && entry.externalId === listing.externalId && entry.status !== "void");
+  if (entries.length) return entries.length === 1 && entries[0].status === "deleted" && entries[0].deletedAt === listing.deletedAt;
+  const receipts = (state.deleteReports || []).filter(receipt => receipt.projectId === projectId && receipt.sourceListingId === listing.id);
+  return receipts.length === 1 && receipts[0].externalObjectNumber === listing.externalId && receipts[0].plotId === plotId
+    && receipts[0].result === "success" && receipts[0].processedAt === listing.deletedAt && listing.deleteConfirmedAt === listing.deletedAt;
+}
+
+function productiveListing(state, record, plotId) {
+  const listing = record.listing;
+  if (isInventoryHistorical(listing) || confirmedClosed(state, record, plotId)) return false;
+  const transferred = listing.transferredAt || listing.lastUploadedAt || listing.importConfirmedAt
+    || ["published", "transferred_pending_import"].includes(listing.status)
+    || (state.deleteBatches || []).flatMap(batch => batch.entries || []).some(entry => entry.projectId === record.projectId
+      && entry.listingId === listing.id && entry.externalId === listing.externalId
+      && (entry.status === "active" || (entry.status === "paused" && entry.pausedFrom === "active")));
+  if (listing.externalDeletionPending || transferred) return true;
+  if (isManagerRemoved(listing) || listing.refillDiscard) return false;
+  return ["draft", "prepared", "scheduled", "processing", "uploading", "queued"].includes(listing.status);
+}
+
+export function addressRotationPreparationIssue(state, plotId, options = {}) {
+  const status = addressRotationStatus(state, plotId, options);
+  if (status.state === "unconfigured") return "";
+  const plot = state.plots.find(item => item.id === plotId), rotation = plot.addressRotation;
+  const label = `${text(plot.street)} ${text(plot.houseNumber)}, ${text(plot.postalCode)} ${text(plot.city)}`.trim();
+  const blocked = reason => `${label}: ${reason}`;
+  const issue = poolIssue(rotation, "A") || (!(options.initialPoolAOnly && !rotation.currentPool) && poolIssue(rotation, "B"));
+  if (issue) return blocked(issue);
+  const records = plotListingRecords(state, plotId);
+  for (const record of records) {
+    const listing = record.listing, control = record.owner.listingGroup?.listingControls?.find(item => item.listingId === listing.id);
+    if (record.identityMismatch && !isInventoryHistorical(listing)) return blocked(`Grundstückszuordnung für ${listing.externalId} ist uneindeutig. Bitte prüfen.`);
+    if (listing.status === "deleted" && !isInventoryHistorical(listing) && !confirmedClosed(state, record, plotId)) {
+      return blocked(`Löschbestätigung für ${listing.externalId} fehlt oder ist widersprüchlich. Bestand prüfen.`);
+    }
+    if (["scheduled", "processing", "uploading", "queued"].includes(listing.status)
+      || ["scheduled", "processing", "uploading", "queued"].includes(control?.status) || control?.processLease
+      || control?.pendingRotationJobId || control?.pendingRotationListingId) return blocked(`Neuer Zyklus gesperrt: aktiver Vorgang oder Reservierung für ${listing.externalId}.`);
+    const closureLock = control?.status === "deleted" && listing.status === "deleted" && control.updateMode === "blocked"
+      && control.automaticUpdateEnabled === false && !control.lockReason && !control.lockedUntil && confirmedClosed(state, record, plotId);
+    if (control?.premiumPlacement) return blocked(`Neuer Zyklus gesperrt: Premium-Schutz für ${listing.externalId}.`);
+    if ((control?.manualLock && !closureLock) || (control?.lockedUntil && Date.parse(control.lockedUntil) > Date.parse(options.now || new Date()))) {
+      return blocked(`Neuer Zyklus gesperrt: Löschschutz für ${listing.externalId}.`);
+    }
+  }
+  const reservations = (state.smartRefill?.cycles || []).filter(cycle => cycle.plotId === plotId
+    && !(state.smartRefill?.cancellations || []).some(item => item.cycleId === cycle.id)
+    && (cycle.listingIds || []).some(id => {
+      const record = records.find(item => item.listing.id === id);
+      return !record || (!confirmedClosed(state, record, plotId)
+        && !record.listing.transferredAt && !record.listing.lastUploadedAt && !record.listing.importConfirmedAt);
+    }));
+  if (reservations.length) return blocked("Rotationszyklus wartet auf Abschluss einer aktiven Nachschubreservierung.");
+  const productive = records.filter(record => productiveListing(state, record, plotId));
+  if (productive.length) return blocked(`Neuer Zyklus gesperrt: ${productive.length} aktive oder vorbereitete Inserate vorhanden (${productive.map(item => item.listing.externalId).join(", ")}).`);
+  if (status.state !== "ready") {
+    const ids = rotation.listingIds || [];
+    if (ids.length !== 4) return blocked(`Rotationszyklus unvollständig: ${ids.length}/4 Inseratsreferenzen zugeordnet.`);
+    if (ids.some(id => records.filter(record => record.listing.id === id).length !== 1)) {
+      return blocked("Rotationszyklus enthält fehlende oder mehrfach zugeordnete Inseratsreferenzen. Bestand prüfen.");
+    }
+    return blocked(`Rotationszyklus wartet auf ${status.remaining} bestätigte Abschlüsse. Bestands- und Löschbelege prüfen.`);
+  }
+  return "";
+}
 
 export function parseAddressPoolRows(rows, pool) {
   if (pool !== "A" && pool !== "B") throw new Error("Unbekannter Adresspool.");
@@ -70,17 +175,21 @@ export function addressRotationStatus(state, plotId, options = {}) {
   const currentPool = rotation.currentPool || "";
   const nextPool = currentPool === "A" ? "B" : "A";
   const nextAddress = nextPool === "A" ? rotation.poolA : rotation.poolB;
-  const readyPair = Boolean(rotation.poolA && rotation.poolB && rotation.poolB.houseNumber
-    && rotation.poolBDetails?.status !== "POOL_B_PRÜFEN");
-  if (!currentPool) return { state: readyPair || (options.initialPoolAOnly === true && rotation.poolA) ? "ready" : "incomplete", currentPool, nextPool, remaining: 0, cycle: 0 };
+  const readyPair = !poolIssue(rotation, "A") && !poolIssue(rotation, "B");
+  if (!currentPool) return { state: readyPair || (options.initialPoolAOnly === true && !poolIssue(rotation, "A")) ? "ready" : "incomplete", currentPool, nextPool, remaining: 0, cycle: 0 };
   const ids = rotation.listingIds || [];
-  const project = (state.projects || []).find((item) => item.plotId === plotId);
+  const records = plotListingRecords(state, plotId);
   const entries = (state.deleteBatches || []).flatMap((batch) => batch.entries || []);
   const remaining = ids.filter((id) => {
-    const listing = project?.listings?.find((item) => item.id === id);
-    const entry = entries.find((item) => item.listingId === id && item.externalId === listing?.externalId && item.status !== "void");
-    const control = project?.listingGroup?.listingControls?.find((item) => item.listingId === id);
-    return !listing || isInventoryHistorical(listing) || !entry || entry.status !== "deleted" || control?.premiumPlacement || (control?.manualLock && listing.status !== "deleted");
+    const matches = records.filter(record => record.listing.id === id);
+    if (matches.length !== 1) return true;
+    const record = matches[0], listing = record.listing;
+    const entry = entries.find(item => item.projectId === record.projectId && item.listingId === id
+      && item.externalId === listing.externalId && item.status !== "void");
+    const control = record.owner.listingGroup?.listingControls?.find(item => item.listingId === id);
+    const closed = confirmedClosed(state, record, plotId);
+    return (isInventoryHistorical(listing) && !closed) || (!closed && (!entry || entry.status !== "deleted"))
+      || control?.premiumPlacement || (control?.manualLock && listing.status !== "deleted");
   }).length;
   return { state: ids.length === 4 && remaining === 0 && nextAddress && readyPair ? "ready" : "active",
     currentPool, nextPool, remaining, cycle: Number(rotation.cycle) || 0 };

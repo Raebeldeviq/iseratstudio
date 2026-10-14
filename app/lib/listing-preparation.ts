@@ -5,7 +5,7 @@ import { normalizeWorkflowStatus, WORKFLOW_STATUS } from "../../workflow-status.
 import { isHvObjectNumber } from "../../object-number-sequence.mjs";
 import { commitHouseDistributionPreviews, HOUSES_PER_PROJECT } from "../../house-distribution.mjs";
 import { allocateDeleteBatchNumber, linkDeleteBatchListings } from "../../delete-batches.mjs";
-import { addressRotationStatus, snapshotAddressRotation } from "../../address-rotation.mjs";
+import { addressRotationStatus, addressRotationPreparationIssue, snapshotAddressRotation } from "../../address-rotation.mjs";
 import { normalizeListingGroup, addListingGroupVariant, setListingGroupVariantActive, assignListingGroupVariant } from "../../listing-groups.mjs";
 import { latestResetListingFacts } from "../../plot-listing-reset.mjs";
 import { completeListingTexts, totalPrice } from "./text-generator.ts";
@@ -110,6 +110,10 @@ export function prepareProjectListings(
     preparedState = linkDeleteBatchListings(preparedState) as StudioState;
     return { state: assignNewInteriorListings(state, preparedState) as StudioState,
       preparedListings: options.replacements.length, issues: [] as string[] };
+  }
+  for (const project of state.projects.filter(item => projectIds.includes(item.id) && item.plotId)) {
+    const issue = addressRotationPreparationIssue(state, project.plotId, options);
+    if (issue) throw new Error(issue);
   }
   const committed = commitHouseDistributionPreviews(
     distribution,

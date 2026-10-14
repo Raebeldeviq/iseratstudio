@@ -99,14 +99,17 @@ test("historical drafts cannot enter generation, batch upload, or number replann
   assert.deepEqual(replanDeleteBatchesForUpload(state, [listing.id], "2026-10-20"), state);
 });
 
-test("correction does not count as completed pool cycle, even for an already deleted listing", () => {
+test("correction alone cannot complete a pool cycle; a prior confirmed deletion stays completed", () => {
   let state = fixture(4);
+  const unconfirmed = correct(state, 0);
   state = confirmDeleteBatch(state, state.deleteBatches[0].id, at).state;
   const address = { street: "Teststraße", houseNumber: "1", postalCode: "14482", city: "Potsdam" };
   state.plots = [{ id: "plot", addressRotation: { currentPool: "A", poolA: address, poolB: { ...address, houseNumber: "2" }, listingIds: state.projects[0].listings.map(item => item.id), cycle: 1 } }];
   assert.equal(addressRotationStatus(state, "plot").state, "ready");
   const corrected = correct(state, 0);
-  assert.equal(addressRotationStatus(corrected, "plot").state, "active");
+  assert.equal(addressRotationStatus(corrected, "plot").state, "ready");
+  unconfirmed.plots = structuredClone(state.plots);
+  assert.equal(addressRotationStatus(unconfirmed, "plot").state, "active");
   assert.deepEqual(corrected.plots, state.plots);
   assert.equal(addressRotationStatus(correct(corrected, 0, "restore"), "plot").state, "ready");
 });

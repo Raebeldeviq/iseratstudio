@@ -120,7 +120,7 @@ import {
 } from "../plot-records.mjs";
 import { latestResetListingFacts, resetPlotListings } from "../plot-listing-reset.mjs";
 import { allocateDeleteBatchNumber, calendarDate, deleteBatchTrafficLight, linkDeleteBatchListings, reconcileDeleteBatchProtections, deleteBatchesNeedReplan, replanDeleteBatchesForUpload } from "../delete-batches.mjs";
-import { addressRotationStatus } from "../address-rotation.mjs";
+import { addressRotationStatus, addressRotationPreparationIssue } from "../address-rotation.mjs";
 import { normalizeWorkflowStatus, workflowStatusLabel, WORKFLOW_STATUS } from "../workflow-status.mjs";
 import {
   formatClaimIssue,
@@ -2247,15 +2247,9 @@ export default function InseratStudio() {
       return;
     }
     for (const project of state.projects.filter((item) => projectIds.includes(item.id) && item.plotId)) {
-      const status = addressRotationStatus(state, project.plotId);
-      if (status.state === "unconfigured") continue;
-      if (status.state !== "ready") {
-        setNotice(`${project.name}: Adresspool noch nicht bereit. ${status.remaining}/4 Inserate des aktuellen Zyklus sind offen oder ein Pool fehlt.`);
-        return;
-      }
-      if (status.cycle === 0 && project.listings.some((listing) =>
-        (listing.lastUploadedAt || listing.transferredAt || listing.importConfirmedAt) && listing.status !== WORKFLOW_STATUS.DELETED)) {
-        setNotice(`${project.name}: bestehende produktive Inserate müssen zuerst abgeschlossen werden. Kein neuer Pool-Zyklus wurde erzeugt.`);
+      const issue = addressRotationPreparationIssue(state, project.plotId);
+      if (issue) {
+        setNotice(issue);
         return;
       }
     }
