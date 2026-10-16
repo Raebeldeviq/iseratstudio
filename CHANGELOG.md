@@ -1,6 +1,6 @@
 ## 2026-10-16 – Grundstücksmonitor und produktiver Import
 
-- Offline-Nachweise schließen adresslose Prüffälle in ihrer Historie, ohne neue Offline-Zeilen im Hauptblatt zu erzeugen.
+- Offline-Zuordnung verwendet ausschließlich stabile ID oder Detail-URL, niemals ähnliche Größe/Preis. Offline-Nachweise schließen adresslose Prüffälle in ihrer Historie, ohne neue Offline-Zeilen im Hauptblatt zu erzeugen.
 - Umsetzung: Quellenregister, Nachweis-/Aktualitätsprüfung, Prüfliste, Preisverlauf, Dateikonfliktschutz und lesende Vorschau aus vorbereitetem Monitor integriert. Eigene sessiongeschützte Helper-Routen `/plot-monitor/preview` und `/plot-monitor/import` mit Vorschau-Token und Katalogversionsschutz.
 - Begründung: Integration auf installiertem Commit d4e75ad erhält neuere Katalog-, Datenintegritäts- und Grundstücksmodule. Der deaktivierte alte Import und der separate Master-Abgleich bleiben erhalten. Monitorimport benötigt 50 aktive PLZ und Monitor-Metadaten, schützt Lifecycle-Daten und aktiviert keine Hintergrundfunktion.
 - Prüfung: 51 vorbereitete Verhaltenstests und synthetischer Speicherdurchlauf bestanden. Zusätzlich 145 Grundstückstests, fünf Import-Service-Tests und Produktionsbuild bestanden. Produktiver Nachweis wird im Installationsbericht nachgetragen.

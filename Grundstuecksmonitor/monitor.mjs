@@ -192,7 +192,7 @@ function findMatch(records, offer) {
       (offer.internalId && normalize(row.internalId) === normalize(offer.internalId)) ||
       (offer.listingUrl && normalize(row.listingUrl) === normalize(offer.listingUrl)),
   );
-  if (byStableId >= 0) return byStableId;
+  if (byStableId >= 0 || offer.available === false) return byStableId;
 
   if (offer.street) {
     return records.findIndex(
