@@ -100,3 +100,12 @@ test("200 source plots complete and a repeated run creates no duplicates", () =>
   assert.equal(second.stats.created, 0);
   assert.equal(second.stats.duplicatesPrevented, 200);
 });
+
+test('monitor-managed rows need current complete evidence before catalog changes',()=>{
+  const make=(review,date)=>parsePlotSyncRows([[...HEADERS,'Fachprüfung'],[...workbookRow({status:'Vorhanden'}),review]]).map(r=>({...r,sourceLastCheckedAt:date}));
+  const now='2026-10-16T10:00:00Z';
+  for(const rows of [make('Prüfung erforderlich',now),make('Nachweise vollständig','2026-09-01')]) {
+    const r=applyPlotSyncRows(emptyState(),rows,{now});assert.equal(r.stats.created,0);assert.equal(r.stats.skipped,1);
+  }
+  assert.equal(applyPlotSyncRows(emptyState(),make('Nachweise vollständig',now),{now}).stats.created,1);
+});

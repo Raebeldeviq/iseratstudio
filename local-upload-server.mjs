@@ -52,6 +52,7 @@ import {
 } from "./plot-expose-store.mjs";
 import { createPlotSyncService } from "./plot-sync-service.mjs";
 import { createActivePlotCatalogService } from "./plot-active-catalog-service.mjs";
+import { createPlotMonitorImportService } from "./plot-monitor-import.mjs";
 import { createPlotMasterService } from "./plot-master-service.mjs";
 import { buildImportPackage } from "./app/lib/openimmo.ts";
 import { createUploadJobId } from "./batch-upload.mjs";
@@ -143,6 +144,7 @@ const uploadJobLedger = createUploadJobLedger(UPLOAD_JOB_LEDGER_PATH);
 const plotDailyUploadGuard = createPlotDailyUploadGuard(PLOT_DAILY_UPLOAD_GUARD_PATH);
 const plotSyncService = createPlotSyncService();
 const plotMasterService = createPlotMasterService();
+const plotMonitorImportService = createPlotMonitorImportService();
 const activePlotCatalogService = createActivePlotCatalogService();
 const catalogStateStore = createCatalogStateStore();
 
@@ -736,11 +738,13 @@ const server = createServer(async (request, response) => {
   const isPlotSyncLog = request.method === "GET" && pathname === "/plot-sync/log";
   const isActivePlotCatalogPreview = request.method === "GET" && pathname === "/plot-active-catalog/preview";
   const isActivePlotCatalogApply = request.method === "POST" && pathname === "/plot-active-catalog/apply";
+  const isPlotMonitorPreview = request.method === "GET" && pathname === "/plot-monitor/preview";
+  const isPlotMonitorImport = request.method === "POST" && pathname === "/plot-monitor/import";
   const isPlotMasterPreview = request.method === "GET" && pathname === "/plot-master/preview";
   const isPlotMasterApply = request.method === "POST" && pathname === "/plot-master/apply";
   const isMailRuntimeProbe = request.method === "POST" && pathname === "/mail-runtime/probe";
   const isExactProductionDelete = request.method === "POST" && pathname === EXACT_PRODUCTION_DELETE_PATH;
-  if (!isInventoryCorrection && !isManagerCleanup && !isDeleteBatchConfirm && !isActivePlotCatalogPreview && !isActivePlotCatalogApply && !isPlotSyncSchedule && !isHealth && !isRuntimeProvenance && !isUpload && !isBinaryUpload && !isManualBatchResumption && !isLocalSave && !isTextGeneration && !isImageCaptionGeneration && !isOpenAiKeyValidation && !isCredentialLoad && !isCredentialSave && !isCatalogLoad && !isCatalogSave && !isCatalogV2Start && !isCatalogV2ImageSave && !isCatalogV2Commit && !isCatalogV2ManifestLoad && !isCatalogV2ImageLoad && !isMediaLibraryList && !isMediaLibrarySequence && !isMediaLibraryImage && !isPlotExposeAnalyze && !isPlotExposeCommit && !isPlotExposeLoad && !isPlotExposeArchive && !isPlotSyncStatus && !isPlotSyncRun && !isPlotSyncLog && !isPlotMasterPreview && !isPlotMasterApply && !isMailRuntimeProbe && !isExactProductionDelete) {
+  if (!isPlotMonitorPreview && !isPlotMonitorImport && !isInventoryCorrection && !isManagerCleanup && !isDeleteBatchConfirm && !isActivePlotCatalogPreview && !isActivePlotCatalogApply && !isPlotSyncSchedule && !isHealth && !isRuntimeProvenance && !isUpload && !isBinaryUpload && !isManualBatchResumption && !isLocalSave && !isTextGeneration && !isImageCaptionGeneration && !isOpenAiKeyValidation && !isCredentialLoad && !isCredentialSave && !isCatalogLoad && !isCatalogSave && !isCatalogV2Start && !isCatalogV2ImageSave && !isCatalogV2Commit && !isCatalogV2ManifestLoad && !isCatalogV2ImageLoad && !isMediaLibraryList && !isMediaLibrarySequence && !isMediaLibraryImage && !isPlotExposeAnalyze && !isPlotExposeCommit && !isPlotExposeLoad && !isPlotExposeArchive && !isPlotSyncStatus && !isPlotSyncRun && !isPlotSyncLog && !isPlotMasterPreview && !isPlotMasterApply && !isMailRuntimeProbe && !isExactProductionDelete) {
     send(response, 404, { ok: false, message: "Nicht gefunden." }, origin);
     return;
   }
@@ -917,6 +921,11 @@ const server = createServer(async (request, response) => {
 
     if (isPlotSyncLog) {
       send(response, 200, { ok: true, log: await plotSyncService.lastLog() }, origin);
+      return;
+    }
+
+    if (isPlotMonitorPreview) {
+      send(response, 200, { ok: true, ...(await plotMonitorImportService.preview()) }, origin);
       return;
     }
 
@@ -1112,6 +1121,11 @@ const server = createServer(async (request, response) => {
 
     if (isPlotSyncRun) {
       send(response, 410, { ok: false, message: "Der alte Excel-Schreibabgleich wurde durch den bestätigungspflichtigen Master-Abgleich ersetzt." }, origin);
+      return;
+    }
+
+    if (isPlotMonitorImport) {
+      send(response, 200, { ok: true, ...(await plotMonitorImportService.apply(body)) }, origin);
       return;
     }
 

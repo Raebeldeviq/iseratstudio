@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Grundstücksmonitor-Lauf",
+  "type": "object",
+  "required": [
+    "sourceChecks",
+    "offers"
+  ],
+  "properties": {
+    "sourceChecks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "url",
+          "status"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "error",
+              "skipped",
+              "blocked"
+            ]
+          },
+          "note": {
+            "type": "string"
+          },
+          "checkedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "method": {
+            "enum": [
+              "detail_pages",
+              "public_search",
+              "notification",
+              "feed"
+            ]
+          },
+          "evidenceUrls": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uri"
+            }
+          },
+          "searchedPostalCodes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^\\d{5}$"
+            }
+          }
+        }
+      }
+    },
+    "offers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "postalCode",
+          "city",
+          "sizeSqm",
+          "priceEur",
+          "source",
+          "listingUrl",
+          "internalId",
+          "available"
+        ],
+        "properties": {
+          "postalCode": {
+            "type": "string",
+            "pattern": "^\\d{5}$"
+          },
+          "city": {
+            "type": "string"
+          },
+          "street": {
+            "type": "string"
+          },
+          "sizeSqm": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "priceEur": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "source": {
+            "type": "string"
+          },
+          "listingUrl": {
+            "type": "string",
+            "format": "uri"
+          },
+          "internalId": {
+            "type": "string"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "availabilityEvidence": {
+            "type": "string"
+          },
+          "exposeUrl": {
+            "type": "string",
+            "format": "uri"
+          },
+          "checkedAt": {
+            "type": "string"
+          },
+          "evidenceUrl": {
+            "type": "string"
+          },
+          "providerName": {
+            "type": "string"
+          },
+          "providerEvidenceUrl": {
+            "type": "string"
+          },
+          "offerType": {
+            "type": "string"
+          },
+          "brwEvidenceUrl": {
+            "type": "string"
+          },
+          "locationType": {
+            "type": "string"
+          },
+          "buildabilityBasis": {
+            "type": "string"
+          },
+          "buildabilityEvidenceUrl": {
+            "type": "string"
+          },
+          "availabilityState": {
+            "type": "string"
+          },
+          "brwEurPerSqm": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          }
+        }
+      }
+    }
+  }
+}

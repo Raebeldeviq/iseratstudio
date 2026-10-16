@@ -19,6 +19,7 @@ const HEADER_ALIASES = Object.freeze({
   sourceStatus: ["status"],
   sourceExposeFilename: ["exposedateiname", "exposédateiname"],
   sourceInternalId: ["interneid", "interne-id", "id"],
+  monitorReview: ["fachprufung"],
 });
 
 function text(value) {
@@ -137,6 +138,7 @@ export function parsePlotSyncRows(rows) {
       sourceStatus: statusValue(cell(row, indexes, "sourceStatus")),
       sourceExposeFilename: text(cell(row, indexes, "sourceExposeFilename")),
       sourceInternalId: text(cell(row, indexes, "sourceInternalId")),
+      monitorReview: text(cell(row, indexes, "monitorReview")),
     }];
   });
 }
@@ -262,6 +264,19 @@ export function applyPlotSyncRows(stateValue, rows, options = {}) {
       continue;
     }
     const match = matches[0] || null;
+
+    // Monitor rows require current evidence; legacy imports retain their path.
+    if (row.monitorReview) {
+      const day=value=>new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Berlin',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value));
+      const checked=Date.parse(row.sourceLastCheckedAt);
+      const age=Number.isFinite(checked)?Date.parse(day(startedAt))-Date.parse(day(checked)):NaN;
+      if (!['Nachweise vollständig','Offline belegt'].includes(row.monitorReview)
+        || !Number.isFinite(age) || age<0 || age>7*86400000) {
+        stats.skipped++;
+        warnings.push({excelRow:row.excelRow,reason:'Monitor-Nachweise fehlen oder sind veraltet; vorhandener Katalogeintrag bleibt geschützt.'});
+        continue;
+      }
+    }
 
     if (row.sourceStatus === PLOT_SYNC_STATUSES.INACTIVE) {
       if (!match) {

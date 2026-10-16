@@ -1,3 +1,10 @@
+## 2026-10-16 – Grundstücksmonitor und produktiver Import
+
+- Umsetzung: Quellenregister, Nachweis-/Aktualitätsprüfung, Prüfliste, Preisverlauf, Dateikonfliktschutz und lesende Vorschau aus vorbereitetem Monitor integriert. Eigene sessiongeschützte Helper-Routen `/plot-monitor/preview` und `/plot-monitor/import` mit Vorschau-Token und Katalogversionsschutz.
+- Begründung: Integration auf installiertem Commit d4e75ad erhält neuere Katalog-, Datenintegritäts- und Grundstücksmodule. Der deaktivierte alte Import und der separate Master-Abgleich bleiben erhalten. Monitorimport benötigt 50 aktive PLZ und Monitor-Metadaten, schützt Lifecycle-Daten und aktiviert keine Hintergrundfunktion.
+- Prüfung: 51 vorbereitete Verhaltenstests und synthetischer Speicherdurchlauf bestanden. Zusätzlich 145 Grundstückstests, fünf Import-Service-Tests und Produktionsbuild bestanden. Produktiver Nachweis wird im Installationsbericht nachgetragen.
+- Risiken: unzugängliche Quellen und unvollständige Adresse/BRW/Bebaubarkeit bleiben offen. Teilabdeckung darf nicht als vollständige Recherche gemeldet werden. Die bestehende Produktionspolicy bleibt auf ihrem bisherigen Commit; Rotation, Upload und Portalexport bleiben ausgeschaltet.
+
 # Änderungsprotokoll
 
 ## Nachschub & Rotation – 9. Oktober 2026

@@ -46,3 +46,6 @@ next-env.d.ts
 /db/
 /drizzle/
 /examples/
+
+/Grundstuecksmonitor/node_modules
+/Grundstuecksmonitor/Runs/
