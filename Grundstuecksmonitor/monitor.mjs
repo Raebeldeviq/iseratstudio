@@ -519,6 +519,12 @@ try {
         log(`Übersprungen – PLZ nicht aktiv: ${offer.internalId || offer.listingUrl}`);
         continue;
       }
+      // Offline proof closes an existing review case without creating a new main-list row.
+      if (!offer.available && findMatch(records, offer) < 0) {
+        resolvedOffers.push({...offer,checkedAt:raw.checkedAt});
+        stats.unavailable += 1;
+        continue;
+      }
       if (
         !offer.city ||
         !offer.street ||

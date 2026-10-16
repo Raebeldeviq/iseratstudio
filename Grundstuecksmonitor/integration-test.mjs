@@ -26,7 +26,7 @@ await (await SpreadsheetFile.exportXlsx(wb)).save(path);
 const now=new Date().toISOString();
 const offer={postalCode:'10000',city:'Musterstadt',street:'Neuweg 12',sizeSqm:700,priceEur:280000,source:'Musterquelle',listingUrl:'https://example.test/offer/new',internalId:'new',available:true,
   checkedAt:now,evidenceUrl:'https://example.test/offer/new',availabilityEvidence:'Wohnbaugrundstück ist verfügbar',providerName:'Muster Immobilien GmbH',providerEvidenceUrl:'https://example.test/impressum',offerType:'residential_plot',brwEurPerSqm:300,brwEvidenceUrl:'https://example.test/brw',locationType:'urban',buildabilityBasis:'b_plan',buildabilityEvidenceUrl:'https://example.test/b-plan'};
-const payload={sourceChecks:[{name:'Musterquelle',status:'ok',checkedAt:now,method:'detail_pages',note:'Synthetische Integrationsprüfung',evidenceUrls:[offer.listingUrl]}],offers:[offer,{...offer,internalId:'missing',listingUrl:'https://example.test/offer/missing',street:'',evidenceUrl:'https://example.test/offer/missing'}]};
+const payload={sourceChecks:[{name:'Musterquelle',status:'ok',checkedAt:now,method:'detail_pages',note:'Synthetische Integrationsprüfung',evidenceUrls:[offer.listingUrl]}],offers:[{...offer,internalId:'legacy',listingUrl:'https://example.test/offer/review',evidenceUrl:'https://example.test/offer/review',street:'',available:false,availabilityState:'removed',availabilityEvidence:'Angebot wurde deaktiviert'},offer,{...offer,internalId:'missing',listingUrl:'https://example.test/offer/missing',street:'',evidenceUrl:'https://example.test/offer/missing'}]};
 const input=join(root,'run.json');await writeFile(input,JSON.stringify(payload));
 const command=fileURLToPath(new URL('./monitor.mjs',import.meta.url));
 const run=async extra=>execute(process.execPath,[command,'--target-dir',root,'--input',input,...extra],{maxBuffer:1024*1024});
@@ -42,7 +42,8 @@ try {
   assert.equal(rows.find(r=>r[11]==='old')[9],'Vorhanden');
   assert.equal(rows.find(r=>r[11]==='old')[rows[0].indexOf('Aktualität')],'Veraltet – erneut prüfen');
   const review=saved.worksheets.getItem('Müssen geprüft werden').getUsedRange().values.filter(r=>r[0]);
-  assert.equal(review.length,3);assert.match(String(review[1][review[0].indexOf('Nächster Schritt')]),/Adresse/);
+  assert.equal(review.length,3);assert.match(String(review[1][review[0].indexOf('Nächster Schritt')]),/Abgeschlossen/);
+  assert.equal(rows.some(r=>r[11]==='legacy'),false);
   assert.equal(saved.worksheets.getItem('Regeln').getRange('B2').values[0][0],'Unverändert erhalten');
   assert.equal(saved.worksheets.getItem('Adressrecherche').getRange('B2').values[0][0],'Manuelle Notiz erhalten');
   assert.equal(saved.worksheets.getItem('PLZ-Angebote').getRange('C3').values[0][0],1);
