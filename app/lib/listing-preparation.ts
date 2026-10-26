@@ -8,10 +8,17 @@ import { allocateDeleteBatchNumber, linkDeleteBatchListings } from "../../delete
 import { addressRotationStatus, addressRotationPreparationIssue, snapshotAddressRotation } from "../../address-rotation.mjs";
 import { normalizeListingGroup, addListingGroupVariant, setListingGroupVariantActive, assignListingGroupVariant } from "../../listing-groups.mjs";
 import { latestResetListingFacts } from "../../plot-listing-reset.mjs";
+import { isInventoryHistorical, isManagerRemoved } from "../../inventory-correction.mjs";
+import { isBatchEligibleListing } from "../../active-listings.mjs";
 import { completeListingTexts, totalPrice } from "./text-generator.ts";
 import type { GeneratedListing, HouseTemplate, ProjectInput, ProviderSettings, HouseDistributionState, ListingGroup, StudioState } from "../types";
 import type { RefillCandidate } from "../../smart-refill.mjs";
 const uid = () => crypto.randomUUID();
+function reusablePreparationListing(listing: (GeneratedListing & { listingResetAt?: string }) | null | undefined) {
+  return Boolean(listing && !isInventoryHistorical(listing) && !isManagerRemoved(listing)
+    && !listing.rotationArchivedAt && !listing.listingResetAt && !listing.refillDiscard
+    && ![WORKFLOW_STATUS.DELETED, WORKFLOW_STATUS.ARCHIVED].includes(normalizeWorkflowStatus(listing.status)));
+}
 export function createVariantListing(
   house: HouseTemplate,
   project: ProjectInput,
@@ -164,10 +171,19 @@ export function prepareProjectListings(
         continue;
       }
       const variant = group.variants[index];
-      const previous = rotationAddress ? null : project.listings.find((listing) =>
-        listing.templateId === house.id && listing.listingOrigin !== "rotation-copy")
-        || (variant.templateId === house.id ? variant.listing : null)
-        || null;
+      // Geschlossene Bestände behalten ihre Identität und ihren Löschbeleg. Nur
+      // aktuelle Entwürfe dürfen für dieselbe Hausauswahl wiederverwendet werden.
+      const candidates = project.listings.filter(listing => listing.templateId === house.id
+        && listing.listingOrigin !== "rotation-copy" && reusablePreparationListing(listing));
+      const variantListing = variant.templateId === house.id ? variant.listing : null;
+      // Der Katalogstatus hat Vorrang vor einer veralteten Entwurfskopie im Slot.
+      const canonicalVariantListing = variantListing
+        ? project.listings.find(listing => listing.id === variantListing.id) || variantListing : null;
+      const previous = rotationAddress ? null : candidates.find(isBatchEligibleListing) || candidates[0]
+        || (reusablePreparationListing(canonicalVariantListing) ? canonicalVariantListing : null);
+      if (previous && !isBatchEligibleListing(previous)) {
+        throw new Error(`${project.name}: ${house.name} ist mit ${previous.externalId} im Status ${previous.status} verknüpft und nicht als neuer Entwurf uploadbereit. Bestand zuerst prüfen.`);
+      }
       group = assignListingGroupVariant(
         group,
         index + 1,
@@ -189,7 +205,9 @@ export function prepareProjectListings(
       .slice(0, HOUSES_PER_PROJECT)
       .map((variant) => variant.listing as GeneratedListing);
     const mergedListings = mergeListingCollection(project.listings, sourceListings);
-    preparedListings += sourceListings.length;
+    const eligibleCount = sourceListings.filter(isBatchEligibleListing).length;
+    if (eligibleCount !== HOUSES_PER_PROJECT) issues.push(`${project.name}: nur ${eligibleCount}/4 ausgewählte Inserate sind uploadbereite Entwürfe.`);
+    preparedListings += eligibleCount;
     return {
       ...projectForCycle,
       selectedHouseIds: group.variants
