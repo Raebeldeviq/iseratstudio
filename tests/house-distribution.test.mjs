@@ -42,6 +42,29 @@ function assertValidAssignments(assignments, projectList) {
   }
 }
 
+test("a stale preview names the excluded house and project without changing pool membership", () => {
+  const houseList = houses(5), projectList = projects(1);
+  projectList[0].name = "Am Großen Wannsee 59A";
+  let distribution = normalizeHouseDistribution({}, houseList, projectList);
+  distribution = setHouseDistributionPool(distribution, houseList.slice(0, 4).map(h => h.id), houseList, projectList);
+  distribution.projects[0].previewHouseIds = ['house-5', 'house-2', 'house-3', 'house-4'];
+  const before = structuredClone(distribution);
+  const result = commitHouseDistributionPreviews(distribution, houseList, projectList, ['project-1']);
+  assert.equal(result.ok, false);
+  assert.match(result.issues.join(' '), /Am Großen Wannsee 59A.*Haus 5.*nicht im gemeinsamen Hauspool.*Neu verteilen/u);
+  assert.deepEqual(distribution, before);
+  assert.equal(result.distribution.poolHouseIds.includes('house-5'), false);
+});
+
+test("incomplete house data is reported concretely rather than treated as a pool-only failure", () => {
+  const houseList = houses(4), projectList = projects(1);
+  const distribution = normalizeHouseDistribution({}, houseList, projectList);
+  distribution.projects[0].previewHouseIds = houseList.map(h => h.id);
+  houseList[0].housePrice = 0;
+  const result = commitHouseDistributionPreviews(distribution, houseList, projectList, ['project-1']);
+  assert.equal(result.ok, false); assert.match(result.issues.join(' '), /Haus 1.*Preis fehlt/u);
+});
+
 test("distributes ten houses across four projects with distinct weighted combinations", () => {
   const houseList = houses(10);
   const projectList = projects(4);

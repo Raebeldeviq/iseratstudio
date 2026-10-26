@@ -171,7 +171,7 @@ test("Fritz-Zubeil exact corrections preserve all four confirmed objects includi
 test("helper accepts correction and existing batch confirmation routes through its allowlist", async () => {
   const source = await readFile(new URL("../local-upload-server.mjs", import.meta.url), "utf8");
   assert.match(source, /const isInventoryCorrection = request.method === "POST" && pathname === "\/inventory\/correct"/u);
-  const routeGuard = source.slice(source.indexOf("if (!isInventoryCorrection"), source.indexOf("if (!isInventoryCorrection") + 1800);
+  const routeGuard = source.match(/^\s*if \(([^\n]*!isInventoryCorrection[^\n]*)\) \{/mu)?.[1] || "";
   assert.match(routeGuard, /!isDeleteBatchConfirm/u);
   assert.match(source, /catalogStateStore.update\(state => correctListingInventory\(state, body\)\)/u);
 });

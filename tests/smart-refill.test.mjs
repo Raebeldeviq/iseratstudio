@@ -75,6 +75,57 @@ function cleanedReservedFixture(exportReport = false) {
     expectedRevision: managerCleanupRevision(state, entry) }] }, '2026-10-12T12:00:00.000Z');
 }
 
+function cleanedPendingFixture(exportReport = false) {
+  let state = fixture();
+  const project = state.projects[0], source = project.listings[0], credit = state.smartRefill.credits[0];
+  if (exportReport) {
+    const hash = 'c'.repeat(64); credit.batchId = `external-report:${hash}`;
+    Object.assign(credit, { source: 'user-supplied-export-report', reportHash: hash });
+    credit.id = JSON.stringify([credit.batchId, project.id, source.id, source.externalId]);
+    source.deleteConfirmedAt = credit.deletedAt;
+    source.externalDeletionEvidence = { reportId: 'original-deletion', reportHash: hash, confirmedAt: credit.deletedAt, source: credit.source };
+    state.deleteReports = [{ reportId: 'original-deletion', rawHash: hash, projectId: project.id, plotId: project.plotId,
+      sourceListingId: source.id, externalObjectNumber: source.externalId, result: 'success', processedAt: credit.deletedAt, confirmationSource: credit.source }];
+    state.deleteBatches = state.deleteBatches.map(batch => ({ ...batch, entries: batch.entries.filter(e => e.listingId !== source.id) }));
+  }
+  const entry = { project, listing: source, group: project.listingGroup };
+  state = removeManagerListings(state, { entries: [{ projectId: project.id, listingId: source.id, externalId: source.externalId,
+    expectedRevision: managerCleanupRevision(state, entry) }] }, '2026-10-12T12:00:00.000Z');
+  const controls = state.projects[0].listingGroup.listingControls;
+  let control = controls.find(c => c.listingId === source.id);
+  if (!control) { control = { listingId: source.id }; controls.push(control); }
+  Object.assign(control, { status: 'archived', manualLock: true, automaticUpdateEnabled: false, updateMode: 'blocked', lockReason: '', lockedUntil: '' });
+  return state;
+}
+
+test('a proven deletion cleaned before preparation remains a single usable credit, including technical archived controls', () => {
+  for (const report of [false, true]) {
+    const state = cleanedPendingFixture(report), before = structuredClone(state);
+    assert.equal(planSmartRefill(state).readyCount, 1);
+    const next = prepare(state, { now: '2026-10-13T12:00:00.000Z' });
+    assert.equal(newly(next).length, 1); assert.equal(planSmartRefill(next).readyCount, 0);
+    assert.equal(planSmartRefill(next).reserved, 1); assert.deepEqual(next.smartRefill.credits, state.smartRefill.credits);
+    assert.deepEqual(next.projects[0].listings.filter(l => !newly(next).some(n => n.id === l.id)), state.projects[0].listings);
+    assert.doesNotThrow(() => assertSmartRefillUploadReady(next, newly(next)[0]));
+    assert.deepEqual(state, before);
+  }
+});
+
+test('cleaned source planning still rejects missing receipts, corrections, unsupported cleanup and real protection', () => {
+  const changes = [s => { s.deleteReports = []; }, s => { s.deleteReports.push(structuredClone(s.deleteReports[0])); },
+    s => { s.projects[0].listings[0].deleteConfirmedAt = ''; }, s => { s.projects[0].listings[0].externalDeletionEvidence.reportHash = 'd'.repeat(64); },
+    s => { s.projects[0].listings[0].inventoryCorrection = { active: true }; }, s => { s.projects[0].listings[0].refillDiscard = { at }; },
+    s => { s.projects[0].listings[0].externalDeletionPending = true; }, s => { s.projects[0].listings[0].managerCleanup.source = 'unknown'; },
+    s => { s.projects[0].listings[0].managerCleanup.removedAt = '2026-10-10T12:00:00Z'; },
+    s => { s.projects[0].listingGroup.listingControls[0].premiumPlacement = true; },
+    s => { s.projects[0].listingGroup.listingControls[0].lockReason = 'Manuell geschützt'; },
+    s => { s.projects[0].listingGroup.listingControls[0].lockedUntil = '2099-01-01'; }];
+  for (const change of changes) { const state = cleanedPendingFixture(true); change(state); assert.equal(planSmartRefill(state).readyCount, 0); }
+  const duplicate = cleanedPendingFixture(true);
+  duplicate.listingResetHistory = [{ projectId: duplicate.projects[0].id, plotId: duplicate.projects[0].plotId, listings: [structuredClone(duplicate.projects[0].listings[0])] }];
+  assert.equal(planSmartRefill(duplicate).readyCount, 0);
+});
+
 test('manager removal of a confirmed batch source keeps its reserved successor eligible without mutating any facts', () => {
   const state = cleanedReservedFixture(), before = structuredClone(state), listing = newly(state)[0];
   assert.ok(state.projects[0].listings[0].managerCleanup);
@@ -206,6 +257,7 @@ test("existing approved pool data are accepted; changed or incomplete data requi
   assert.equal(planSmartRefill(changed).readyCount, 0); assert.match(planSmartRefill(changed).blocked[0].reason, /freigeben/u);
   const missing = structuredClone(state); missing.plots[0].addressRotation.poolB.houseNumber = "";
   assert.equal(planSmartRefill(missing).readyCount, 0);
+  assert.match(planSmartRefill(missing).blocked[0].reason, /Pool B.*Hausnummer fehlt/u);
 });
 test("legacy sources are resolved from upload address and preserved house slot; unresolved sources never fill a foreign plot", () => {
   let state = fixture(); state.projects[0].listings[0] = { ...state.projects[0].listings[0], addressSnapshot: undefined };

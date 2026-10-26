@@ -411,14 +411,19 @@ export function commitHouseDistributionPreviews(distributionValue, houses, proje
   const selectedIds = uniqueStrings(projectIds);
   const issues = [];
   for (const projectId of selectedIds) {
+    const projectLabel = projects.find(project => project.id === projectId)?.name || projectId;
     const record = distribution.projects.find((item) => item.projectId === projectId);
     if (!record || record.previewHouseIds.length !== HOUSES_PER_PROJECT || new Set(record.previewHouseIds).size !== HOUSES_PER_PROJECT) {
-      issues.push(`${projectId}: Es müssen genau vier unterschiedliche Häuser ausgewählt sein.`);
+      issues.push(`${projectLabel}: Es müssen genau vier unterschiedliche Häuser ausgewählt sein.`);
       continue;
     }
     const pool = new Set(distribution.poolHouseIds);
-    const invalid = record.previewHouseIds.find((houseId) => !pool.has(houseId) || houseDataIssues(houses.find((house) => house.id === houseId)).length);
-    if (invalid) issues.push(`${projectId}: Ein Haus ist nicht freigegeben, unvollständig oder nicht Teil des Hauspools.`);
+    for (const houseId of record.previewHouseIds) {
+      const house = houses.find(item => item.id === houseId);
+      const reasons = houseDataIssues(house);
+      if (!pool.has(houseId)) reasons.push("nicht im gemeinsamen Hauspool ausgewählt");
+      if (reasons.length) issues.push(`${projectLabel}: ${house?.name || houseId} – ${reasons.join("; ")}. Hausdaten bzw. Hauspool prüfen oder die Kombination über „Neu verteilen“ aktualisieren.`);
+    }
   }
   if (issues.length) return { distribution, issues, ok: false };
   for (const projectId of selectedIds) {

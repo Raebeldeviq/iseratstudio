@@ -67,6 +67,7 @@ export function refillPoolFingerprint(plot, pool, state) {
 function poolIssue(state, plot, pool) {
   const facts = refillPoolFacts(plot, pool, state);
   const address = plotAddressSelection(facts);
+  if (!facts.houseNumber.trim()) return `Pool ${pool}: Hausnummer fehlt – Grundstück bearbeiten.`;
   if (!address.selectable || address.houseNumberUnconfirmed || facts.plotSizeSqm <= 0 || facts.purchasePrice <= 0)
     return "Adresse, Fläche oder Preis unvollständig – Grundstück bearbeiten.";
   if (pool === "B" && rowFromPlotB(effectivePoolPlot(plot, state)).status === "POOL_B_PRÜFEN")
@@ -134,23 +135,23 @@ function resolveSource(state, credit, reservation) {
   return { project, listing, archive, plot, sourcePool, housePosition };
 }
 
-// Manager removal is a visibility change. A reserved replacement can keep using its
-// deleted source only when the independent deletion receipt and identities still agree.
-function validReservedDeletionSource(state, source, credit, cycle) {
+// Manager removal is a visibility change. Planning and reserved uploads can use a
+// deleted source only when its independent receipt and exact identities agree.
+function validDeletionSource(state, source, credit, cycle) {
   const listing = source.listing;
   if (isInventoryHistorical(listing) || listing.refillDiscard || listing.externalDeletionPending) return false;
   const deletedAt = Date.parse(credit.deletedAt);
   if (!Number.isFinite(deletedAt) || listing.deletedAt !== credit.deletedAt) return false;
-  if (!isManagerRemoved(listing) && finished(listing)) return true;
+  if (cycle && !isManagerRemoved(listing) && finished(listing)) return true;
   if (!['deleted', 'archived'].includes(listing.status)) return false;
-  const preparedAt = Date.parse(cycle.preparedAt);
-  if (!Number.isFinite(preparedAt) || preparedAt < deletedAt || cycle.sourceListingId !== credit.listingId
+  const preparedAt = Date.parse(cycle?.preparedAt);
+  if (cycle && (!Number.isFinite(preparedAt) || preparedAt < deletedAt || cycle.sourceListingId !== credit.listingId
     || cycle.sourceExternalId !== credit.externalId || cycle.projectId !== credit.projectId
-    || cycle.sourceHouseId !== listing.templateId) return false;
+    || cycle.sourceHouseId !== listing.templateId)) return false;
   if (isManagerRemoved(listing)) {
     const cleanup = listing.managerCleanup;
     if (cleanup.source !== 'manual-manager-bulk-cleanup' || !cleanup.operationId || cleanup.externalId !== credit.externalId
-      || !Number.isFinite(Date.parse(cleanup.removedAt)) || Date.parse(cleanup.removedAt) < preparedAt) return false;
+      || !Number.isFinite(Date.parse(cleanup.removedAt)) || Date.parse(cleanup.removedAt) < deletedAt) return false;
   }
   const batchMatches = entries(state).filter(entry => entry.batchId === credit.batchId && entry.projectId === credit.projectId
     && entry.listingId === credit.listingId && entry.externalId === credit.externalId);
@@ -164,13 +165,13 @@ function validReservedDeletionSource(state, source, credit, cycle) {
     && listing.deleteConfirmedAt === credit.deletedAt && evidence?.source === credit.source
     && evidence.reportHash === credit.reportHash && evidence.confirmedAt === credit.deletedAt
     && receipts.length === 1 && receipts[0].reportId === evidence.reportId && receipts[0].rawHash === credit.reportHash
-    && receipts[0].externalObjectNumber === credit.externalId && receipts[0].plotId === cycle.plotId
+    && receipts[0].externalObjectNumber === credit.externalId && receipts[0].plotId === source.plot.id
     && receipts[0].processedAt === credit.deletedAt && receipts[0].result === 'success'
     && receipts[0].confirmationSource === credit.source;
 }
-function protectedSource(project, listingId) {
+function protectedSource(project, listingId, provenDeletion = false) {
   return (project.listingGroup?.listingControls || []).some(control => control.listingId === listingId
-    && (control.premiumPlacement || (control.manualLock && !(control.status === "deleted"
+    && (control.premiumPlacement || (control.manualLock && !((control.status === "deleted" || (provenDeletion && control.status === "archived"))
       && control.updateMode === "blocked" && control.automaticUpdateEnabled === false
       && !control.lockReason && !control.lockedUntil))));
 }
@@ -180,7 +181,7 @@ function reviewIssue(state, plotId, project) {
       || (project.listings || []).some(listing => listing.id === review.listingId));
 }
 function candidateForCredit(state, credit) {
-  const source = resolveSource(state, credit);
+  const source = resolveSource(state, credit, {});
   const base = { creditId: credit.id, sourceListingId: credit.listingId, sourceExternalId: credit.externalId,
     plotId: source?.plot.id || "", projectId: credit.projectId, label: source ? `${source.plot.street} ${source.plot.houseNumber}, ${source.plot.city}` : credit.externalId,
     sourcePool: source?.sourcePool || "", sourceHouseId: source?.listing.templateId || "", sourceHouseName: source?.listing.templateName || "",
@@ -188,12 +189,12 @@ function candidateForCredit(state, credit) {
     facts: source ? refillPoolFacts(source.plot, source.sourcePool === "A" ? "B" : "A", state) : {}, reason: "" };
   const blocked = reason => ({ ...base, reason });
   if (!source) return blocked("Ursprüngliches Inserat, Pool oder Hausposition nicht eindeutig zugeordnet.");
-  if (!finished(source.listing) || historical(source.listing)) return blocked("Keine bestätigte tatsächliche Portallöschung.");
+  if (!validDeletionSource(state, source, credit)) return blocked("Keine bestätigte tatsächliche Portallöschung.");
   const batchEntry = entries(state).find(entry => creditKey(entry) === credit.id);
   if (batchEntry && batchEntry.status !== "deleted") return blocked("Löschbestätigung stimmt nicht mehr mit dem freien Platz überein.");
   if (source.plot.isActive === false || source.project.isActive === false
     || !operationalCatalogPlots([source.plot], context(state)).length) return blocked("Ursprüngliches Grundstück ist nicht verfügbar.");
-  if (protectedSource(source.project, source.listing.id)) return blocked("Premium oder Löschschutz aktiv.");
+  if (protectedSource(source.project, source.listing.id, true) || (source.archive && protectedSource(source.archive, source.listing.id, true))) return blocked("Premium oder Löschschutz aktiv.");
   if (reviewIssue(state, source.plot.id, source.project)) return blocked("Offener relevanter Prüffall.");
   const issue = poolIssue(state, source.plot, base.pool);
   if (issue) return blocked(issue);
@@ -346,9 +347,9 @@ export function assertSmartRefillUploadReady(state, listing) {
   if (cycle.fingerprint !== refillPoolFingerprint(plot, cycle.pool, state) || poolIssue(state, plot, cycle.pool)) throw new Error("Die freigegebenen Pooldaten haben sich geändert. Bitte vor Upload prüfen.");
   const credit = ledger(state).credits.find(item => item.id === cycle.creditIds[0]);
   const source = credit && resolveSource(state, credit, cycle);
-  if (!source || !validReservedDeletionSource(state, source, credit, cycle) || source.sourcePool !== cycle.sourcePool
+  if (!source || !validDeletionSource(state, source, credit, cycle) || source.sourcePool !== cycle.sourcePool
     || source.plot.id !== cycle.plotId || source.housePosition !== cycle.housePosition || source.listing.templateId === listing.templateId
-    || protectedSource(source.project, source.listing.id) || (source.archive && protectedSource(source.archive, source.listing.id))
+    || protectedSource(source.project, source.listing.id, true) || (source.archive && protectedSource(source.archive, source.listing.id, true))
     || protectedSource(project, listing.id)) throw new Error("Die ursprüngliche Löschung oder der Löschschutz verhindert den Nachschubupload.");
   if (reviewIssue(state, plot.id, project)) throw new Error("Offener Prüffall verhindert den Nachschubupload.");
   const facts = refillPoolFacts(plot, cycle.pool, state), snapshot = listing.addressSnapshot;
