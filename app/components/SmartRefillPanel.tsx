@@ -49,6 +49,7 @@ export default function SmartRefillPanel({ plan, state, busy, online, uploading,
       <div className="refill-selection-controls">
         <label>Vorbereitete Inserate suchen<input type="search" value={search} placeholder="Objektnummer oder Adresse" onChange={event => setSearch(event.target.value)} /></label>
         <div className="button-row">
+          <button className="secondary" disabled={disabled || !rows.some(row => !row.archiveCount)} onClick={() => setSelection(selectFilteredRefillIds(selected, rows))}>Alle auswählen</button>
           <button className="secondary" disabled={disabled || !filtered.some(row => !row.archiveCount)} onClick={() => setSelection(selectFilteredRefillIds(selected, filtered))}>Alle gefilterten Treffer auswählen</button>
           <button className="secondary" disabled={disabled || !selected.length} onClick={() => setSelection([])}>Auswahl aufheben</button>
         </div>

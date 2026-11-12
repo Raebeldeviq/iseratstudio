@@ -107,4 +107,10 @@ test('rendered selector starts empty with disabled upload, labeled checkboxes an
  const {default:Component}=await import('data:text/javascript;base64,'+Buffer.from(resolved).toString('base64'));
  const s=fixture(2);s.listingResetHistory=[{plotId:'plot-1',listings:[{status:'transferred_pending_import'}]}];const html=renderToStaticMarkup(createElement(Component,{state:s,plan:planSmartRefill(s),online:true,busy:false,uploading:false,onCheck(){},onPrepare(){},onUpload(){},onApprove(){}}));
  assert.equal((html.match(/type="checkbox"/g)||[]).length,2);assert.doesNotMatch(html,/ checked/u);assert.match(html,/disabled="">0 ausgewählte Inserate hochladen/u);assert.match(html,/Archivbestand prüfen/u);assert.match(html,/Objektnummer oder Adresse/u);assert.match(html,/Abbrechen/u);assert.match(html,/Upload starten/u);
+ assert.match(html,/<button class="secondary">Alle auswählen<\/button>/u);
+ assert.match(html,/>Alle gefilterten Treffer auswählen<\/button>/u);
+ for(const blocked of [{online:false},{busy:true},{uploading:true}]){
+  const locked=renderToStaticMarkup(createElement(Component,{state:s,plan:planSmartRefill(s),online:true,busy:false,uploading:false,onCheck(){},onPrepare(){},onUpload(){},onApprove(){},...blocked}));
+  assert.match(locked,/<button class="secondary" disabled="">Alle auswählen<\/button>/u);
+ }
 });
