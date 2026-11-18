@@ -91,6 +91,24 @@ export async function saveStudioState(
   });
 }
 
+export async function saveStudioRecoverySnapshot(snapshot: StudioSnapshot): Promise<void> {
+  const db = await openDatabase(DB_NAME, STORE_NAME);
+  const key = `recovery:device-conflict:${snapshot.source}:${snapshot.savedAt || "legacy"}`;
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(STORE_NAME, "readwrite");
+    transaction.objectStore(STORE_NAME).put({
+      format: 1,
+      savedAt: snapshot.savedAt,
+      state: snapshot.state,
+      reason: "device-lifecycle-conflict",
+      recordedAt: new Date().toISOString(),
+    }, key);
+    transaction.oncomplete = () => { db.close(); resolve(); };
+    transaction.onerror = () => { db.close(); reject(transaction.error); };
+    transaction.onabort = () => { db.close(); reject(transaction.error || new Error("Browserstand konnte nicht gesichert werden.")); };
+  });
+}
+
 export async function clearStudioState(): Promise<void> {
   const db = await openDatabase(DB_NAME, STORE_NAME);
   return new Promise((resolve, reject) => {

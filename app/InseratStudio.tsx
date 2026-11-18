@@ -108,7 +108,7 @@ import {
 } from "../house-distribution.mjs";
 import { planListingRotation } from "../rotation-service.mjs";
 import { cleanupStudioState } from "../data-integrity.mjs";
-import { selectCatalogSnapshot } from "../catalog-snapshot-selection.mjs";
+import { selectCatalogSnapshot, hasCatalogLifecycleConflict, loadCatalogAfterUpload } from "../catalog-snapshot-selection.mjs";
 import {
   applyPlotToProject,
   createProjectFromPlot,
@@ -137,7 +137,7 @@ import {
 import type { PostalRegionIndex } from "./lib/postal-regions";
 import { normalizeProjectOwners, projectOwner } from "./lib/project-owners";
 import { completeListingTexts, generateListingTexts, totalPrice } from "./lib/text-generator";
-import { loadStudioSnapshot, saveStudioState, STORAGE_ID } from "./lib/storage";
+import { loadStudioSnapshot, saveStudioState, saveStudioRecoverySnapshot, STORAGE_ID } from "./lib/storage";
 import type {
   AddressOwner,
   GeneratedListing,
@@ -936,7 +936,7 @@ export default function InseratStudio() {
 
   useEffect(() => {
     Promise.allSettled([loadStudioSnapshot(), loadDeviceCatalogSnapshot()])
-      .then((results) => {
+      .then(async (results) => {
         const candidates: Array<{
           state: StudioState;
           savedAt: string;
@@ -947,6 +947,16 @@ export default function InseratStudio() {
         }
         knownDeviceCatalogSavedAt = candidates.find((candidate) => candidate.source === "device")?.savedAt ?? "";
         const selected = selectCatalogSnapshot(candidates);
+        if (selected?.source === "device") {
+          let recovered = false;
+          for (const candidate of candidates) {
+            if ((candidate.source === "browser" || candidate.source === "legacy") && hasCatalogLifecycleConflict(candidate, selected)) {
+              await saveStudioRecoverySnapshot({ state: candidate.state, savedAt: candidate.savedAt, source: candidate.source });
+              recovered = true;
+            }
+          }
+          if (recovered) setNotice("Der gespeicherte macOS-Katalog wurde geladen. Ein abweichender Browserstand bleibt als Wiederherstellungskopie erhalten; bestätigte Übertragungen und Löschungen bleiben geschützt.");
+        }
         const loaded = normalizeMandatoryListingStandards(
           normalizeProjectOwners(selected?.state ?? initialState()),
         );
@@ -2874,7 +2884,10 @@ export default function InseratStudio() {
       setNotice("Der lokale Upload-Helfer ist nicht erreichbar. Bitte die Anwendung über den Startknopf öffnen.");
       return;
     }
-    try { await queueDeviceCatalogSnapshot(state, new Date().toISOString()); }
+    try {
+      await queueDeviceCatalogSnapshot(state, new Date().toISOString());
+      await deviceCatalogSaveQueue;
+    }
     catch (error) { setNotice(error instanceof Error ? error.message : "Der Uploadstand konnte nicht gespeichert werden."); return; }
     const uploadListingIds = (uploadPlan.addresses as Array<{ items: Array<{ listingId: string }> }>)
       .flatMap((address) => address.items.map((item) => item.listingId));
@@ -3053,13 +3066,17 @@ export default function InseratStudio() {
         },
       });
 
-      const snapshot = await loadDeviceCatalogSnapshot();
-      if (!snapshot) {
-        throw new Error("Die Transfers wurden protokolliert, aber der autoritative lokale Katalog konnte nicht neu geladen werden. Ein erneuter Lauf überspringt bereits übertragene Jobs.");
-      }
+      const snapshot = await loadCatalogAfterUpload({
+        pendingSave: deviceCatalogSaveQueue,
+        loadDeviceSnapshot: loadDeviceCatalogSnapshot,
+        saveBrowserSnapshot: saveStudioState,
+        normalize: (input: StudioState) => {
+          const loaded = normalizeMandatoryListingStandards(normalizeProjectOwners(input));
+          return { ...loaded, selectedPlotIds: selectablePlotIds(loaded.plots, loaded.selectedPlotIds) };
+        },
+      });
       acceptKnownDeviceCatalogSavedAt(snapshot.savedAt);
-      const nextState = normalizeMandatoryListingStandards(normalizeProjectOwners(snapshot.state));
-      setState({ ...nextState, selectedPlotIds: selectablePlotIds(nextState.plots, nextState.selectedPlotIds) });
+      setState(snapshot.state);
       setBatchUploadProgress((current) => ({
         ...current,
         running: false,

@@ -1,3 +1,5 @@
+import { assertBrowserCatalogTransition } from "./listing-catalog-view.mjs";
+
 function text(value) {
   return String(value ?? "").trim();
 }
@@ -28,9 +30,32 @@ export function catalogSnapshotSummary(snapshot) {
   };
 }
 
+export function hasCatalogLifecycleConflict(candidate, device) {
+  if (!candidate?.state || !device?.state || candidate.source === "device") return false;
+  try {
+    assertBrowserCatalogTransition(device.state, candidate.state);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+// A completed transfer can update the helper while earlier browser saves are
+// still pending. Settle those first, then persist exactly the authoritative state.
+export async function loadCatalogAfterUpload({ pendingSave, loadDeviceSnapshot, saveBrowserSnapshot, normalize = state => state }) {
+  await Promise.resolve(pendingSave).catch(() => undefined);
+  const snapshot = await loadDeviceSnapshot();
+  if (!snapshot) {
+    throw new Error("Die Transfers wurden protokolliert, aber der autoritative lokale Katalog konnte nicht neu geladen werden. Ein erneuter Lauf überspringt bereits übertragene Jobs.");
+  }
+  const state = normalize(snapshot.state);
+  await saveBrowserSnapshot(state, snapshot.savedAt);
+  return { ...snapshot, state };
+}
+
 /**
- * Selects the newest snapshot unless a newer browser shell would erase a
- * productive device catalog. A browser snapshot is considered a shell only
+ * Selects the newest snapshot that preserves the device lifecycle evidence.
+ * A browser snapshot is considered a shell only
  * for a catalog area that contains no prepared record at all. This keeps
  * normal edits timestamp-driven while protecting against a fresh browser
  * profile overwriting the durable macOS catalog.
@@ -44,6 +69,9 @@ export function selectCatalogSnapshot(candidates = []) {
   if (!newest || !device || newest === device || newest.source === "device") return newest;
   // A reconciled persistent catalog must not be replaced by an old browser cache.
   if (Number(device.state?.catalogIntegrityRevision || 0) > Number(newest.state?.catalogIntegrityRevision || 0)) return device;
+  // A newer cache timestamp cannot roll back a proven transfer, deletion or
+  // reservation. The caller backs up the rejected cache before adopting device.
+  if (hasCatalogLifecycleConflict(newest, device)) return device;
 
   const newestSummary = catalogSnapshotSummary(newest);
   const deviceSummary = catalogSnapshotSummary(device);
